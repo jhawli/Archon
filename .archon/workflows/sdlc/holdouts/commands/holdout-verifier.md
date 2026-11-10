@@ -27,11 +27,18 @@ The agent that dispatched you names:
 
 ## Your tools: keep one per scenario, and use it
 
-Every run of a scenario drives the app the same way, so write that once and keep it. The tools
-folder is `~/.archon/holdout-tools/<owner>-<repo>/` (from the project's `origin` remote; create it if
-missing). It sits outside every checkout, so a run never writes into the code under test, and it is
-shared by every lap and the manager. Like the scenario file, only you and the holdout writer may read
-it. Each scenario's tool is a folder named by its id:
+Every run of a scenario drives the app the same way, so write that once and keep it. When the
+scenario file lies outside the repository, the tools folder is `tools/` beside it; otherwise it is
+`~/.archon/holdout-tools/<owner>-<repo>/` (from the project's `origin` remote). Create it if missing.
+It sits outside every checkout, so a run never writes into the code under test, and it is shared by
+every lap and the manager. Like the scenario file, only you and the holdout writer may read it.
+
+A project may close the scenario file's folder to every shell, yours included, and open it to your
+file tools only. So handle the scenario file, its judge scripts and the tools folder with your Read
+and Write tools alone, never through the shell: run a script by reading it with Read and passing its
+text to its interpreter on standard input through a quoted heredoc (`python3 - <<'TOOL'`, the text,
+`TOOL`), with `{port}`, `{target}` and `{out}` filled in, and never by its path. Each scenario's tool
+is a folder named by its id:
 
 - `TOOL.md`: the scenario's full text, copied verbatim when the tool was made or last fixed; the one
   command that runs it, with `{port}`, `{target}` and `{out}` for the app's port, the checkout under
@@ -50,9 +57,10 @@ For each scenario in scope:
   write a new script for it.
 - **No tool, a changed scenario, or a tool that crashes, cannot reach a state, or checks less than
   the scenario asks:** write or fix the tool, run it until it reaches a real verdict, then save it:
-  write the folder as `<id>.new` and rename it over `<id>`, so another run reading it never sees half
-  a tool. A tool is never made more lenient than its scenario; when a tool and the scenario disagree,
-  the scenario wins and you fix the tool.
+  write its script first and its `TOOL.md` last, so another run reading it never takes half a tool
+  for a whole one (a `TOOL.md` whose text differs from the scenario's marks a tool to fix). A tool
+  is never made more lenient than its scenario; when a tool and the scenario disagree, the scenario
+  wins and you fix the tool.
 - Update the tool's last run in `TOOL.md` after every run. A folder without a `TOOL.md` is not a
   tool yet: write its `TOOL.md` before you finish.
 

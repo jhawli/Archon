@@ -45,7 +45,8 @@ Expect: what a user sees
 Author: writer, <date>, <why: the section being built, or the defect's issue>
 ```
 
-The holdout verifier keeps a tool per scenario in `~/.archon/holdout-tools/<owner>-<repo>/<id>/`;
+The holdout verifier keeps a tool per scenario in its tools folder (`tools/<id>/` beside a scenario
+file outside the repository, else `~/.archon/holdout-tools/<owner>-<repo>/<id>/`);
 when you change a scenario's text it rebuilds that tool on its next run, so you need not touch the
 tools. You add and tighten, never loosen. Never remove or weaken a scenario, and never edit one whose
 `Author` is the owner (or that has no author): if one looks wrong, say so in your reply and leave it.
@@ -54,7 +55,8 @@ When the scenario file is inside the repository, commit only its folder, on the 
 clean checkout of the remote default branch (never a builder's branch): fetch, rebase onto the remote
 default branch, commit with a message that names the scenario ids and why (`holdouts: add H-07..H-09
 for <section>`), never their text, and push. Do not open a pull request. A scenario file outside the
-repository is saved, not committed.
+repository is saved with your Write and Edit tools, not committed: its folder may be closed to every
+shell, yours included.
 
 ## Report
 
