@@ -3,16 +3,42 @@ import {
   closes,
   references,
   dependencies,
-  workability,
+  workability as workabilityOf,
+  type Board,
   type BoardItem,
+  type Workability,
 } from '../../workflows/sdlc/.shared/workable';
 
 const now = Date.parse('2026-10-17T12:00:00Z');
 const hoursAgo = (h: number): string => new Date(now - h * 3_600_000).toISOString();
 
 function item(number: number, extra: Partial<BoardItem> = {}): BoardItem {
-  return { number, title: `item ${number}`, body: '', labels: [], comments: [], ...extra };
+  const labels = extra.labels ?? [];
+  return {
+    id: `#${number}`,
+    title: `item ${number}`,
+    body: '',
+    comments: [],
+    candidate: true,
+    ...extra,
+    labels,
+    owner: labels.includes('needs-owner'),
+  };
 }
+
+/** GitHub boards block on every open issue and pull request, as the launch gate builds them. */
+function workability(
+  board: Omit<Board, 'open'>,
+  expiryHours: number,
+  at: number,
+  endedRuns?: ReadonlySet<string>
+): Workability {
+  const open = new Set([...board.issues, ...board.pulls].map(i => i.id));
+  return workabilityOf({ ...board, open }, expiryHours, at, endedRuns);
+}
+
+const numbers = (refs: readonly { kind: string; number?: number }[]): (number | undefined)[] =>
+  refs.map(r => r.number);
 
 const claim = (run: string, h = 1): BoardItem['comments'][number] => ({
   body: `Loop claim: run ${run}\n\nRoute: simple\nArea: a`,
@@ -63,7 +89,7 @@ describe('loop launch gate', () => {
       now
     );
     expect(result.claims).toEqual([{ kind: 'issue', number: 1, run: 'run-a' }]);
-    expect(result.workable.map(w => w.number)).toEqual([2, 3, 4]);
+    expect(numbers(result.workable)).toEqual([2, 3, 4]);
   });
 
   it('a claim held by a run the scheduler knows has ended is dead and returned for release', () => {

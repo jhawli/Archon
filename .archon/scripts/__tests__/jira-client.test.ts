@@ -116,6 +116,11 @@ describe('ticket keys', () => {
     expect(referencedKeys('see VAULT-3', 'CONC')).toEqual([]);
     expect(referencedKeys('Refs CONC-40', 'CONC')).toEqual(['CONC-40']);
   });
+  it('a key is a positive number, so nothing the client would refuse reaches a query', () => {
+    expect(isTicketKey('CONC-0')).toBe(false);
+    expect(referencedKeys('Refs CONC-0', 'CONC')).toEqual([]);
+    expect(dependencyKeys('Depends on: CONC-012, XCONC-4, CONC-4', 'CONC')).toEqual(['CONC-4']);
+  });
 });
 
 describe('ADF', () => {

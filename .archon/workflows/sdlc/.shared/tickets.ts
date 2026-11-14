@@ -7,7 +7,7 @@
  */
 import type { TrackerConfig } from './jira.ts';
 
-const KEY = /^[A-Z][A-Z0-9]+-\d+$/;
+const KEY = /^[A-Z][A-Z0-9]+-[1-9]\d*$/;
 
 export function isTicketKey(value: string): boolean {
   return KEY.test(value.trim());
@@ -15,7 +15,7 @@ export function isTicketKey(value: string): boolean {
 
 /** The key in a ticket URL (`<site>/browse/CONC-12`), or null for anything else. */
 export function ticketKeyOf(url: string, config: TrackerConfig): string | null {
-  const match = /^(https:\/\/[^/]+)\/browse\/([A-Z][A-Z0-9]+-\d+)\/?(?:[?#].*)?$/.exec(url.trim());
+  const match = /^(https:\/\/[^/]+)\/browse\/([A-Z][A-Z0-9]+-[1-9]\d*)\/?(?:[?#].*)?$/.exec(url.trim());
   if (match === null) return null;
   const [, site, key] = match;
   return site === config.site && key?.startsWith(`${config.project}-`) ? key : null;
@@ -27,9 +27,9 @@ export function ticketUrl(key: string, config: TrackerConfig): string {
 
 function keysAfter(body: string, words: string, project: string): string[] {
   const found: string[] = [];
-  const list = `((?:${project}-\\d+\\b(?:\\s*,\\s*|\\s+and\\s+)?)+)`;
+  const list = `((?:${project}-[1-9]\\d*\\b(?:\\s*,\\s*|\\s+and\\s+)?)+)`;
   for (const match of body.matchAll(new RegExp(`\\b(?:${words})\\s+${list}`, 'gi'))) {
-    for (const key of (match[1] ?? '').matchAll(new RegExp(`${project}-\\d+`, 'g'))) {
+    for (const key of (match[1] ?? '').matchAll(new RegExp(`\\b${project}-[1-9]\\d*\\b`, 'g'))) {
       found.push(key[0]);
     }
   }
@@ -57,7 +57,7 @@ export function dependencyKeys(body: string, project: string): string[] {
   for (const line of body.split(/\r?\n/)) {
     const match = /^\s*[-*]?\s*\**depends on\**:?\**\s*(.*)$/i.exec(line);
     if (match === null) continue;
-    for (const key of (match[1] ?? '').matchAll(new RegExp(`${project}-\\d+`, 'g'))) {
+    for (const key of (match[1] ?? '').matchAll(new RegExp(`\\b${project}-[1-9]\\d*\\b`, 'g'))) {
       found.push(key[0]);
     }
   }

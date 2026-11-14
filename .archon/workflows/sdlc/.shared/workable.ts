@@ -8,6 +8,9 @@
  * `needs-owner` waits for the owner, an issue waits for its `Depends on:` items, and the
  * issues the manager keeps for itself are not work. Anything it is unsure of counts as
  * workable, so the gate can only skip laps that would have picked nothing.
+ *
+ * Items carry text ids: `CONC-5` for a Jira ticket, `#5` for a GitHub issue or pull request.
+ * The result names them as `{kind: 'ticket', key}` or `{kind: 'issue' | 'pull', number}`.
  */
 
 import { CLAIM_PREFIX } from './claims.ts';
@@ -20,39 +23,46 @@ export interface BoardComment {
 }
 
 export interface BoardItem {
-  readonly number: number;
+  /** `CONC-5` for a Jira ticket, `#5` for a GitHub issue or pull request. */
+  readonly id: string;
   readonly title: string;
   readonly body: string;
   readonly labels: readonly string[];
   readonly comments: readonly BoardComment[];
+  /** Waits for the owner: the `needs-owner` label, or the Jira flag. */
+  readonly owner: boolean;
+  /** Startable work. A ticket loaded only because a pull request names it is not. */
+  readonly candidate: boolean;
 }
 
 export interface Board {
   readonly issues: readonly BoardItem[];
   readonly pulls: readonly BoardItem[];
+  /** Ids that still block a `Depends on` line. */
+  readonly open: ReadonlySet<string>;
 }
 
-export interface WorkableItem {
-  readonly kind: 'issue' | 'pull';
-  readonly number: number;
+/** How the board's text names other items: `#n` on GitHub, `CONC-n` with Jira. */
+export interface Links {
+  readonly references: (body: string) => string[];
+  readonly dependencies: (body: string) => string[];
 }
 
-export interface LiveClaim {
-  readonly kind: 'issue' | 'pull';
-  readonly number: number;
-  readonly run: string;
-}
+/** A Jira ticket by key, or a GitHub issue or pull request by number. */
+export type ItemRef =
+  | { readonly kind: 'ticket'; readonly key: string }
+  | { readonly kind: 'issue' | 'pull'; readonly number: number };
 
-export interface EndedClaim extends LiveClaim {
-  readonly url: string;
-}
+export type LiveClaim = ItemRef & { readonly run: string };
+
+export type EndedClaim = LiveClaim & { readonly url: string };
 
 export interface Workability {
-  readonly workable: WorkableItem[];
+  readonly workable: ItemRef[];
   readonly claims: LiveClaim[];
   /** Claims whose run the scheduler knows has ended: dead now, and the caller releases them. */
   readonly ended: EndedClaim[];
-  readonly waiting: { readonly kind: 'issue' | 'pull'; readonly number: number; readonly why: string }[];
+  readonly waiting: (ItemRef & { readonly why: string })[];
 }
 
 /** The label an owner decision carries; the loop never works an item under it. */
@@ -103,19 +113,28 @@ export function liveClaimComments(
   return found;
 }
 
+export const GITHUB_LINKS: Links = {
+  references: body => references(body).map(n => `#${n}`),
+  dependencies: body => dependencies(body).map(n => `#${n}`),
+};
+
+function ref(kind: 'issue' | 'pull', id: string): ItemRef {
+  return id.startsWith('#') ? { kind, number: Number(id.slice(1)) } : { kind: 'ticket', key: id };
+}
+
 /**
  * The board as a lap would find it. `endedRuns` are runs the scheduler knows have
  * finished, failed or been cancelled: a run killed before its release step never frees
  * its item, so its claim is treated as dead here and returned in `ended` for release.
+ * `links` reads how items name each other; GitHub's `#n` unless the board comes from Jira.
  */
 export function workability(
   board: Board,
   expiryHours: number,
   now = Date.now(),
-  endedRuns: ReadonlySet<string> = new Set()
+  endedRuns: ReadonlySet<string> = new Set(),
+  links: Links = GITHUB_LINKS
 ): Workability {
-  const openIssues = new Set(board.issues.map(item => item.number));
-  const openPulls = new Set(board.pulls.map(item => item.number));
   const claims: LiveClaim[] = [];
   const ended: EndedClaim[] = [];
   const claimed = new Map<string, string>();
@@ -126,42 +145,43 @@ export function workability(
     for (const item of items) {
       for (const { run, comment } of liveClaimComments(item.comments, expiryHours, now)) {
         if (endedRuns.has(run)) {
-          if (comment.url) ended.push({ kind, number: item.number, run, url: comment.url });
+          if (comment.url) ended.push({ ...ref(kind, item.id), run, url: comment.url });
           continue;
         }
-        if (claimed.has(`${kind}:${item.number}`)) continue;
-        claims.push({ kind, number: item.number, run });
-        claimed.set(`${kind}:${item.number}`, run);
+        if (claimed.has(`${kind}:${item.id}`)) continue;
+        claims.push({ ...ref(kind, item.id), run });
+        claimed.set(`${kind}:${item.id}`, run);
       }
     }
   }
-  // An open pull request is the work for the issues it closes or references: pick continues the
-  // pull request instead of starting the issue, and claims the issue for it.
-  const deliveredBy = new Map<number, number>();
-  for (const pull of board.pulls) for (const issue of references(pull.body)) deliveredBy.set(issue, pull.number);
+  // An open pull request is the work for the items it closes or references: pick continues the
+  // pull request instead of starting the item, and claims the item for it.
+  const byId = new Map(board.issues.map(item => [item.id, item]));
+  const deliveredBy = new Map<string, string>();
+  for (const pull of board.pulls) for (const id of links.references(pull.body)) deliveredBy.set(id, pull.id);
 
-  const workable: WorkableItem[] = [];
+  const workable: ItemRef[] = [];
   const waiting: Workability['waiting'] = [];
   for (const pull of board.pulls) {
-    const linked = references(pull.body).filter(n => openIssues.has(n));
-    const owner = pull.labels.includes(OWNER_LABEL) ||
-      linked.some(n => board.issues.find(i => i.number === n)?.labels.includes(OWNER_LABEL));
-    const holder = claimed.get(`pull:${pull.number}`) ?? linked.map(n => claimed.get(`issue:${n}`)).find(Boolean);
-    if (owner) waiting.push({ kind: 'pull', number: pull.number, why: OWNER_LABEL });
-    else if (holder) waiting.push({ kind: 'pull', number: pull.number, why: `claimed by run ${holder}` });
-    else workable.push({ kind: 'pull', number: pull.number });
+    const linked = links.references(pull.body).filter(id => byId.has(id));
+    const owner = pull.owner || linked.some(id => byId.get(id)?.owner === true);
+    const holder = claimed.get(`pull:${pull.id}`) ?? linked.map(id => claimed.get(`issue:${id}`)).find(Boolean);
+    if (owner) waiting.push({ ...ref('pull', pull.id), why: OWNER_LABEL });
+    else if (holder) waiting.push({ ...ref('pull', pull.id), why: `claimed by run ${holder}` });
+    else workable.push(ref('pull', pull.id));
   }
   for (const issue of board.issues) {
-    const blockers = dependencies(issue.body).filter(n => openIssues.has(n) || openPulls.has(n));
-    const holder = claimed.get(`issue:${issue.number}`);
+    const blockers = links.dependencies(issue.body).filter(id => board.open.has(id));
+    const holder = claimed.get(`issue:${issue.id}`);
     let why: string | null = null;
     if (MANAGER_TITLES.has(issue.title.trim())) why = "the manager's own record";
-    else if (issue.labels.includes(OWNER_LABEL)) why = OWNER_LABEL;
-    else if (deliveredBy.has(issue.number)) why = `delivered by pull request #${deliveredBy.get(issue.number)}`;
+    else if (issue.owner) why = OWNER_LABEL;
+    else if (deliveredBy.has(issue.id)) why = `delivered by pull request ${deliveredBy.get(issue.id)}`;
     else if (holder) why = `claimed by run ${holder}`;
-    else if (blockers.length > 0) why = `depends on ${blockers.map(n => `#${n}`).join(', ')}`;
-    if (why === null) workable.push({ kind: 'issue', number: issue.number });
-    else waiting.push({ kind: 'issue', number: issue.number, why });
+    else if (blockers.length > 0) why = `depends on ${blockers.join(', ')}`;
+    else if (!issue.candidate) why = 'not startable';
+    if (why === null) workable.push(ref('issue', issue.id));
+    else waiting.push({ ...ref('issue', issue.id), why });
   }
   return { workable, claims, ended, waiting };
 }
