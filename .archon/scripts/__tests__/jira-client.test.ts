@@ -288,6 +288,19 @@ describe('Jira client', () => {
     expect(message).toContain('403');
     expect(message).toContain('nope');
   });
+  it('refuses anything but a key of its project before it builds a path', async () => {
+    const { send, calls } = fake([['GET', '/rest/api/3/', 200, {}]]);
+    const jira = new Jira(CFG, send);
+    for (const key of ['../myself', 'CONC-5/../../myself', 'VAULT-3', 'CONC-5 ', 'CONC-0', 'conc-5']) {
+      expect(await failure(jira.ticket(key))).toContain('not a CONC ticket key');
+      expect(await failure(jira.comments(key))).toContain('not a CONC ticket key');
+      expect(await failure(jira.comment(key, 'x'))).toContain('not a CONC ticket key');
+      expect(await failure(jira.move(key, '3'))).toContain('not a CONC ticket key');
+      expect(await failure(jira.ask(key, 'x'))).toContain('not a CONC ticket key');
+    }
+    expect(await failure(jira.editComment('CONC-5', 1.5, 'x'))).toContain('comment id');
+    expect(calls).toHaveLength(0);
+  });
   it('ask comments with the owner mentioned and sets the flag', async () => {
     const { send, calls } = fake([
       ['POST', '/rest/api/3/issue/CONC-8/comment', 201, { id: '1' }],

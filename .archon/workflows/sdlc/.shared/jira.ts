@@ -318,6 +318,17 @@ export class Jira {
     private readonly send: Transport = keychainTransport(config)
   ) {}
 
+  /**
+   * A key of this project, checked before it goes into a REST path. Keys reach the client from
+   * agent-written outbox files; `../` in one would aim the token at another endpoint.
+   */
+  issue(key: string): string {
+    if (!new RegExp(`^${this.config.project}-[1-9]\\d*$`).test(key)) {
+      throw new Error(`not a ${this.config.project} ticket key: ${JSON.stringify(key)}`);
+    }
+    return `/rest/api/3/issue/${key}`;
+  }
+
   async call(method: string, path: string, body?: unknown, ok = [200, 201, 204]): Promise<Json | null> {
     const { status, text } = await this.send(method, path, body);
     if (!ok.includes(status)) throw new Error(`Jira ${method} ${path} -> ${status}: ${text.slice(0, 500)}`);
@@ -364,7 +375,7 @@ export class Jira {
 
   async ticket(key: string): Promise<Ticket> {
     const fields = [...TICKET_FIELDS, this.config.flagField].join(',');
-    return this.toTicket(obj(await this.call('GET', `/rest/api/3/issue/${key}?fields=${fields}`)), false);
+    return this.toTicket(obj(await this.call('GET', `${this.issue(key)}?fields=${fields}`)), false);
   }
 
   /** All comments, oldest (lowest id) first. Read straight from the issue, never through search. */
@@ -374,7 +385,7 @@ export class Jira {
       const page = obj(
         await this.call(
           'GET',
-          `/rest/api/3/issue/${key}/comment?startAt=${startAt}&maxResults=100&orderBy=created`
+          `${this.issue(key)}/comment?startAt=${startAt}&maxResults=100&orderBy=created`
         )
       );
       const rows = list(page.comments).map(obj);
@@ -399,7 +410,7 @@ export class Jira {
   }
 
   async comment(key: string, text: string, mention?: string): Promise<number> {
-    const created = await this.call('POST', `/rest/api/3/issue/${key}/comment`, {
+    const created = await this.call('POST', `${this.issue(key)}/comment`, {
       body: adf(text, mention),
     });
     const id = Number(str(created?.id));
@@ -408,22 +419,23 @@ export class Jira {
   }
 
   async editComment(key: string, id: number, text: string): Promise<void> {
-    await this.call('PUT', `/rest/api/3/issue/${key}/comment/${id}`, { body: adf(text) });
+    if (!Number.isSafeInteger(id) || id <= 0) throw new Error(`${key}: comment id ${id} is not a comment id`);
+    await this.call('PUT', `${this.issue(key)}/comment/${id}`, { body: adf(text) });
   }
 
   async move(key: string, statusId: string): Promise<void> {
-    const listed = obj(await this.call('GET', `/rest/api/3/issue/${key}/transitions`));
+    const listed = obj(await this.call('GET', `${this.issue(key)}/transitions`));
     const hit = list(listed.transitions)
       .map(obj)
       .find(transition => str(obj(transition.to).id) === statusId);
     if (hit === undefined) throw new Error(`${key}: no transition to status ${statusId}`);
-    await this.call('POST', `/rest/api/3/issue/${key}/transitions`, { transition: { id: str(hit.id) } });
+    await this.call('POST', `${this.issue(key)}/transitions`, { transition: { id: str(hit.id) } });
   }
 
   /** A question for the owner (AK18a): mention, then the flag. Status and assignee stay. */
   async ask(key: string, text: string): Promise<void> {
     await this.comment(key, text, this.config.owner);
-    await this.call('PUT', `/rest/api/3/issue/${key}`, {
+    await this.call('PUT', this.issue(key), {
       fields: { [this.config.flagField]: [{ id: this.config.flagOn }] },
     });
   }
