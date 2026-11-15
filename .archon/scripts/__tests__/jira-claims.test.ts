@@ -325,9 +325,11 @@ describe('the ticket file for the agents', () => {
       updated: 0,
     };
     const comments: TicketComment[] = [
-      { id: 10018, body: 'Loop claim: run bbb', created: '2026-11-15T11:00:00.738+0100', createdAt: 0, author: 'a', url: '' },
+      { id: 10018, body: 'Loop claim: run bbb', created: '2026-11-15T11:00:00.738+0100', createdAt: 0, author: 'acc-archon', url: '' },
+      { id: 10020, body: 'Ja, so.', created: '2026-11-15T12:00:00.000+0100', createdAt: 0, author: 'acc-julian', url: '' },
     ];
-    expect(itemMarkdown(ticket, comments, S)).toBe(
+    // The author tells the reviewer which comment is the owner's words (a judge change's approval).
+    expect(itemMarkdown(ticket, comments, CFG)).toBe(
       [
         '# CONC-5 Tags für Notizen',
         '',
@@ -339,9 +341,13 @@ describe('the ticket file for the agents', () => {
         '',
         '- eins',
         '',
-        '## Kommentar 10018 (2026-11-15T11:00:00.738+0100)',
+        '## Kommentar 10018 (2026-11-15T11:00:00.738+0100, Archon)',
         '',
         'Loop claim: run bbb',
+        '',
+        '## Kommentar 10020 (2026-11-15T12:00:00.000+0100, Julian)',
+        '',
+        'Ja, so.',
         '',
       ].join('\n')
     );

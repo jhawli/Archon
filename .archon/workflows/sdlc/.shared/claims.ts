@@ -323,8 +323,16 @@ export function statusName(id: string, s: TrackerConfig['status']): string {
   return name === undefined ? `status ${id}` : STATUS_NAMES[name];
 }
 
+/** Who wrote a comment, as the agents read it: the owner's words approve a judge change. */
+export function authorName(account: string, config: TrackerConfig): string {
+  if (account === config.assignee) return 'Archon';
+  if (account === config.owner) return 'Julian';
+  return account === '' ? 'unbekannt' : account;
+}
+
 /** `$ARTIFACTS_DIR/tracker/item.md`: the ticket and its comments, for agents that hold no token. */
-export function itemMarkdown(ticket: Ticket, rows: readonly TicketComment[], s: TrackerConfig['status']): string {
+export function itemMarkdown(ticket: Ticket, rows: readonly TicketComment[], config: TrackerConfig): string {
+  const s = config.status;
   const lines = [
     `# ${ticket.key} ${ticket.title}`,
     '',
@@ -334,6 +342,8 @@ export function itemMarkdown(ticket: Ticket, rows: readonly TicketComment[], s: 
     '',
   ];
   if (ticket.body !== '') lines.push(ticket.body, '');
-  for (const row of rows) lines.push(`## Kommentar ${row.id} (${row.created})`, '', row.body, '');
+  for (const row of rows) {
+    lines.push(`## Kommentar ${row.id} (${row.created}, ${authorName(row.author, config)})`, '', row.body, '');
+  }
   return lines.join('\n');
 }

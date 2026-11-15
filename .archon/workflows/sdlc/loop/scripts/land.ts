@@ -15,7 +15,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { readCreated, recordLanding, runState } from '../../.shared/claims.ts';
-import { Jira, type Ticket, trackerConfig } from '../../.shared/jira.ts';
+import { Jira, type Ticket, type TicketComment, trackerConfig } from '../../.shared/jira.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
 import {
   CLOCK_SLACK_MS,
@@ -24,6 +24,7 @@ import {
   readAppCheck,
   recordRefusals,
   shipFailuresInLog,
+  ownerApprovals,
   trackingRefs,
   untestedMerge,
 } from '../../.shared/merge-gate.ts';
@@ -79,16 +80,25 @@ const tracking = await trackingRefs(
             config,
             created: readCreated(trackerState),
             target: ticketKeyOf(target, config) ?? '',
-            // The keychain is read only when a disposition names a ticket.
+            // The keychain is read only when a disposition names a ticket or an approval a comment.
             ticket: async (key): Promise<Ticket> => (client ??= new Jira(config)).ticket(key),
           },
   }
 );
+const judgeChanges = parseJudgeChanges(text(process.env.INPUTS_JUDGE_CHANGES));
+// With Jira, an approval is a link to a comment the owner wrote: read here, as the gate is synchronous.
+const approvals =
+  config === null
+    ? { approved: new Set<string>(), problems: [] }
+    : await ownerApprovals(
+        judgeChanges.map(j => j.approval),
+        { config, comments: async (key): Promise<TicketComment[]> => (client ??= new Jira(config)).comments(key) }
+      );
 const refusals = recordRefusals({
   report,
   evidenceProblems,
   dispositions,
-  judgeChanges: parseJudgeChanges(text(process.env.INPUTS_JUDGE_CHANGES)),
+  judgeChanges,
   shipFailures: existsSync(logPath) ? shipFailuresInLog(readFileSync(logPath, 'utf8')) : [],
   // A non-empty file (not a folder, whose time moves with anything written inside it).
   freshFile: ref => {
@@ -98,7 +108,7 @@ const refusals = recordRefusals({
     return stat.isFile() && stat.size > 0 && stat.mtimeMs + CLOCK_SLACK_MS >= reviewStarted;
   },
   issueExists: ref => tracking.open.has(ref.trim()),
-  approvalSite: config?.site,
+  ownerApprovals: approvals.approved,
 });
 if (route === 'complex' && !existsSync(logPath)) refusals.push('the run log is missing, so a failed shipping step cannot be ruled out');
 const prNumber = (url: string): string => /\/pull\/(\d+)/.exec(url)?.[1] ?? url;
@@ -192,7 +202,7 @@ const comment = (body: string): void => {
   if (prUrl !== '') run(['gh', 'pr', 'comment', prUrl, '--body', body]);
 };
 // A ticket Jira could not read explains a refusal; it does not refuse a merge that never needed it.
-if (refusals.length > 0) refusals.push(...tracking.problems);
+if (refusals.length > 0) refusals.push(...tracking.problems, ...approvals.problems);
 const list = refusals.map(r => `- ${r}`).join('\n');
 
 if (alreadyMerged) {

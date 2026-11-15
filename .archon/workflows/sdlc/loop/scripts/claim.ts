@@ -73,7 +73,7 @@ if (holder.id === mine.id) {
       mkdirSync(dir, { recursive: true });
       writeFileSync(
         join(dir, 'item.md'),
-        itemMarkdown({ ...ticket, status }, await jira.comments(item.key), config.status)
+        itemMarkdown({ ...ticket, status }, await jira.comments(item.key), config)
       );
       // Last, so a failure above leaves the ticket on To Do, where pick finds it again.
       if (start) await jira.move(item.key, config.status.progress);

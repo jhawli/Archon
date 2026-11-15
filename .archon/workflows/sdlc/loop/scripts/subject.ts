@@ -33,7 +33,7 @@ function findPr(): string {
   const key = config === null ? null : ticketKeyOf(target, config);
   if (config !== null && key !== null) {
     // Listed, not searched: the search index lags a pull request the builder opened moments ago.
-    const open = gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json', 'url,title,body,updatedAt']) as PrRow[];
+    const open = gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json', 'url,title,body,updatedAt,isCrossRepository']) as PrRow[];
     return ticketPr(open, key, config.project);
   }
   const issue = /\/issues\/(\d+)\/?$/.exec(target)?.[1];

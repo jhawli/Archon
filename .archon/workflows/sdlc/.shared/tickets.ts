@@ -65,11 +65,17 @@ export interface PrRow {
   readonly title: string;
   readonly body: string;
   readonly updatedAt: string;
+  readonly isCrossRepository?: boolean;
 }
 
-/** The most recently updated pull request that is the work for the ticket, or ''. */
+/**
+ * The most recently updated pull request that is the work for the ticket, or ''. Title and body
+ * are anyone's to write, so a pull request from another repository's fork never counts.
+ */
 export function ticketPr(rows: readonly PrRow[], key: string, project: string): string {
-  const mine = rows.filter(pr => namesTicket({ title: pr.title ?? '', body: pr.body ?? '' }, key, project));
+  const mine = rows.filter(
+    pr => pr.isCrossRepository !== true && namesTicket({ title: pr.title ?? '', body: pr.body ?? '' }, key, project)
+  );
   return mine.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.url ?? '';
 }
 

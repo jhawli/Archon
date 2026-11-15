@@ -263,21 +263,52 @@ export function parseJudgeChanges(json: string): JudgeChange[] {
     .filter(entry => entry.file !== '' || entry.change !== '');
 }
 
-const GITHUB_APPROVAL = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(#issuecomment-\d+)?(\s|$)/;
-const JIRA_APPROVAL = /^(https:\/\/[^/\s]+)\/browse\/[A-Z][A-Z0-9]+-[1-9]\d*(\?focusedCommentId=\d+)?(\s|$)/;
-
-/**
- * An approval is a link to an issue or a comment on one (the owner's words), never a criterion
- * id. With Jira, `site` adds a ticket or a comment on one, on that site only (compared as text,
- * so the dots in the site are not wildcards).
- */
+/** An approval is a link to an issue or a comment on one (the owner's words), never a criterion id. */
 // The link may be followed by a label a reviewer adds ("<url> (Owner decision, ...)"); the gate
 // needs the link, and refused correct approvals over the label (mission control #102/#145).
-export const isApprovalLink = (approval: string, site?: string): boolean => {
-  const link = approval.trim();
-  if (GITHUB_APPROVAL.test(link)) return true;
-  return site !== undefined && site !== '' && JIRA_APPROVAL.exec(link)?.[1] === site;
-};
+export const isApprovalLink = (approval: string): boolean =>
+  /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(#issuecomment-\d+)?(\s|$)/.test(approval.trim());
+
+const JIRA_COMMENT_LINK = /^(https:\/\/[^/\s]+)\/browse\/([A-Z][A-Z0-9]+-[1-9]\d*)\?focusedCommentId=(\d+)(\s|$)/;
+
+/** A link to a comment on a ticket of `site`, a label may follow; the site is compared as text, not as a pattern. */
+export function jiraCommentLink(approval: string, site: string): { key: string; comment: number } | null {
+  const match = JIRA_COMMENT_LINK.exec(approval.trim());
+  if (match?.[1] !== site) return null;
+  return { key: match[2] ?? '', comment: Number(match[3]) };
+}
+
+/**
+ * The approvals that are the owner's own comment on a ticket of this project. On Jira the loop's
+ * account comments on the same tickets every lap (claims, reviews, results), so a link stands
+ * only once land read the comment and found the owner wrote it. A comment Jira cannot read
+ * approves nothing; its reason goes to `problems` for the refusal.
+ */
+export async function ownerApprovals(
+  approvals: readonly string[],
+  readers: {
+    readonly config: TrackerConfig;
+    readonly comments: (key: string) => Promise<readonly { id: number; author: string }[]>;
+  }
+): Promise<{ approved: Set<string>; problems: string[] }> {
+  const { config } = readers;
+  const approved = new Set<string>();
+  const problems: string[] = [];
+  const read = new Map<string, Promise<readonly { id: number; author: string }[]>>();
+  for (const approval of new Set(approvals.map(a => a.trim()))) {
+    const link = jiraCommentLink(approval, config.site);
+    if (link?.key.startsWith(`${config.project}-`) !== true) continue;
+    if (!read.has(link.key)) read.set(link.key, readers.comments(link.key));
+    try {
+      const rows = await read.get(link.key);
+      if (rows?.some(row => row.id === link.comment && row.author === config.owner)) approved.add(approval);
+    } catch (error) {
+      const why = `could not read the comments of ${link.key} from Jira: ${(error as Error).message.slice(0, 200)}`;
+      if (!problems.includes(why)) problems.push(why);
+    }
+  }
+  return { approved, problems };
+}
 
 export interface GateFacts {
   readonly report: AppCheck;
@@ -290,8 +321,8 @@ export interface GateFacts {
   /** A file the reviewer wrote during its review. */
   readonly freshFile: (path: string) => boolean;
   readonly issueExists: (ref: string) => boolean;
-  /** With Jira, the site whose ticket comments are the owner's words (`isApprovalLink`). */
-  readonly approvalSite?: string;
+  /** With Jira, approval links land found to be the owner's own comments (`ownerApprovals`). */
+  readonly ownerApprovals?: ReadonlySet<string>;
 }
 
 /** Why the record does not support merging; empty when it does. The forge checks are the caller's. */
@@ -337,7 +368,7 @@ export function recordRefusals(facts: GateFacts): string[] {
   for (const judge of facts.judgeChanges) {
     if (judge.approval === '') {
       refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}) with no approval named`);
-    } else if (!isApprovalLink(judge.approval, facts.approvalSite)) {
+    } else if (!isApprovalLink(judge.approval) && facts.ownerApprovals?.has(judge.approval) !== true) {
       // A criterion id is the loop's own wording; only the owner's words, linked, approve a judge change.
       refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}), and its approval (${judge.approval}) is not a link to the owner's words`);
     }

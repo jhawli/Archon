@@ -142,6 +142,9 @@ describe('the pull request for a ticket', () => {
     ];
     expect(ticketPr(rows, 'CONC-5', 'CONC')).toBe('https://github.com/o/r/pull/3');
     expect(ticketPr(rows, 'CONC-7', 'CONC')).toBe('');
+    // A pull request from someone else's fork is never the loop's work, whatever it says.
+    const fork = { url: 'https://github.com/o/r/pull/4', title: 'CONC-5 Tags', body: '', updatedAt: '2026-11-15T13:00:00Z', isCrossRepository: true };
+    expect(ticketPr([...rows, fork], 'CONC-5', 'CONC')).toBe('https://github.com/o/r/pull/3');
   });
 });
 

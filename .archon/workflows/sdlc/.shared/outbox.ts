@@ -9,7 +9,7 @@
  */
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { readCreated, recordCreated, statusName } from './claims.ts';
+import { authorName, readCreated, recordCreated, statusName } from './claims.ts';
 import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
 
 export type Op =
@@ -205,12 +205,6 @@ async function createTicket(
     await jira.call('POST', `/rest/agile/1.0/sprint/${active.id}/issue`, { issues: [key] });
   }
   return key;
-}
-
-function authorName(account: string, config: TrackerConfig): string {
-  if (account === config.assignee) return 'Archon';
-  if (account === config.owner) return 'Julian';
-  return account === '' ? 'unbekannt' : account;
 }
 
 /** `$ARTIFACTS_DIR/tracker/board.md`: the lap's board for pick, in sprint rank order. */

@@ -62,6 +62,8 @@ type Decision =
   | { contract: 'BLOCKED'; blocked_reason: string; blocked_by: string[] }
   | { contract: 'NO_ACTION'; closure: Closure };
 
+const JIRA_TICKET_URL = /^https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\/[A-Z][A-Z0-9]+-[1-9]\d*$/;
+
 /** Every link a verdict carries is one the agent opened, so each must be a qualified URL. */
 function unqualifiedLink(
   blockedBy: readonly string[],
@@ -71,9 +73,9 @@ function unqualifiedLink(
   if (!blockedBy.every(isQualifiedUrl)) return 'blocked_by must be a list of fully qualified http(s) URLs';
   if (!related.every(entry => isQualifiedUrl(entry.url))) return 'related urls must be fully qualified http(s) URLs';
   if (closure !== null && !isQualifiedUrl(closure.url)) return 'closure.url must be a fully qualified http(s) URL';
-  // The empty original is for a Jira ticket; a GitHub duplicate names its original so the close links back.
-  if (closure?.kind === 'duplicate' && closure.original.number === 0 && new URL(closure.url).hostname === 'github.com') {
-    return 'a duplicate of a GitHub issue must name that issue as original';
+  // The empty original is for a Jira ticket only; any other duplicate names its original so the close links back.
+  if (closure?.kind === 'duplicate' && closure.original.number === 0 && !JIRA_TICKET_URL.test(closure.url)) {
+    return 'only a duplicate of a Jira ticket may leave original empty; name the original issue';
   }
   return null;
 }

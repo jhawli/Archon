@@ -32,7 +32,7 @@ Its problems, if any: `$INPUTS.handoff/evidence-problems.txt`.
 - Write only to the ticket of this lap. An entry for another ticket, or a comment that starts `Loop claim:` or `Loop result:`, makes the loop refuse the whole list, and nothing merges.
 - `delivers` `part`: the merged part goes to Staging and the rest becomes its own ticket. File it with `{"op": "create", "marker": "rest-<the ticket key in lower case>", "title": "<key> Rest: ...", "text": "<what is left, with the criteria it must meet>"}`; without it the loop asks the owner what is missing.
 - In `dispositions`, `issue` is the key of an open ticket (`CONC-41`), or `new:<marker>` for a ticket you file now with a `create` entry using that marker: the loop files it before the merge gate reads it. Never `#n`, which is a pull request.
-- In `judge_changes`, `approval` is the link to the owner's comment on the ticket: `https://<site>/browse/CONC-5?focusedCommentId=<id>`, with the id `item.md` gives the comment.
+- In `judge_changes`, `approval` is the link to the owner's comment on the ticket: `https://<site>/browse/CONC-5?focusedCommentId=<id>`, with the id `item.md` gives a comment by Julian (each comment's heading names its author). The merge gate reads the comment and refuses a link to anyone else's, the loop's own included.
 - The ticket's status is the loop's to set after you; leave it.
 
 ## When there is nothing to review

@@ -7,6 +7,8 @@ import {
   filesReadInLog,
   isApprovalLink,
   isTrackingIssue,
+  jiraCommentLink,
+  ownerApprovals,
   parseDispositions,
   parseJudgeChanges,
   readAppCheck,
@@ -464,25 +466,57 @@ describe('the merge gate with Jira', () => {
     expect(isTrackingIssue({ state: 'OPEN', url: `${SITE}/browse/CONC-41?focusedCommentId=1` })).toBe(false);
   });
 
-  it('an owner comment on a Jira ticket is an approval link only on the configured site', () => {
+  it('a link to a comment on a ticket of the configured site, label allowed, site compared as text', () => {
     const link = `${SITE}/browse/CONC-5?focusedCommentId=10042`;
-    expect(isApprovalLink(link, SITE)).toBe(true);
-    expect(isApprovalLink(`${SITE}/browse/CONC-5`, SITE)).toBe(true);
+    expect(jiraCommentLink(link, SITE)).toEqual({ key: 'CONC-5', comment: 10042 });
     // The label a reviewer adds after the link (mission control #102/#145) holds here too.
-    expect(isApprovalLink(`${link} (Owner decision, 2026-11-15)`, SITE)).toBe(true);
-    expect(isApprovalLink('https://evil.example/browse/CONC-5?focusedCommentId=1', SITE)).toBe(false);
+    expect(jiraCommentLink(`${link} (Owner decision, 2026-11-15)`, SITE)).toEqual({ key: 'CONC-5', comment: 10042 });
+    expect(jiraCommentLink(`${SITE}/browse/CONC-5`, SITE)).toBeNull();
+    expect(jiraCommentLink('https://evil.example/browse/CONC-5?focusedCommentId=1', SITE)).toBeNull();
     // The site's dots are literal: a look-alike host is not the site.
-    expect(isApprovalLink('https://example-atlassian-net/browse/CONC-5?focusedCommentId=1', SITE)).toBe(false);
-    expect(isApprovalLink(`${SITE}.evil.example/browse/CONC-5`, SITE)).toBe(false);
-    expect(isApprovalLink(`see ${link}`, SITE)).toBe(false);
+    expect(jiraCommentLink('https://example-atlassian-net/browse/CONC-5?focusedCommentId=1', SITE)).toBeNull();
+    expect(jiraCommentLink(`${SITE}.evil.example/browse/CONC-5?focusedCommentId=1`, SITE)).toBeNull();
+    expect(jiraCommentLink(`see ${link}`, SITE)).toBeNull();
     expect(isApprovalLink(link)).toBe(false);
-    expect(isApprovalLink('https://github.com/o/r/issues/74#issuecomment-123', SITE)).toBe(true);
   });
 
-  it('the gate takes a Jira approval only with the site', () => {
-    const judgeChanges = [{ file: 'tests/a.test.ts', change: 'loosened', approval: `${SITE}/browse/CONC-5?focusedCommentId=10042` }];
-    expect(gate(CLEAN, { judgeChanges, approvalSite: SITE })).toEqual([]);
+  it('the gate takes a Jira approval only once land found it the owner\'s comment', () => {
+    const approval = `${SITE}/browse/CONC-5?focusedCommentId=10042`;
+    const judgeChanges = [{ file: 'tests/a.test.ts', change: 'loosened', approval }];
+    expect(gate(CLEAN, { judgeChanges, ownerApprovals: new Set([approval]) })).toEqual([]);
     expect(gate(CLEAN, { judgeChanges })[0]).toContain('is not a link to the owner');
+  });
+
+  type Rows = { id: number; author: string }[];
+  const comments = (rows: Rows): (() => Promise<Rows>) => async () => rows;
+
+  it('an approval counts only as a comment the owner wrote, never the loop\'s own', async () => {
+    const seen: string[] = [];
+    const owner = `${SITE}/browse/CONC-5?focusedCommentId=10042`;
+    const archon = `${SITE}/browse/CONC-5?focusedCommentId=10043 (Owner decision)`;
+    const found = await ownerApprovals(
+      [owner, archon, `${SITE}/browse/CONC-5`, `${SITE}/browse/VAULT-3?focusedCommentId=1`, `${SITE}/browse/CONC-5?focusedCommentId=99`, 'https://github.com/o/r/issues/74'],
+      {
+        config: CFG,
+        comments: async key => (seen.push(key), [{ id: 10042, author: CFG.owner }, { id: 10043, author: CFG.assignee }]),
+      }
+    );
+    expect(found.approved).toEqual(new Set([owner]));
+    expect(found.problems).toEqual([]);
+    // One read per ticket; a foreign project's key is never read.
+    expect(seen).toEqual(['CONC-5']);
+    expect((await ownerApprovals([owner], { config: CFG, comments: comments([]) })).approved.size).toBe(0);
+  });
+
+  it('a comment Jira cannot read approves nothing, with the reason kept for the refusal', async () => {
+    const found = await ownerApprovals([`${SITE}/browse/CONC-5?focusedCommentId=10042`], {
+      config: CFG,
+      comments: async () => {
+        throw new Error('Jira GET /rest/api/3/issue/CONC-5/comment -> 503: down');
+      },
+    });
+    expect(found.approved.size).toBe(0);
+    expect(found.problems).toEqual(['could not read the comments of CONC-5 from Jira: Jira GET /rest/api/3/issue/CONC-5/comment -> 503: down']);
   });
 
   type ReadTicket = NonNullable<TrackingReaders['jira']>['ticket'];
