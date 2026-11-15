@@ -8,7 +8,8 @@
  * check from files that were already there. An empty `pr` means nothing was delivered.
  */
 
-import { emit, trimmed } from '../../.shared/io.ts';
+import { recordLap } from '../../.shared/claims.ts';
+import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { closes } from '../../.shared/workable.ts';
 
 const started = String(Date.now());
@@ -38,6 +39,8 @@ function findPr(): string {
 }
 
 const pr = findPr();
+// Recorded before the pull request is read: if that read fails, release still knows there is one.
+recordLap(artifactsDir(), { pr });
 if (pr === '') {
   emit({ pr: '', head: '', base: '', files: '', started });
 } else {

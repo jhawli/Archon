@@ -348,11 +348,14 @@ nodes:
       identity: ""
 
   # Free the work item for the next lap however this run ended: after review and
-  # deploy finished, failed or were skipped.
+  # deploy finished, failed or were skipped. On a Jira ticket it also sets the status
+  # the lap earned. What the lap did (pull request, merge, rollout) it reads from
+  # files under $ARTIFACTS_DIR, never from these nodes' outputs: a binding to a node
+  # that failed fails the reader, and a failed rollout fails the deploy block.
   - id: release
     script: release
     runtime: bun
-    depends_on: [claim, review, land, deploy]
+    depends_on: [claim, subject, review, land, deploy]
     trigger_rule: all_done
     when: "$pick.output.route != 'none' && $claim.output.held == 'true'"
     with:

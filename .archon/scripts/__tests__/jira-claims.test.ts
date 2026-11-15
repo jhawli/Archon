@@ -1,0 +1,265 @@
+import { describe, expect, it } from 'bun:test';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  type ClaimClient,
+  type LapResult,
+  editComment,
+  finalStatus,
+  itemMarkdown,
+  liveClaims,
+  postComment,
+  readLap,
+  recordLap,
+  restMarker,
+  workItem,
+} from '../../workflows/sdlc/.shared/claims';
+import type { Ticket, TicketComment, TrackerConfig } from '../../workflows/sdlc/.shared/jira';
+
+const CFG: TrackerConfig = {
+  kind: 'jira',
+  site: 'https://example.atlassian.net',
+  project: 'CONC',
+  board: 5,
+  keychain: 'none',
+  assignee: 'acc-archon',
+  owner: 'acc-julian',
+  status: {
+    todo: '10015',
+    progress: '3',
+    review: '10016',
+    staging: '10017',
+    live: '10018',
+    canceled: '10008',
+  },
+  flagField: 'customfield_10021',
+  flagOn: '10019',
+  sprintField: 'customfield_10020',
+};
+const S = CFG.status;
+const NOW = Date.parse('2026-11-15T12:00:00Z');
+const TICKET = { kind: 'ticket', key: 'CONC-5' } as const;
+
+/** Comments in memory. Ids are handed out from `ids` when given, so a test can make them disagree with creation order. */
+class FakeJira implements ClaimClient {
+  rows: TicketComment[] = [];
+  edits: [number, string][] = [];
+  private next = 10000;
+  constructor(private readonly ids: number[] = []) {}
+  add(id: number, body: string, created: string): void {
+    this.rows.push({ id, body, created, createdAt: Date.parse(created), author: 'acc-archon', url: '' });
+  }
+  async comments(): Promise<TicketComment[]> {
+    return [...this.rows].sort((a, b) => a.id - b.id);
+  }
+  async comment(_key: string, text: string): Promise<number> {
+    const id = this.ids.shift() ?? (this.next += 1);
+    this.add(id, text, new Date(NOW).toISOString());
+    return id;
+  }
+  async editComment(_key: string, id: number, text: string): Promise<void> {
+    this.edits.push([id, text]);
+    const row = this.rows.find(r => r.id === id);
+    if (row !== undefined) this.rows[this.rows.indexOf(row)] = { ...row, body: text };
+  }
+}
+
+const lap = (over: Partial<LapResult> = {}): LapResult => ({
+  pr: '',
+  landed: '',
+  deployed: '',
+  delivers: '',
+  created: {},
+  ...over,
+});
+
+describe('work items', () => {
+  it('a Jira ticket URL is a ticket', () => {
+    expect(workItem('https://example.atlassian.net/browse/CONC-5', CFG)).toEqual(TICKET);
+  });
+  it('a pull request stays on GitHub', () => {
+    expect(workItem('https://github.com/o/r/pull/9', CFG)).toEqual({
+      kind: 'github',
+      repository: 'o/r',
+      number: 9,
+    });
+  });
+  it('with Jira, a GitHub issue is refused', () => {
+    expect(() => workItem('https://github.com/o/r/issues/9', CFG)).toThrow(
+      "Jira tracks this repository's work items"
+    );
+  });
+  it('without Jira, GitHub issues work as before', () => {
+    expect(workItem('https://github.com/o/r/issues/9', null)).toEqual({
+      kind: 'github',
+      repository: 'o/r',
+      number: 9,
+    });
+  });
+  it('a ticket of another site or project is not a work item', () => {
+    expect(() => workItem('https://other.atlassian.net/browse/CONC-5', CFG)).toThrow('not a work item');
+    expect(() => workItem('https://example.atlassian.net/browse/VAULT-3', CFG)).toThrow('not a work item');
+  });
+});
+
+describe('claims on a ticket', () => {
+  it('the lowest id holds the ticket, whatever order Jira created them in', async () => {
+    const jira = new FakeJira();
+    jira.add(10019, 'Loop claim: run aaa\n\nRoute: simple', '2026-11-15T11:00:00.721+0100');
+    jira.add(10018, 'Loop claim: run bbb\n\nRoute: simple', '2026-11-15T11:00:00.738+0100');
+    jira.add(10017, 'Just a comment', '2026-11-15T10:00:00.000+0100');
+    const claims = await liveClaims(TICKET, 6, NOW, jira);
+    expect(claims.map(c => [c.id, c.run])).toEqual([
+      [10018, 'bbb'],
+      [10019, 'aaa'],
+    ]);
+  });
+  it('a claim older than the expiry does not count', async () => {
+    const jira = new FakeJira();
+    jira.add(10010, 'Loop claim: run old', '2026-11-15T04:00:00.000+0100');
+    jira.add(10011, 'Loop claim: run new', '2026-11-15T12:00:00.000+0100');
+    expect((await liveClaims(TICKET, 6, NOW, jira)).map(c => c.run)).toEqual(['new']);
+  });
+  it('two runs claiming at once: both read the same holder back', async () => {
+    const jira = new FakeJira([10031, 10030]);
+    await postComment(TICKET, 'Loop claim: run first', jira);
+    await postComment(TICKET, 'Loop claim: run second', jira);
+    const [holder] = await liveClaims(TICKET, 6, NOW, jira);
+    expect(holder?.run).toBe('second');
+  });
+  it('edits go to the ticket', async () => {
+    const jira = new FakeJira();
+    const id = await postComment(TICKET, 'Loop claim: run x', jira);
+    await editComment(TICKET, id, 'Loop claim withdrawn: run x', jira);
+    expect(jira.edits).toEqual([[id, 'Loop claim withdrawn: run x']]);
+    expect(await liveClaims(TICKET, 6, NOW, jira)).toEqual([]);
+  });
+  it('a ticket without a Jira client is a programming error, not a silent GitHub call', async () => {
+    let message = '';
+    try {
+      await liveClaims(TICKET, 6, NOW);
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toContain('Jira client');
+  });
+});
+
+describe('status after the lap', () => {
+  const merged = { pr: 'https://github.com/o/r/pull/9', landed: 'merged', deployed: 'true' };
+  it('leaves a ticket alone that is not In Progress or Review (the pick canceled it)', () => {
+    expect(finalStatus('CONC-5', S.canceled, lap(merged), S)).toEqual({ status: null, ask: null });
+    expect(finalStatus('CONC-5', S.todo, lap(merged), S)).toEqual({ status: null, ask: null });
+  });
+  it('merged, rollout not confirmed: Review and a question', () => {
+    for (const deployed of ['', 'false']) {
+      const result = finalStatus('CONC-5', S.progress, lap({ ...merged, deployed }), S);
+      expect(result.status).toBe(S.review);
+      expect(result.ask).toContain('Staging-Rollout ist nicht bestätigt');
+    }
+  });
+  it('merged, deployed, all delivered: Staging', () => {
+    expect(finalStatus('CONC-5', S.progress, lap({ ...merged, delivers: 'all' }), S)).toEqual({
+      status: S.staging,
+      ask: null,
+    });
+  });
+  it('merged, deployed, part delivered with a rest ticket: Staging', () => {
+    const created = { [restMarker('CONC-5')]: 'CONC-40' };
+    expect(finalStatus('CONC-5', S.review, lap({ ...merged, delivers: 'part', created }), S)).toEqual({
+      status: S.staging,
+      ask: null,
+    });
+  });
+  it('merged, deployed, part delivered without a rest ticket: Staging and a question', () => {
+    const result = finalStatus('CONC-5', S.progress, lap({ ...merged, delivers: 'part' }), S);
+    expect(result.status).toBe(S.staging);
+    expect(result.ask).toContain('Rest-Ticket');
+  });
+  it('an open pull request that was not merged: Review', () => {
+    for (const landed of ['', 'refused']) {
+      expect(finalStatus('CONC-5', S.progress, lap({ pr: merged.pr, landed }), S)).toEqual({
+        status: S.review,
+        ask: null,
+      });
+    }
+  });
+  it('no pull request: back to To Do', () => {
+    expect(finalStatus('CONC-5', S.progress, lap(), S)).toEqual({ status: S.todo, ask: null });
+  });
+  it('the rest marker is the key in lower case', () => {
+    expect(restMarker('CONC-5')).toBe('rest-conc-5');
+  });
+});
+
+describe('lap facts', () => {
+  const dir = (): string => mkdtempSync(join(tmpdir(), 'lap-'));
+  it('reads what subject, land and deploy left, even when deploy failed', () => {
+    const artifacts = dir();
+    recordLap(artifacts, { pr: 'https://github.com/o/r/pull/9' });
+    recordLap(artifacts, { landed: 'merged', delivers: 'part' });
+    writeFileSync(join(artifacts, 'deployment.md'), '# Deployment\n\n- deployed: False\n- revision: abc\n');
+    expect(readLap(artifacts, '')).toEqual({
+      pr: 'https://github.com/o/r/pull/9',
+      landed: 'merged',
+      deployed: 'false',
+      delivers: 'part',
+      created: {},
+    });
+  });
+  it('a confirmed rollout reads as true', () => {
+    const artifacts = dir();
+    writeFileSync(join(artifacts, 'deployment.md'), '# Deployment\n\n- deployed: True\n');
+    expect(readLap(artifacts, '').deployed).toBe('true');
+  });
+  it('nothing recorded: the pull request pick chose, nothing else', () => {
+    expect(readLap(dir(), 'https://github.com/o/r/pull/3')).toEqual(
+      lap({ pr: 'https://github.com/o/r/pull/3' })
+    );
+  });
+  it('a malformed record is an error, not an empty lap', () => {
+    const artifacts = dir();
+    mkdirSync(join(artifacts, 'tracker'));
+    writeFileSync(join(artifacts, 'tracker', 'lap.json'), '[1]');
+    expect(() => readLap(artifacts, '')).toThrow('lap.json');
+  });
+});
+
+describe('the ticket file for the agents', () => {
+  it('head, facts, description, then every comment', () => {
+    const ticket: Ticket = {
+      key: 'CONC-5',
+      url: 'https://example.atlassian.net/browse/CONC-5',
+      title: 'Tags für Notizen',
+      body: 'Was gebaut wird.\n\n- eins',
+      status: S.progress,
+      labels: ['route:simple'],
+      flagged: false,
+      assignee: 'acc-archon',
+      inOpenSprint: true,
+      updated: 0,
+    };
+    const comments: TicketComment[] = [
+      { id: 10018, body: 'Loop claim: run bbb', created: '2026-11-15T11:00:00.738+0100', createdAt: 0, author: 'a', url: '' },
+    ];
+    expect(itemMarkdown(ticket, comments, S)).toBe(
+      [
+        '# CONC-5 Tags für Notizen',
+        '',
+        'URL: https://example.atlassian.net/browse/CONC-5',
+        'Status: In Progress',
+        'Labels: route:simple',
+        '',
+        'Was gebaut wird.',
+        '',
+        '- eins',
+        '',
+        '## Kommentar 10018 (2026-11-15T11:00:00.738+0100)',
+        '',
+        'Loop claim: run bbb',
+        '',
+      ].join('\n')
+    );
+  });
+});

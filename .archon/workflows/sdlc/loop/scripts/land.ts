@@ -14,6 +14,7 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { recordLap } from '../../.shared/claims.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
 import {
   CLOCK_SLACK_MS,
@@ -154,6 +155,12 @@ if (view.code !== 0) {
   }
 }
 
+/** The outcome, recorded first for release (a ticket's status needs it even if a later node fails). */
+const landed = (outcome: 'merged' | 'refused', reason: string): void => {
+  recordLap(artifactsDir(), { landed: outcome, delivers });
+  emit({ outcome, reason });
+};
+
 const comment = (body: string): void => {
   if (prUrl !== '') run(['gh', 'pr', 'comment', prUrl, '--body', body]);
 };
@@ -161,16 +168,16 @@ const list = refusals.map(r => `- ${r}`).join('\n');
 
 if (alreadyMerged) {
   comment(`Loop review: merged (route: ${route}) outside the merge gate. The gate's own checks, for the record:\n\n${list || '- all held'}`);
-  emit({ outcome: 'merged', reason: 'the pull request was already merged when the gate ran' });
+  landed('merged', 'the pull request was already merged when the gate ran');
 } else if (refusals.length > 0) {
   comment(`Loop review: not merged (route: ${route}). The merge gate refused the reviewer's merge:\n\n${list}\n\nThe next lap continues this pull request.`);
-  emit({ outcome: 'refused', reason: refusals.join('; ') });
+  landed('refused', refusals.join('; '));
 } else {
   const merged = run(['gh', 'pr', 'merge', prUrl, '--squash', '--match-head-commit', landSha]);
   if (merged.code !== 0) {
     const why = merged.err.trim().slice(0, 300);
     comment(`Loop review: not merged (route: ${route}). \`gh pr merge\` refused: ${why}`);
-    emit({ outcome: 'refused', reason: `gh pr merge failed: ${why}` });
+    landed('refused', `gh pr merge failed: ${why}`);
   } else {
     if (branch !== '') run(['git', 'push', '--quiet', 'origin', '--delete', branch]);
     const issue = /\/issues\/(\d+)\/?$/.exec(target)?.[1];
@@ -179,6 +186,6 @@ if (alreadyMerged) {
       if (state === 'OPEN') run(['gh', 'issue', 'close', issue, '--comment', `Delivered by ${prUrl}.`]);
     }
     comment(`Loop review: merged (route: ${route}) at ${landSha} by the merge gate, after the review above${note}.`);
-    emit({ outcome: 'merged', reason: `merged ${landSha}${note}` });
+    landed('merged', `merged ${landSha}${note}`);
   }
 }

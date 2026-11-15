@@ -2,25 +2,40 @@
  * Work-item claims: how several runs of one loop share a backlog without two of them
  * working the same item.
  *
- * A claim is a comment on the work item (an issue, or a pull request when no issue is
- * involved) whose body starts with `Loop claim: run <id>`. GitHub numbers comments in
- * the order it stores them, so among the live claims on one item the lowest comment id
- * was first, and it holds the item. That is the whole protocol: no lock service, no
- * scheduler, and a race between two runs that claimed in the same second still has
- * exactly one winner, because each reads the item back after its own claim landed.
+ * A claim is a comment on the work item (a Jira ticket or GitHub issue, or a pull request
+ * when no ticket is involved) whose body starts with `Loop claim: run <id>`. Among the live
+ * claims on one item the lowest comment id holds it. GitHub numbers comments in the order it
+ * stores them; Jira's ids are unique but not always in `created` order under concurrent
+ * writes, which does not matter: every run orders by the same number. That is the whole
+ * protocol: no lock service, no scheduler, and a race between two runs that claimed in the
+ * same second still has exactly one winner, because each reads the item back after its own
+ * claim landed.
  *
  * A claim is live until its run edits it to `Loop claim released` (or `withdrawn`), or
  * until it is older than the expiry: a run that died without releasing must not hold an
  * item forever.
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { type Jira, type Ticket, type TicketComment, type TrackerConfig, trackerConfig } from './jira.ts';
+import { ticketKeyOf } from './tickets.ts';
 
 type JsonObject = Record<string, unknown>;
 
 export const CLAIM_PREFIX = 'Loop claim: run ';
 
-export interface WorkItem {
-  readonly repository: string;
-  readonly number: number;
+export type WorkItem =
+  | { readonly kind: 'ticket'; readonly key: string }
+  | { readonly kind: 'github'; readonly repository: string; readonly number: number };
+
+/** The part of the Jira client the claim protocol uses; tests pass a fake. */
+export type ClaimClient = Pick<Jira, 'comments' | 'comment' | 'editComment'>;
+
+/** A comment on either tracker, as the claim protocol reads it. */
+export interface ItemComment {
+  readonly id: number;
+  readonly body: string;
+  readonly createdAt: number;
 }
 
 export interface Claim {
@@ -29,13 +44,20 @@ export interface Claim {
   readonly createdAt: number;
 }
 
-/** An issue or pull request URL on github.com. */
-export function workItem(url: string): WorkItem {
-  const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(?:issues|pull)\/(\d+)\/?$/.exec(
+/** A Jira ticket URL, or a GitHub issue or pull request URL. With Jira, GitHub issues are refused. */
+export function workItem(url: string, config: TrackerConfig | null = trackerConfig()): WorkItem {
+  if (config !== null) {
+    const key = ticketKeyOf(url, config);
+    if (key !== null) return { kind: 'ticket', key };
+  }
+  const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(issues|pull)\/(\d+)\/?$/.exec(
     url.trim()
   );
-  if (match === null) throw new Error(`not a GitHub issue or pull request URL: '${url}'`);
-  return { repository: match[1], number: Number(match[2]) };
+  if (match === null) throw new Error(`not a work item URL: '${url}'`);
+  if (config !== null && match[2] === 'issues') {
+    throw new Error(`Jira tracks this repository's work items, not ${url}`);
+  }
+  return { kind: 'github', repository: match[1], number: Number(match[3]) };
 }
 
 export function runGh(args: string[]): unknown {
@@ -50,8 +72,17 @@ export function runGh(args: string[]): unknown {
   return output === '' ? null : (JSON.parse(output) as unknown);
 }
 
-/** Every comment on the item, oldest first. */
-export function comments(item: WorkItem): JsonObject[] {
+function clientFor(key: string, jira: ClaimClient | undefined): ClaimClient {
+  if (jira === undefined) throw new Error(`${key}: a ticket needs a Jira client`);
+  return jira;
+}
+
+/** Every comment on the item, lowest id first. */
+export async function comments(item: WorkItem, jira?: ClaimClient): Promise<ItemComment[]> {
+  if (item.kind === 'ticket') {
+    const rows: TicketComment[] = await clientFor(item.key, jira).comments(item.key);
+    return rows.map(({ id, body, createdAt }) => ({ id, body, createdAt }));
+  }
   const pages = runGh([
     `repos/${item.repository}/issues/${item.number}/comments?per_page=100`,
     '--paginate',
@@ -60,24 +91,35 @@ export function comments(item: WorkItem): JsonObject[] {
   if (!Array.isArray(pages)) throw new Error('comment listing is malformed');
   return (pages as unknown[])
     .flatMap((page): unknown[] => (Array.isArray(page) ? (page as unknown[]) : [page]))
-    .filter((value): value is JsonObject => value !== null && typeof value === 'object');
+    .filter((value): value is JsonObject => value !== null && typeof value === 'object')
+    .filter(row => typeof row.id === 'number')
+    .map(row => ({
+      id: row.id as number,
+      body: typeof row.body === 'string' ? row.body : '',
+      createdAt: Date.parse(String(row.created_at)),
+    }))
+    .sort((left, right) => left.id - right.id);
 }
 
 /** Live claims on the item, oldest (lowest id) first. */
-export function liveClaims(item: WorkItem, expiryHours: number, now = Date.now()): Claim[] {
+export async function liveClaims(
+  item: WorkItem,
+  expiryHours: number,
+  now = Date.now(),
+  jira?: ClaimClient
+): Promise<Claim[]> {
   const claims: Claim[] = [];
-  for (const comment of comments(item)) {
-    const body = typeof comment.body === 'string' ? comment.body : '';
-    if (!body.startsWith(CLAIM_PREFIX) || typeof comment.id !== 'number') continue;
-    const createdAt = Date.parse(String(comment.created_at));
-    if (Number.isNaN(createdAt) || now - createdAt > expiryHours * 3_600_000) continue;
-    const run = body.slice(CLAIM_PREFIX.length).split(/\s/, 1)[0] ?? '';
-    claims.push({ id: comment.id, run, createdAt });
+  for (const comment of await comments(item, jira)) {
+    if (!comment.body.startsWith(CLAIM_PREFIX)) continue;
+    if (Number.isNaN(comment.createdAt) || now - comment.createdAt > expiryHours * 3_600_000) continue;
+    const run = comment.body.slice(CLAIM_PREFIX.length).split(/\s/, 1)[0] ?? '';
+    claims.push({ id: comment.id, run, createdAt: comment.createdAt });
   }
   return claims.sort((left, right) => left.id - right.id);
 }
 
-export function postComment(item: WorkItem, body: string): number {
+export async function postComment(item: WorkItem, body: string, jira?: ClaimClient): Promise<number> {
+  if (item.kind === 'ticket') return clientFor(item.key, jira).comment(item.key, body);
   const created = runGh([
     `repos/${item.repository}/issues/${item.number}/comments`,
     '--method',
@@ -89,7 +131,11 @@ export function postComment(item: WorkItem, body: string): number {
   return created.id;
 }
 
-export function editComment(item: WorkItem, id: number, body: string): void {
+export async function editComment(item: WorkItem, id: number, body: string, jira?: ClaimClient): Promise<void> {
+  if (item.kind === 'ticket') {
+    await clientFor(item.key, jira).editComment(item.key, id, body);
+    return;
+  }
   runGh([`repos/${item.repository}/issues/comments/${id}`, '--method', 'PATCH', '-f', `body=${body}`]);
 }
 
@@ -97,4 +143,125 @@ export function expiryHours(value: string): number {
   const hours = Number(value.trim() === '' ? '6' : value);
   if (!Number.isFinite(hours) || hours <= 0) throw new Error(`claim expiry must be a positive number of hours, got '${value}'`);
   return hours;
+}
+
+// --- The lap's result on a ticket (AK18) ---
+
+export interface LapResult {
+  readonly pr: string;
+  readonly landed: string;
+  readonly deployed: string;
+  readonly delivers: string;
+  /** Markers the review filed tickets for (`write-review` output). */
+  readonly created: Readonly<Record<string, string>>;
+}
+
+export const restMarker = (key: string): string => `rest-${key.toLowerCase()}`;
+
+/** The ticket's status after a lap (AK18). Null leaves it as it is. */
+export function finalStatus(
+  key: string,
+  current: string,
+  lap: LapResult,
+  s: TrackerConfig['status']
+): { status: string | null; ask: string | null } {
+  if (current !== s.progress && current !== s.review) return { status: null, ask: null };
+  if (lap.landed === 'merged') {
+    if (lap.deployed !== 'true') {
+      return {
+        status: s.review,
+        ask: 'Gemergt, aber der Staging-Rollout ist nicht bestätigt. Bitte Staging prüfen und das Ticket dann auf Staging setzen.',
+      };
+    }
+    if (lap.delivers === 'part' && lap.created[restMarker(key)] === undefined) {
+      return {
+        status: s.staging,
+        ask: 'Nur zum Teil geliefert, aber der Review hat kein Rest-Ticket angelegt. Was fehlt noch?',
+      };
+    }
+    return { status: s.staging, ask: null };
+  }
+  if (lap.pr !== '') return { status: s.review, ask: null };
+  return { status: s.todo, ask: null };
+}
+
+/*
+ * Lap facts travel as files, not as `with:` bindings: the engine refuses to bind the output
+ * of a failed node (`if_skipped` covers skipped ones only), and a failed rollout fails the
+ * deploy block. Bound to `$deploy.output`, release would fail on exactly the lap whose
+ * ticket most needs Review and a question. So subject and land record what they know in
+ * `$ARTIFACTS_DIR/tracker/lap.json`, the deploy block's own `deployment.md` says whether the
+ * rollout was confirmed, and release reads both, whatever happened in between.
+ */
+
+type LapFacts = Partial<Record<'pr' | 'landed' | 'delivers', string>>;
+
+const lapFile = (dir: string): string => join(dir, 'tracker', 'lap.json');
+
+function readFacts(dir: string): LapFacts {
+  const path = lapFile(dir);
+  if (!existsSync(path)) return {};
+  const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error(`${path} is not an object`);
+  const facts: LapFacts = {};
+  for (const name of ['pr', 'landed', 'delivers'] as const) {
+    const value = (raw as JsonObject)[name];
+    if (typeof value === 'string') facts[name] = value;
+  }
+  return facts;
+}
+
+/** Merge facts into this run's lap record. */
+export function recordLap(dir: string, facts: LapFacts): void {
+  mkdirSync(join(dir, 'tracker'), { recursive: true });
+  writeFileSync(lapFile(dir), `${JSON.stringify({ ...readFacts(dir), ...facts }, null, 2)}\n`);
+}
+
+function deployedFact(dir: string): string {
+  const path = join(dir, 'deployment.md');
+  if (!existsSync(path)) return '';
+  return /^- deployed: True$/m.test(readFileSync(path, 'utf8')) ? 'true' : 'false';
+}
+
+/** What this lap did, from the record and the deploy block's `deployment.md`. */
+export function readLap(dir: string, pickedPr: string, created: Readonly<Record<string, string>> = {}): LapResult {
+  const facts = readFacts(dir);
+  return {
+    pr: facts.pr !== undefined && facts.pr !== '' ? facts.pr : pickedPr,
+    landed: facts.landed ?? '',
+    deployed: deployedFact(dir),
+    delivers: facts.delivers ?? '',
+    created,
+  };
+}
+
+// --- The ticket as the agents read it ---
+
+const STATUS_NAMES: Record<keyof TrackerConfig['status'], string> = {
+  todo: 'To Do',
+  progress: 'In Progress',
+  review: 'Review',
+  staging: 'Staging',
+  live: 'Live',
+  canceled: 'Canceled',
+};
+
+export function statusName(id: string, s: TrackerConfig['status']): string {
+  const name = (Object.keys(STATUS_NAMES) as (keyof TrackerConfig['status'])[]).find(k => s[k] === id);
+  return name === undefined ? `status ${id}` : STATUS_NAMES[name];
+}
+
+/** `$ARTIFACTS_DIR/tracker/item.md`: the ticket and its comments, for agents that hold no token. */
+export function itemMarkdown(ticket: Ticket, rows: readonly TicketComment[], s: TrackerConfig['status']): string {
+  const lines = [
+    `# ${ticket.key} ${ticket.title}`,
+    '',
+    `URL: ${ticket.url}`,
+    `Status: ${statusName(ticket.status, s)}`,
+    `Labels: ${ticket.labels.length > 0 ? ticket.labels.join(', ') : 'keine'}`,
+    '',
+  ];
+  if (ticket.body !== '') lines.push(ticket.body, '');
+  for (const row of rows) lines.push(`## Kommentar ${row.id} (${row.created})`, '', row.body, '');
+  return lines.join('\n');
 }
