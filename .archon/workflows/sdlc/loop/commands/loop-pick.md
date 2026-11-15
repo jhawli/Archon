@@ -26,7 +26,7 @@ GitHub is the only state (with Jira, the work items are tickets; see below). Rea
   - `{"op": "cancel", "key": "CONC-9", "text": "Doppel von CONC-4"}` instead of closing a duplicate or an already delivered ticket, with the reference in the text.
 - Write only to tickets marked `Schreibbar: ja`. One entry for any other ticket, or one that starts like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), makes the loop refuse the whole list, and this lap does nothing.
 - A `Contract` you write this lap is on the ticket before the builder starts, and in its copy of the ticket.
-- A comment `Loop result: run <id>. PR: kein PR. ...` is a run of this loop that produced no pull request; count it under Caps.
+- Every run of this loop that held a ticket ends with exactly one comment `Loop result: run <id>. PR: <url or kein PR>. Status: <status>.` on it. Under Caps, count runs by these: one with `PR: kein PR` is a run that produced no pull request. The same run's `Loop review:` comment on the ticket is not a second attempt; send-backs and merge-gate refusals still count by their `Loop review:` lines, as below.
 
 ## Other runs working right now
 
