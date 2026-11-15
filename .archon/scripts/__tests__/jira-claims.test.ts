@@ -185,6 +185,14 @@ describe('claims no run stands behind', () => {
     const rows = [row(1, 'Loop claim: run aaa', NOW - 9 * HOUR)];
     expect(deadClaims(rows, 6, NOW, new Set(), NOW - HOUR)).toEqual([]);
   });
+  it('the claim sits at most ten minutes before the start, and not after it', () => {
+    const rows = [row(1, 'Loop claim: run aaa')];
+    const at = NOW - HOUR;
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']), at + 10 * 60_000)).toHaveLength(1);
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']), at + 10 * 60_000 + 1)).toEqual([]);
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']), at - 5000)).toHaveLength(1);
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']), at - 60_000)).toEqual([]);
+  });
   it('without the time the ticket was started nothing is taken back', () => {
     expect(deadClaims([row(1, 'Loop claim: run aaa')], 6, NOW, new Set(['aaa']), Number.NaN)).toEqual([]);
   });

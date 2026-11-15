@@ -34,7 +34,7 @@ import {
 } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
-import { clearOutbox, type PrText, prKeys, prRefusal, writableNow } from '../../.shared/outbox.ts';
+import { clearOutbox, type PrText, prAddressRefusal, prKeys, prRefusal, writableNow } from '../../.shared/outbox.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
@@ -78,9 +78,18 @@ async function refusal(): Promise<string | null> {
     if ((await client.ticket(key)).flagged) return `${key} is flagged: a question to the owner is open`;
   }
   if (pull === '') return null;
-  const view = Bun.spawnSync(['gh', 'pr', 'view', pull, '--json', 'title,body'], { stdout: 'pipe', stderr: 'pipe' });
-  if (view.exitCode !== 0) throw new Error(`claim: gh pr view ${pull} failed: ${view.stderr.toString().trim()}`);
-  const text = JSON.parse(view.stdout.toString()) as PrText;
+  const gh = (args: string[]): string => {
+    const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
+    if (result.exitCode !== 0) throw new Error(`claim: gh ${args.slice(0, 2).join(' ')} failed: ${result.stderr.toString().trim()}`);
+    return result.stdout.toString();
+  };
+  // The address is an agent's: it is this repository's pull request URL before gh sees it.
+  const repository = (JSON.parse(gh(['repo', 'view', '--json', 'url'])) as { url: string }).url;
+  const address = prAddressRefusal(pull, repository, null);
+  if (address !== null) return address;
+  const text = JSON.parse(gh(['pr', 'view', pull, '--json', 'title,body,isCrossRepository'])) as PrText;
+  const fork = prAddressRefusal(pull, repository, text);
+  if (fork !== null) return fork;
   const others = prKeys(text, config.project).filter(named => named !== key);
   const statuses = new Map<string, string>();
   if (others.length > 0) {

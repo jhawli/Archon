@@ -164,21 +164,45 @@ export async function writableNow(jira: Jira, state: string, only?: string): Pro
 const progressFile = (state: string, writer: Writer): string => join(state, `progress-${writer}.json`);
 const listDigest = (raw: unknown): string => createHash('sha256').update(JSON.stringify(raw)).digest('hex');
 
-/**
- * How many entries of this very list (`raw`, as read from the outbox file) an earlier try
- * already wrote. Another list of the same writer starts at its first entry.
- */
-export function outboxProgress(state: string, writer: Writer, raw: unknown): number {
+/** `done` entries are written; with `half`, the next one's change is made and only its comment is missing. */
+function readProgress(state: string, writer: Writer, raw: unknown): { done: number; half: boolean } {
   const path = progressFile(state, writer);
-  if (!existsSync(path)) return 0;
-  const kept = JSON.parse(readFileSync(path, 'utf8')) as { digest?: unknown; done?: unknown };
-  return kept.digest === listDigest(raw) && typeof kept.done === 'number' ? kept.done : 0;
+  if (!existsSync(path)) return { done: 0, half: false };
+  const kept = JSON.parse(readFileSync(path, 'utf8')) as { digest?: unknown; done?: unknown; half?: unknown };
+  if (kept.digest !== listDigest(raw) || typeof kept.done !== 'number') return { done: 0, half: false };
+  return { done: kept.done, half: kept.half === true };
 }
 
-/** A pull request as `gh pr view --json title,body` reports it. */
+/**
+ * How many entries of this very list (`raw`, as read from the outbox file) an earlier try
+ * already acted on, one whose change is made but whose comment failed included: that change
+ * may itself have taken the ticket off the board. Another list of the same writer starts at
+ * its first entry.
+ */
+export function outboxProgress(state: string, writer: Writer, raw: unknown): number {
+  const { done, half } = readProgress(state, writer, raw);
+  return done + (half ? 1 : 0);
+}
+
+/** A pull request as `gh pr view --json title,body,url,isCrossRepository` reports it. */
 export interface PrText {
   readonly title: string;
   readonly body: string;
+  readonly url?: string;
+  readonly isCrossRepository?: boolean;
+}
+
+/**
+ * Why the address pick gave is not a pull request of this repository the loop may build on,
+ * or null. `repository` is this checkout's GitHub URL. A fork's pull request is refused like
+ * `ticketPr` refuses it: anyone can write its title and text.
+ */
+export function prAddressRefusal(pull: string, repository: string, pr: PrText | null): string | null {
+  const escaped = repository.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (!new RegExp(`^${escaped}/pull/[1-9]\\d*$`).test(pull)) return `${pull} is not a pull request of ${repository}`;
+  if (pr === null) return null;
+  if (pr.isCrossRepository === true) return `${pull} comes from a fork`;
+  return null;
 }
 
 /**
@@ -229,7 +253,10 @@ export async function applyOutbox(
   const created: Record<string, string> = {};
   const digest = resume === undefined ? '' : listDigest(resume.raw);
   const progress = resume === undefined ? null : progressFile(state, resume.writer);
-  const done = resume === undefined ? 0 : outboxProgress(state, resume.writer, resume.raw);
+  const { done, half } = resume === undefined ? { done: 0, half: false } : readProgress(state, resume.writer, resume.raw);
+  const keep = (count: number, changed: boolean): void => {
+    if (progress !== null) writeFileSync(progress, `${JSON.stringify({ digest, done: count, half: changed })}\n`);
+  };
   for (const [index, op] of ops.entries()) {
     if (op.op === 'create') {
       // Always asked, also behind the progress mark: it finds its own ticket and returns its key.
@@ -237,16 +264,18 @@ export async function applyOutbox(
     } else if (index >= done) {
       if (op.op === 'comment') await jira.comment(op.key, op.text);
       else if (op.op === 'ask') await jira.ask(op.key, op.text);
-      else if (op.op === 'cancel') {
-        // The change first: a comment saying "canceled" on a ticket that is not would be worse than the reverse.
-        await jira.move(op.key, c.status.canceled);
-        await jira.comment(op.key, `${op.text}\n\nAbgebrochen vom Loop: ${runUrl}`);
-      } else {
-        await jira.call('PUT', jira.issue(op.key), { fields: { [c.flagField]: null } });
-        await jira.comment(op.key, op.text);
+      else {
+        // The change first: a comment saying "canceled" on a ticket that is not would be worse
+        // than the reverse. It is noted before the comment, so a rerun only adds the comment.
+        if (!(half && index === done)) {
+          if (op.op === 'cancel') await jira.move(op.key, c.status.canceled);
+          else await jira.call('PUT', jira.issue(op.key), { fields: { [c.flagField]: null } });
+          keep(index, true);
+        }
+        await jira.comment(op.key, op.op === 'cancel' ? `${op.text}\n\nAbgebrochen vom Loop: ${runUrl}` : op.text);
       }
     }
-    if (progress !== null) writeFileSync(progress, `${JSON.stringify({ digest, done: Math.max(done, index + 1) })}\n`);
+    keep(Math.max(done, index + 1), false);
   }
   if (progress !== null) rmSync(progress, { force: true });
   return created;

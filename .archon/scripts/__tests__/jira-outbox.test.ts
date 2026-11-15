@@ -11,6 +11,7 @@ import {
   clearOutbox,
   outboxFile,
   outboxProgress,
+  prAddressRefusal,
   prKeys,
   prRefusal,
   readOutbox,
@@ -280,6 +281,21 @@ describe('outbox apply', () => {
     await applyOutbox(jira, other, RUN, dir, { writer: 'pick', raw: other });
     expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-5/comment']);
   });
+  it('a cancel whose comment failed: the rerun passes the board check and only adds the comment', async () => {
+    const { jira, calls } = fakeJira({ failOnce: 'POST /rest/api/3/issue/CONC-9/comment' });
+    const dir = state();
+    const list: Op[] = [
+      { op: 'cancel', key: 'CONC-9', text: 'Doppelt' },
+      { op: 'comment', key: 'CONC-5', text: 'Weiter' },
+    ];
+    await applyOutbox(jira, list, RUN, dir, { writer: 'pick', raw: list }).catch(() => undefined);
+    // CONC-9 is Canceled now and off the board; entry 0 still counts as acted on.
+    expect(outboxProgress(dir, 'pick', list)).toBe(1);
+    expect(checkOutbox(list, 'pick', null, 'CONC', new Set(['CONC-5']), outboxProgress(dir, 'pick', list))).toHaveLength(2);
+    calls.length = 0;
+    await applyOutbox(jira, list, RUN, dir, { writer: 'pick', raw: list });
+    expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-9/comment', 'POST /rest/api/3/issue/CONC-5/comment']);
+  });
   it('a rerun does not ask the board again about entries it already wrote: a cancel took its ticket off it', () => {
     const list = [
       { op: 'cancel', key: 'CONC-9', text: 'Doppelt' },
@@ -392,6 +408,18 @@ describe('a pull request pick wants the lap to continue', () => {
   it('names its tickets by the key its title opens with and by Refs and Closes', () => {
     expect(prKeys(pr('CONC-5 Sync', 'Refs CONC-6\nCloses CONC-5'), 'CONC').sort()).toEqual(['CONC-5', 'CONC-6']);
     expect(prKeys(pr('Bump deps'), 'CONC')).toEqual([]);
+  });
+  it('reads a bracketed key in the title too', () => {
+    expect(prKeys(pr('[CONC-5] Sync'), 'CONC')).toEqual(['CONC-5']);
+  });
+  it('must be a pull request of this repository, and not from a fork', () => {
+    const repo = 'https://github.com/jhawli/concairge';
+    expect(prAddressRefusal(`${repo}/pull/12`, repo, null)).toBeNull();
+    expect(prAddressRefusal(`${repo}/pull/12`, repo, { title: 'CONC-5 x', body: '', isCrossRepository: false })).toBeNull();
+    expect(prAddressRefusal('https://github.com/fremd/concairge/pull/1', repo, null)).toContain('not a pull request of');
+    expect(prAddressRefusal('--repo', repo, null)).toContain('not a pull request of');
+    expect(prAddressRefusal('https://github.com/jhawli/concairgeX/pull/1', repo, null)).toContain('not a pull request of');
+    expect(prAddressRefusal(`${repo}/pull/12`, repo, { title: 'CONC-5 x', body: '', isCrossRepository: true })).toContain('fork');
   });
   it('is fine when it names the lap’s ticket and nothing that is someone else’s', () => {
     expect(prRefusal(pr('CONC-5 Sync', 'Refs CONC-5'), 'CONC-5', none, new Set(['CONC-5']), CFG)).toBeNull();
