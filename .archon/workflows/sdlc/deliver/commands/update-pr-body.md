@@ -44,7 +44,8 @@ through the source this run selected, `$INPUTS.source`:
    review judged coverage. An item left open as an operator check names the check
    the operator runs. Keep at most one "Left open" section, current, and
    remove it on an empty list. Change no other reference, and add none when the
-   description links no issue.
+   description links no issue. A Jira ticket reference (`Refs CONC-5`) becomes
+   `Closes CONC-5` the same way, and back to `Refs CONC-5`.
 5. When something changed, apply the complete description. On `forge`, write
    the request `{"ref":<ref>,"body":<description>}` to
    `$ARTIFACTS_DIR/pr-body-final.json` and pass it with `--data-file`. On `gh`,

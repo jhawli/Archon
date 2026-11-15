@@ -16,7 +16,7 @@ Prose is a claim; the code is the fact. An issue body, a comment, a linked discu
 
 ## Ground the target
 
-Resolve what you are actually investigating before forming any theory. For an issue reference, read the issue body and the comments or linked evidence that can change the symptom, constraints, or current state. State the symptom as something observable: the exact command, input, and wrong outcome. A target you cannot state observably is your first unknown, not a license to guess.
+Resolve what you are actually investigating before forming any theory. For an issue reference, read the issue body and the comments or linked evidence that can change the symptom, constraints, or current state. When `$ARTIFACTS_DIR/tracker/item.md` exists, it is the work item in full (a Jira ticket with its comments); read it instead of the tracker, and write nothing to Jira. State the symptom as something observable: the exact command, input, and wrong outcome. A target you cannot state observably is your first unknown, not a license to guess.
 
 ## Prior analysis is claims, not facts
 

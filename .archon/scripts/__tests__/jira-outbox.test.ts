@@ -306,6 +306,7 @@ describe('the board snapshot for pick', () => {
         'Rang: 1',
         'Labels: route:simple',
         'Flagged: nein',
+        'Schreibbar: ja',
         '',
         'Beschreibung',
         '',
@@ -318,7 +319,10 @@ describe('the board snapshot for pick', () => {
         'Bitte so',
       ].join('\n')
     );
-    expect(text).toContain('Rang: 2\nLabels: keine\nFlagged: ja\nWartet: needs-owner');
+    expect(text).toContain('Rang: 2\nLabels: keine\nFlagged: ja\nSchreibbar: ja\nWartet: needs-owner');
     expect(text).toContain('## CONC-9 Titel CONC-9\n\nURL: https://example.atlassian.net/browse/CONC-9\nStatus: Review\nRang: nicht im Sprint');
+    expect(
+      boardMarkdown([ticket('CONC-7', { assignee: CFG.owner })], new Map(), new Map(), CFG)
+    ).toContain('Schreibbar: nein');
   });
 });

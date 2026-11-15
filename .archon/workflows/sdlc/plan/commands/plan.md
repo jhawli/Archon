@@ -14,6 +14,8 @@ Related work an earlier triage found, as `[{ "url", "relation" }]`: overlapping 
 
 $INPUTS.related
 
+When `$ARTIFACTS_DIR/tracker/item.md` exists, it is the work item in full (a Jira ticket with its comments); read it instead of the tracker, and write nothing to Jira.
+
 The operator's request — the message that started this run:
 
 $ARGUMENTS

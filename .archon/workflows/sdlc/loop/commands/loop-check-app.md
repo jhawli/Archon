@@ -24,7 +24,9 @@ If no pull request URL is named above (the line ends at the colon), nothing was 
 ## What to test
 
 Read the work item and its `Contract` comment (or its acceptance criteria): that is what you test,
-not the pull request's description. You answer one question: does this change do what the work item
+not the pull request's description. When `$ARTIFACTS_DIR/tracker/item.md` exists, this repository
+tracks its work in Jira: that file is the work item (the ticket and its comments), and you write nothing
+to Jira. You answer one question: does this change do what the work item
 asks, without breaking what it touches? Exploring the rest of the product is the manager's job, on
 the default branch, not yours.
 

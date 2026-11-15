@@ -28,7 +28,7 @@ Prose is a claim; the code is the fact. An issue body, a comment, a linked discu
 
 Weigh by source and recency. The operator's request in this run is the most current statement of intent. A tracked item's body and its comments are older, may predate the code in front of you, and vary in how much their author verified before writing. Read them; do not inherit them. A confident claim is still a claim.
 
-When the work or the request names a tracked item — an issue, a ticket, a document, whatever your tools can reach — read it before editing, along with the comments and linked items that can still change the outcome, its constraints, or an earlier decision. Stop following links once they no longer change what you would do.
+When the work or the request names a tracked item — an issue, a ticket, a document, whatever your tools can reach — read it before editing, along with the comments and linked items that can still change the outcome, its constraints, or an earlier decision. When `$ARTIFACTS_DIR/tracker/item.md` exists, it is the work item in full (a Jira ticket with its comments); read it instead of the tracker, and write nothing to Jira. Stop following links once they no longer change what you would do.
 
 Read the repository, this run's artifacts, and what the work order or the operator's request names. Do not browse other files outside the checkout, such as an operator's notes or another run's artifacts.
 

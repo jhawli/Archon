@@ -220,6 +220,7 @@ export function boardMarkdown(
   waiting: ReadonlyMap<string, string>,
   config: TrackerConfig
 ): string {
+  const writable = writableKeys(tickets, config);
   const lines = ['# Board (Reihenfolge = Sprint-Reihenfolge, Rang)', ''];
   let rank = 0;
   for (const t of tickets) {
@@ -231,7 +232,8 @@ export function boardMarkdown(
       `Status: ${statusName(t.status, config.status)}`,
       `Rang: ${place}`,
       `Labels: ${t.labels.length > 0 ? t.labels.join(', ') : 'keine'}`,
-      `Flagged: ${t.flagged ? 'ja' : 'nein'}`
+      `Flagged: ${t.flagged ? 'ja' : 'nein'}`,
+      `Schreibbar: ${writable.has(t.key) ? 'ja' : 'nein'}`
     );
     const why = waiting.get(t.key);
     if (why !== undefined) lines.push(`Wartet: ${why}`);

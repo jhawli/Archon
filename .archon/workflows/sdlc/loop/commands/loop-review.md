@@ -23,6 +23,18 @@ every cited image must have been opened, and Overall must agree with the lines):
 
 Its problems, if any: `$INPUTS.handoff/evidence-problems.txt`.
 
+**When `$ARTIFACTS_DIR/tracker/item.md` exists, this repository tracks its work in Jira.** That file is the work item in full (the ticket and its comments); read it instead of the issue, and read issue as ticket below. In Jira:
+
+- You cannot write to Jira, and you never run a command that talks to it (`curl`, `acli`). Your writes to the ticket go to `$ARTIFACTS_DIR/tracker/outbox/review.json` as one JSON list (at most 20 entries); the loop checks the whole list and applies it before the merge gate runs. Comments on the pull request stay on GitHub, with `gh` as before.
+  - `{"op": "comment", "key": "<the ticket>", "text": "..."}` for a comment on the work item, such as `Loop review: no pull request ...` when nothing was delivered;
+  - `{"op": "ask", "key": "<the ticket>", "text": "..."}` wherever the rules below label the work item `needs-owner`: it mentions the owner and flags the ticket, and the text is the decision needed. The pull request still gets the `needs-owner` label with `gh`;
+  - `{"op": "create", "marker": "<short-slug>", "title": "...", "text": "..."}` wherever the rules below open an issue. A marker (3 to 60 of `a-z`, `0-9`, `-`) names one ticket; the same marker never files a second one.
+- Write only to the ticket of this lap. An entry for another ticket, or a comment that starts `Loop claim:` or `Loop result:`, makes the loop refuse the whole list, and nothing merges.
+- `delivers` `part`: the merged part goes to Staging and the rest becomes its own ticket. File it with `{"op": "create", "marker": "rest-<the ticket key in lower case>", "title": "<key> Rest: ...", "text": "<what is left, with the criteria it must meet>"}`; without it the loop asks the owner what is missing.
+- In `dispositions`, `issue` is the key of an open ticket (`CONC-41`), or `new:<marker>` for a ticket you file now with a `create` entry using that marker: the loop files it before the merge gate reads it. Never `#n`, which is a pull request.
+- In `judge_changes`, `approval` is the link to the owner's comment on the ticket: `https://<site>/browse/CONC-5?focusedCommentId=<id>`, with the id `item.md` gives the comment.
+- The ticket's status is the loop's to set after you; leave it.
+
 ## When there is nothing to review
 
 If the app check's `overall` is `NO PR`, nothing was delivered. Leave one comment on the work item starting

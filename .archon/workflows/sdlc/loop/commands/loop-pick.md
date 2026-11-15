@@ -7,12 +7,26 @@ is watching: decide, do not wait for a human.
 
 ## Read the board
 
-GitHub is the only state. Read it fresh:
+GitHub is the only state (with Jira, the work items are tickets; see below). Read it fresh:
 
 - Open pull requests: `gh pr list --state open --json number,title,headRefName,isDraft,mergeStateStatus,body,comments,labels,updatedAt`, plus `gh pr checks <n>` for each.
 - Open issues: `gh issue list --state open --limit 200 --json number,title,labels,body,comments`. A `Depends on: #n` line means wait until #n is closed.
 - The product's direction and conventions: `engineering.md`, the mission and the product document the repository keeps (look once at the root and in `docs/`; treat a file that is not there as absent). How the app is run: $INPUTS.runtime
 - This loop's history on each item: its comments on issues and pull requests (builder reports, `Loop review:` comments, `Contract` comments) say what was already tried and what came back.
+
+**When `$ARTIFACTS_DIR/tracker/board.md` exists, this repository tracks its work in Jira**, and that file is the board of work items, written for you at the start of this lap. Read it instead of `gh issue list`; pull requests are still read with `gh pr list` and `gh pr checks`. Where the rules below say issue, read ticket. In Jira:
+
+- A work item is a ticket key like `CONC-5`, its URL `https://<site>/browse/CONC-5`. `#n` is always a pull request.
+- The file lists the open sprint's tickets in sprint order (`Rang`) and after them the tickets open pull requests name. Sprint order replaces the `priority` label and the lowest number: start the first ticket in sprint order the rules below allow. A ticket the file marks `Wartet:` is not startable; the line says why (a claim, a dependency, the owner, a delivering pull request).
+- `Depends on: CONC-3` waits until CONC-3 is on Staging, Live or Canceled; the file says which ones still block.
+- `Flagged: ja` waits for the owner: it is the Jira form of `needs-owner`. Where "Bookkeeping is not an owner decision" below lets you lift a park, lift the flag with `{"op": "unflag", "key": "CONC-5", "text": "<why this was only bookkeeping>"}`. Never lift a flag whose comment asks the owner a product question.
+- You cannot write to Jira. Put every write in `$ARTIFACTS_DIR/tracker/outbox/pick.json` as one JSON list (at most 20 entries); the loop checks the whole list and applies it after you:
+  - `{"op": "comment", "key": "CONC-5", "text": "Contract\n\n..."}` for a `Contract` comment or a note;
+  - `{"op": "ask", "key": "CONC-5", "text": "..."}` instead of labelling `needs-owner`: it mentions the owner and flags the ticket, and the text is the question;
+  - `{"op": "cancel", "key": "CONC-9", "text": "Doppel von CONC-4"}` instead of closing a duplicate or an already delivered ticket, with the reference in the text.
+- Write only to tickets marked `Schreibbar: ja`. One entry for any other ticket, or one that starts like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), makes the loop refuse the whole list, and this lap does nothing.
+- A `Contract` you write this lap is on the ticket before the builder starts, and in its copy of the ticket.
+- A comment `Loop result: run <id>. PR: kein PR. ...` is a run of this loop that produced no pull request; count it under Caps.
 
 ## Other runs working right now
 
@@ -42,7 +56,7 @@ yourself.
 
 **Bookkeeping is not an owner decision.** `needs-owner` is for what only the owner can decide: product direction, scope, look and feel, contradictory requirements, or an item that hit the caps below. Resolve bookkeeping yourself instead: close an open issue that a merged pull request already delivered (link the pull request and the review that confirmed its criteria; if part is missing, say what and leave it open), and close an exact duplicate pointing at the original. If an open `needs-owner` item is really bookkeeping like this, or its park no longer holds under these rules (for example it was held only for a failure the default branch already has and the change did not cause), and other work waits on it, resolve it the same way and remove the label, saying why. Never lift a park that asks the owner a product question.
 
-**Caps.** Count this loop's attempts on the item you would pick: builder reports and attempt notes that did not move it closer, and runs that produced no pull request. Count review send-backs (`Loop review: sent back`) and merge-gate refusals (`Loop review: not merged`) together. At $INPUTS.attempts attempts or $INPUTS.rejections send-backs, stop retrying it: label it `needs-owner`, comment one short paragraph on what blocks it and the decision that would unblock it, and choose the next move instead.
+**Caps.** Count this loop's attempts on the item you would pick: builder reports and attempt notes that did not move it closer, and runs that produced no pull request. Count review send-backs (`Loop review: sent back`) and merge-gate refusals (`Loop review: not merged`) together. At $INPUTS.attempts attempts or $INPUTS.rejections send-backs, stop retrying it: label it `needs-owner`, comment one short paragraph on what blocks it and the decision that would unblock it, and choose the next move instead. In Jira: an `ask` entry with that paragraph instead of the label and the comment.
 
 ## Route
 
@@ -75,13 +89,14 @@ Before new work starts on an issue (routes `simple` and `complex`), make sure it
 - Write or change code, branches or pull requests. Your only writes are labels, `Contract` comments, short `needs-owner` comments, and closing issues as bookkeeping (above).
 - Edit the harness and its scenarios, the CI workflows, the mission or the product document.
 - Kill processes by name, or move the mouse, type into, focus or show windows on the owner's desktop.
+- In Jira: run any command that talks to Jira (`curl`, `acli`), or change a ticket's status. Your writes are the outbox entries above.
 
 ## Output
 
 Return the structured verdict:
 
 - `route`: `continue`, `simple`, `complex`, or `none` when nothing is actionable.
-- `target`: the issue URL for new work, or the issue the pull request closes or references (`Refs #n`) for `continue` (the pull request URL if it names none). Empty for `none`.
+- `target`: the issue URL for new work, or the issue the pull request closes or references (`Refs #n`) for `continue` (the pull request URL if it names none). Empty for `none`. In Jira: the ticket URL (`https://<site>/browse/CONC-5`), for `continue` the ticket the pull request names (`Refs CONC-5`, `Closes CONC-5`, or the key its title starts with).
 - `pr`: the pull request URL for `continue`, otherwise empty.
 - `confidence`: `high`, `medium` or `low`.
 - `depth`: `light`, `normal` or `deep` (above). `normal` for `none`.
