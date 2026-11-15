@@ -1,11 +1,11 @@
-# Dry-run fixture: the simple route. pick chooses a contained issue, the in-loop
+# Dry-run fixture: the simple route. pick chooses a contained ticket, the in-loop
 # builder builds it, subject names what the black-box check tests, the check and
 # the evidence check run, the reviewer decides to merge, and the merge gate (land)
 # merges. Ship and deploy stay skipped (no ship stubs: a ship node that ran would
 # fail the fixture as a reached node without a stub).
 pick:
   route: simple
-  target: "https://github.com/example/app/issues/5"
+  target: "https://example.atlassian.net/browse/CONC-5"
   pr: ""
   confidence: high
   depth: normal
@@ -60,10 +60,11 @@ briefs: ""
 handoff:
   dir: "stub/handoff"
 
-# The tracker nodes: without .archon/tracker.json they read and write nothing.
+# The tracker nodes: the repository tracks its work in Jira, so tracker-read wrote the
+# lap's board for the agents; no agent asked for a write.
 tracker-read:
-  ready: github
-  board: ""
+  ready: jira
+  board: "stub/tracker/board.md"
 write-pick: &no-writes
   applied: "0"
   created: "{}"
@@ -75,7 +76,7 @@ fixture:
   resolved-text-contains:
     build: "Route: simple"
     check-app: "/private/holdout.md"
-    review: "handoff/app-check.json"
+    review: "Work item: https://example.atlassian.net/browse/CONC-5"
   inputs:
     runtime: "/private/run-the-app.md"
     holdout: "/private/holdout.md"

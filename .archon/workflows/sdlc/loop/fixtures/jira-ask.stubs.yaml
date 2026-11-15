@@ -1,0 +1,80 @@
+# Dry-run fixture: the reviewer returns a Jira ticket to the owner. The change is built
+# and checked, but the ticket asks for something the product document rules out, so the
+# reviewer returns needs-owner and puts one `ask` entry in its outbox; write-review
+# applies it (the owner is mentioned and the ticket flagged). The merge gate never runs
+# (no land stub: a land node that ran would fail the fixture), and release still frees
+# the ticket and sets its status.
+pick:
+  route: simple
+  target: "https://example.atlassian.net/browse/CONC-5"
+  pr: ""
+  confidence: high
+  depth: normal
+  area: app/
+  reason: "stub: first ticket in sprint order, one module, clear criteria"
+build: "Built the share link.\nPR: https://github.com/example/app/pull/9"
+subject:
+  pr: "https://github.com/example/app/pull/9"
+  head: "abc1234"
+  base: main
+  files: "app/share.py"
+  started: "1700000000000"
+check-app:
+  pr: "https://github.com/example/app/pull/9"
+  head: "abc1234"
+  merged_with: "abc1234"
+  lines:
+  - id: C1
+    kind: criterion
+    verdict: PASS
+    text: "shares a note: the link opens the note without signing in"
+    evidence: ["/artifacts/c1.txt"]
+    pre_existing: ""
+    defect: ""
+    carried_from: ""
+  noticed: []
+  overall: "PASS"
+  summary: "stub: the share link works as the ticket asks"
+evidence:
+  ok: "true"
+  problems: ""
+  overall: PASS
+  checked_at: "1700000100000"
+review:
+  outcome: needs-owner
+  pr: "https://github.com/example/app/pull/9"
+  sha: abc1234
+  delivers: none
+  dispositions: []
+  judge_changes: []
+  reason: "stub: CONC-5 asks for public share links, the product document keeps notes private; the owner decides"
+claim:
+  held: "true"
+  holder: fixture-run
+  reason: "stub: this run holds the work item"
+release: "released 1 claim(s)"
+# The holdout briefs copy and the reviewer handoff are scripts with no decision in them.
+briefs: ""
+handoff:
+  dir: "stub/handoff"
+
+# The tracker nodes: tracker-read wrote the lap's board; pick and the builder asked for
+# no write, the reviewer's one `ask` entry was applied.
+tracker-read:
+  ready: jira
+  board: "stub/tracker/board.md"
+write-pick: &no-writes
+  applied: "0"
+  created: "{}"
+write-build: *no-writes
+write-review:
+  applied: "1"
+  created: "{}"
+fixture:
+  expect: completed
+  reached: [tracker-read, pick, write-pick, claim, build, write-build, subject, check-app, evidence, handoff, review, write-review, release]
+  resolved-text-contains:
+    build: "Work item: https://example.atlassian.net/browse/CONC-5"
+    review: "tracker/outbox/review.json"
+  inputs:
+    runtime: "/private/run-the-app.md"

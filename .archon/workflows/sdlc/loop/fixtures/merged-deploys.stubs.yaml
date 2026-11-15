@@ -1,7 +1,7 @@
 # Dry-run fixture: a merge with a deploy command set rolls out through archon-deploy.
 pick:
   route: simple
-  target: https://github.com/example/app/issues/5
+  target: https://example.atlassian.net/browse/CONC-5
   pr: ''
   confidence: high
   depth: normal
@@ -71,10 +71,11 @@ briefs: ""
 handoff:
   dir: "stub/handoff"
 
-# The tracker nodes: without .archon/tracker.json they read and write nothing.
+# The tracker nodes: the repository tracks its work in Jira, so tracker-read wrote the
+# lap's board for the agents; no agent asked for a write.
 tracker-read:
-  ready: github
-  board: ""
+  ready: jira
+  board: "stub/tracker/board.md"
 write-pick: &no-writes
   applied: "0"
   created: "{}"
@@ -97,6 +98,8 @@ fixture:
   - land
   - deploy__verify
   - release
+  resolved-text-contains:
+    build: "Work item: https://example.atlassian.net/browse/CONC-5"
   inputs:
     deploy: 'true'
     health: 'true'

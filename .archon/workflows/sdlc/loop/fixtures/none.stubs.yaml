@@ -7,11 +7,12 @@ pick:
   confidence: high
   depth: normal
   area: ""
-  reason: "stub: everything open waits on the owner's answer in the decisions issue"
-# The tracker nodes: without .archon/tracker.json they read and write nothing.
+  reason: "stub: every ticket in the sprint is flagged for the owner's answer"
+# The tracker nodes: the repository tracks its work in Jira, so tracker-read wrote the
+# lap's board for the agents; no agent asked for a write.
 tracker-read:
-  ready: github
-  board: ""
+  ready: jira
+  board: "stub/tracker/board.md"
 write-pick: &no-writes
   applied: "0"
   created: "{}"

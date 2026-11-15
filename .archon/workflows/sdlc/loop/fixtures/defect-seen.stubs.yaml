@@ -5,7 +5,7 @@
 # decides; the merge gate would refuse the same report.
 pick:
   route: simple
-  target: "https://github.com/example/app/issues/5"
+  target: "https://example.atlassian.net/browse/CONC-5"
   pr: ""
   confidence: high
   depth: normal
@@ -73,10 +73,22 @@ briefs: ""
 handoff:
   dir: "stub/handoff"
 
+# The tracker nodes: the repository tracks its work in Jira, so tracker-read wrote the
+# lap's board for the agents; no agent asked for a write. Stubbed under --exec-code too:
+# the real scripts would read the scratch checkout, which has no .archon/tracker.json.
+tracker-read:
+  ready: jira
+  board: "stub/tracker/board.md"
+write-pick: &no-writes
+  applied: "0"
+  created: "{}"
+write-build: *no-writes
+write-review: *no-writes
 fixture:
   expect: completed
   reached: [tracker-read, pick, write-pick, claim, build, write-build, subject, check-app, evidence, handoff, review, write-review, release]
   resolved-text-contains:
+    build: "Work item: https://example.atlassian.net/browse/CONC-5"
     review: "handoff/app-check.json"
   inputs:
     runtime: "/private/run-the-app.md"

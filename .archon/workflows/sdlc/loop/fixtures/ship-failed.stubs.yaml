@@ -3,7 +3,7 @@
 # reviewer records the attempt on the work item instead of a silent failed run.
 pick:
   route: complex
-  target: https://github.com/example/app/issues/6
+  target: https://example.atlassian.net/browse/CONC-6
   pr: ''
   confidence: high
   depth: normal
@@ -74,16 +74,31 @@ briefs: ""
 handoff:
   dir: "stub/handoff"
 
+# The tracker nodes: the repository tracks its work in Jira, so tracker-read wrote the
+# lap's board for the agents; no agent asked for a write. Stubbed under --exec-code too:
+# the real scripts would read the scratch checkout, which has no .archon/tracker.json.
+tracker-read:
+  ready: jira
+  board: "stub/tracker/board.md"
+write-pick: &no-writes
+  applied: "0"
+  created: "{}"
+write-build: *no-writes
+write-review: *no-writes
 fixture:
   expect: failed
   fail-node: ship__deliver__gate-green
   reached:
+  - tracker-read
   - pick
+  - write-pick
   - claim
+  - write-build
   - subject
   - check-app
   - evidence
   - review
+  - write-review
   - release
   resolved-text-contains:
     review: "the pipeline stopped before publishing"
