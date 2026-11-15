@@ -1,4 +1,5 @@
 # Dry-run fixture: one manager pass, with the runtime instructions in its prompt.
+tracker-guard: ""
 manage: "Closed 2 duplicates; no owner questions."
 fixture:
   expect: completed

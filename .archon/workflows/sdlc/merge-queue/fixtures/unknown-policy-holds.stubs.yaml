@@ -1,5 +1,6 @@
 # Dry-run fixture: an undeclared policy GitHub would not report reaches the agent
 # and the gate as unknown; the gate holds and no merge is attempted.
+tracker-guard: ""
 ci-policy:
   requirement: "unknown"
   source: ""

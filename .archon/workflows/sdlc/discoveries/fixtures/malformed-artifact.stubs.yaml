@@ -1,4 +1,5 @@
 # Agent outputs are simulated; script nodes execute through the fixture runner.
+tracker-guard: ""
 fixture:
   expect: failed
   fail-node: resolve-input

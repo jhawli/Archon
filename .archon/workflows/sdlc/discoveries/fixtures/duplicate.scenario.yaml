@@ -1,4 +1,5 @@
 # Package-test scenario: agents and gh reads are simulated; scripts and git execute for real.
+tracker-guard: ""
 revalidate:
   entries:
     - item_index: 0

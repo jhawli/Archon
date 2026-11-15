@@ -1,4 +1,5 @@
 # Unknown run: the real resolver must refuse lookup failure. No agents execute.
+tracker-guard: ""
 fixture:
   expect: failed
   fail-node: resolve-input

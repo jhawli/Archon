@@ -1,5 +1,6 @@
 # Dry-run fixture: auto publication. The approval node is skipped by its
 # condition and the publisher runs on the caller's explicit authorization.
+tracker-guard: ""
 read-prd:
   path: "PRD.md"
   characters: 2400

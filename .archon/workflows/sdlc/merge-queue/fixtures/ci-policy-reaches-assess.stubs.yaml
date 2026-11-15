@@ -1,6 +1,7 @@
 # Dry-run fixture: the scripted required-check policy runs first, its output is what
 # the assess agent is told (it must not re-derive CI policy), and the gate receives
 # the same output. A declared policy with a passing check reaches the merge.
+tracker-guard: ""
 ci-policy:
   requirement: "required"
   source: "declared"

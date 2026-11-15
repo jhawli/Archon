@@ -1,6 +1,7 @@
 # Dry-run fixture: the scripted protected-path policy finds a governance file in
 # the PR, the assess agent is told which files and that a human must make the
 # change, and the gate (which reads the same output) holds; nothing merges.
+tracker-guard: ""
 ci-policy:
   requirement: "required"
   source: "declared"

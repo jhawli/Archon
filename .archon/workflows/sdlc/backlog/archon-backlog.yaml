@@ -22,9 +22,17 @@ inputs:
 returns: publish
 
 nodes:
+  # Jira does not reach this workflow yet (S4b): in a repository whose .archon/tracker.json
+  # names Jira this refuses the run before any agent spends. Every other node waits for it.
+  - id: tracker-guard
+    script: tracker-guard
+    runtime: bun
+    mutates_checkout: false
+
   - id: read-prd
     script: read-prd
     runtime: uv
+    depends_on: [tracker-guard]
     with:
       prd: "$INPUTS.prd"
       max_issues: "$INPUTS.max_issues"
