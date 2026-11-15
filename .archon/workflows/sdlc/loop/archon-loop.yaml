@@ -66,12 +66,27 @@ inputs:
       (it died). Longer than the longest lap; a run that ends releases its claim.
 
 nodes:
+  # With Jira (.archon/tracker.json), the lap's board as files: agents hold no token.
+  # Without it, nothing to do; the agents read GitHub as before.
+  - id: tracker-read
+    script: tracker-read
+    runtime: bun
+    with:
+      claim_hours: "$INPUTS.claim_hours"
+    output_format:
+      type: object
+      properties:
+        ready: { type: string, enum: [github, jira] }
+        board: { type: string }
+      required: [ready, board]
+
   # Choose one move and how to build it. `none` is a real route, so every later
   # `when:` can read this node's fields: it always runs.
   - id: pick
     command: loop-pick
     context: fresh
     idle_timeout: 2700000
+    depends_on: [tracker-read]
     with:
       runtime: "$INPUTS.runtime"
       attempts: "$INPUTS.attempts"
@@ -89,13 +104,29 @@ nodes:
         reason: { type: string }
       required: [route, target, pr, confidence, depth, area, reason]
 
+  # The agents' tracker writes, checked and applied by a script (tracker-write). Pick
+  # may write to its board's tickets, build and review only to the lap's ticket.
+  - id: write-pick
+    script: tracker-write
+    runtime: bun
+    depends_on: [pick]
+    with:
+      writer: pick
+      target: "$pick.output.target"
+    output_format: &tracker-write-output
+      type: object
+      properties:
+        applied: { type: string }
+        created: { type: string }
+      required: [applied, created]
+
   # Several runs of this loop may work one repository at once. The claim is the
   # one hard fact between them: the oldest live claim comment on a work item
   # holds it, and a run that lost the race does no work this lap.
   - id: claim
     script: claim
     runtime: bun
-    depends_on: [pick]
+    depends_on: [pick, write-pick]
     when: "$pick.output.route != 'none'"
     with:
       target: "$pick.output.target"
@@ -139,6 +170,17 @@ nodes:
       target: "$pick.output.target"
       publish: "false"
 
+  - id: write-build
+    script: tracker-write
+    runtime: bun
+    depends_on: [claim, build, ship]
+    trigger_rule: all_done
+    when: "$pick.output.route != 'none' && $claim.output.held == 'true'"
+    with:
+      writer: build
+      target: "$pick.output.target"
+    output_format: *tracker-write-output
+
   # What the app check tests, as facts: the pull request, its head, its base and the
   # files it changes. The builder's report and the
   # pull request's description are read here only to find the pull request; the app
@@ -146,7 +188,7 @@ nodes:
   - id: subject
     script: subject
     runtime: bun
-    depends_on: [claim, build, ship]
+    depends_on: [claim, build, ship, write-build]
     trigger_rule: all_done
     when: "$pick.output.route != 'none' && $claim.output.held == 'true'"
     with:
@@ -307,6 +349,16 @@ nodes:
         reason: { type: string }
       required: [outcome, pr, sha, delivers, dispositions, judge_changes, reason]
 
+  # A failed write here (a refused entry, Jira down) stops the merge: land waits for it.
+  - id: write-review
+    script: tracker-write
+    runtime: bun
+    depends_on: [review]
+    with:
+      writer: review
+      target: "$pick.output.target"
+    output_format: *tracker-write-output
+
   # The merge gate (no model). Merges the reviewed commit only when the evidence held,
   # every failing line has the reviewer's re-check or default-branch proof, every
   # pre-existing failure and question is tracked or decided, no shipping node failed,
@@ -314,7 +366,7 @@ nodes:
   - id: land
     script: land
     runtime: bun
-    depends_on: [subject, check-app, evidence, review]
+    depends_on: [subject, check-app, evidence, review, write-review]
     when: "$review.output.outcome == 'merge' && $INPUTS.merge == 'auto'"
     with:
       pr: "$review.output.pr"
@@ -355,7 +407,7 @@ nodes:
   - id: release
     script: release
     runtime: bun
-    depends_on: [claim, subject, review, land, deploy]
+    depends_on: [claim, write-build, subject, review, write-review, land, deploy]
     trigger_rule: all_done
     when: "$pick.output.route != 'none' && $claim.output.held == 'true'"
     with:

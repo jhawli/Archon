@@ -60,9 +60,18 @@ briefs: ""
 handoff:
   dir: "stub/handoff"
 
+# The tracker nodes: without .archon/tracker.json they read and write nothing.
+tracker-read:
+  ready: github
+  board: ""
+write-pick: &no-writes
+  applied: "0"
+  created: "{}"
+write-build: *no-writes
+write-review: *no-writes
 fixture:
   expect: completed
-  reached: [pick, claim, build, subject, check-app, evidence, handoff, review, land, release]
+  reached: [tracker-read, pick, write-pick, claim, build, write-build, subject, check-app, evidence, handoff, review, write-review, land, release]
   resolved-text-contains:
     build: "Route: simple"
     check-app: "/private/holdout.md"

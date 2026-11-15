@@ -75,7 +75,7 @@ handoff:
 
 fixture:
   expect: completed
-  reached: [pick, claim, build, subject, check-app, evidence, handoff, review, release]
+  reached: [tracker-read, pick, write-pick, claim, build, write-build, subject, check-app, evidence, handoff, review, write-review, release]
   resolved-text-contains:
     review: "handoff/app-check.json"
   inputs:

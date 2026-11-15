@@ -8,6 +8,13 @@ pick:
   depth: normal
   area: ""
   reason: "stub: everything open waits on the owner's answer in the decisions issue"
+# The tracker nodes: without .archon/tracker.json they read and write nothing.
+tracker-read:
+  ready: github
+  board: ""
+write-pick: &no-writes
+  applied: "0"
+  created: "{}"
 fixture:
   expect: completed
-  reached: [pick]
+  reached: [tracker-read, pick, write-pick]

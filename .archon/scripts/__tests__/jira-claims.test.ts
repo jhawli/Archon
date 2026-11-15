@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -12,9 +12,13 @@ import {
   itemMarkdown,
   liveClaims,
   postComment,
+  pruneRunStates,
+  readCreated,
   readLap,
+  recordCreated,
   recordLanding,
   recordLap,
+  runState,
   restMarker,
   workItem,
 } from '../../workflows/sdlc/.shared/claims';
@@ -198,53 +202,78 @@ describe('status after the lap', () => {
 
 describe('lap facts', () => {
   const dir = (): string => mkdtempSync(join(tmpdir(), 'lap-'));
-  it('reads what land and deploy left, even when deploy failed', () => {
-    const artifacts = dir();
-    recordLap(artifacts, { pr: 'https://github.com/o/r/pull/9' });
-    recordLanding(artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'part' });
+  const run = (): { state: string; artifacts: string } => ({ state: runState(dir(), 'run-1'), artifacts: dir() });
+  it('reads what land, the outbox writer and deploy left, even when deploy failed', () => {
+    const { state, artifacts } = run();
+    recordLap(state, { pr: 'https://github.com/o/r/pull/9' });
+    recordLanding(state, artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'part' });
+    recordCreated(state, 'rest-conc-5', 'CONC-40');
     writeFileSync(join(artifacts, 'deployment.md'), '# Deployment\n\n- deployed: False\n- revision: abc\n');
-    expect(readLap(artifacts, '')).toEqual({
+    expect(readLap(state, artifacts, '')).toEqual({
       pr: 'https://github.com/o/r/pull/9',
       landed: 'merged',
       deployed: 'false',
       delivers: 'part',
-      created: {},
+      created: { 'rest-conc-5': 'CONC-40' },
     });
   });
-  it('each writer replaces the record, so a fact an agent planted earlier does not survive', () => {
-    const artifacts = dir();
-    mkdirSync(join(artifacts, 'tracker'));
-    writeFileSync(join(artifacts, 'tracker', 'lap.json'), JSON.stringify({ landed: 'merged', delivers: 'all' }));
-    recordLap(artifacts, { pr: 'https://github.com/o/r/pull/9' });
-    expect(readLap(artifacts, '')).toEqual(lap({ pr: 'https://github.com/o/r/pull/9' }));
+  it('the records live in the run state directory, never under ARTIFACTS_DIR', () => {
+    const root = dir();
+    const state = runState(root, 'run-1');
+    expect(state).toBe(join(root, 'tracker', 'run-1'));
+    recordLap(state, { pr: 'https://github.com/o/r/pull/9' });
+    expect(existsSync(join(state, 'lap.json'))).toBe(true);
+    expect(() => runState(root, '../x')).toThrow('not a run id');
+    expect(() => runState('', 'run-1')).toThrow('STATE_DIR');
   });
-  it('land clears a deployment.md written before it, so only the deploy block can confirm a rollout', () => {
-    const artifacts = dir();
-    writeFileSync(join(artifacts, 'deployment.md'), '- deployed: True\n');
-    recordLanding(artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'all' });
-    expect(existsSync(join(artifacts, 'deployment.md'))).toBe(false);
-    expect(readLap(artifacts, '').deployed).toBe('');
+  it('each lap writer replaces the record', () => {
+    const { state, artifacts } = run();
+    recordLanding(state, artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'refused', delivers: 'all' });
+    recordLap(state, { pr: 'https://github.com/o/r/pull/10' });
+    expect(readLap(state, artifacts, '')).toEqual(lap({ pr: 'https://github.com/o/r/pull/10' }));
   });
-  it('a recorded pr that is not a pull request URL is ignored', () => {
-    const artifacts = dir();
-    recordLap(artifacts, { pr: '--web' });
-    expect(readLap(artifacts, 'https://github.com/o/r/pull/3').pr).toBe('https://github.com/o/r/pull/3');
+  it('created tickets add up across writers', () => {
+    const { state } = run();
+    recordCreated(state, 'finding-a', 'CONC-41');
+    recordCreated(state, 'rest-conc-5', 'CONC-42');
+    expect(readCreated(state)).toEqual({ 'finding-a': 'CONC-41', 'rest-conc-5': 'CONC-42' });
   });
   it('a confirmed rollout reads as true', () => {
-    const artifacts = dir();
+    const { state, artifacts } = run();
     writeFileSync(join(artifacts, 'deployment.md'), '# Deployment\n\n- deployed: True\n');
-    expect(readLap(artifacts, '').deployed).toBe('true');
+    expect(readLap(state, artifacts, '').deployed).toBe('true');
+  });
+  it('land clears a deployment.md written before it, so only the deploy block can confirm a rollout', () => {
+    const { state, artifacts } = run();
+    writeFileSync(join(artifacts, 'deployment.md'), '- deployed: True\n');
+    recordLanding(state, artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'all' });
+    expect(existsSync(join(artifacts, 'deployment.md'))).toBe(false);
+    expect(readLap(state, artifacts, '').deployed).toBe('');
   });
   it('nothing recorded: the pull request pick chose, nothing else', () => {
-    expect(readLap(dir(), 'https://github.com/o/r/pull/3')).toEqual(
-      lap({ pr: 'https://github.com/o/r/pull/3' })
-    );
+    const { state, artifacts } = run();
+    expect(readLap(state, artifacts, 'https://github.com/o/r/pull/3')).toEqual(lap({ pr: 'https://github.com/o/r/pull/3' }));
+  });
+  it('a recorded pr that is not a pull request URL is ignored', () => {
+    const { state, artifacts } = run();
+    recordLap(state, { pr: '--web' });
+    expect(readLap(state, artifacts, 'https://github.com/o/r/pull/3').pr).toBe('https://github.com/o/r/pull/3');
   });
   it('a malformed record is an error, not an empty lap', () => {
-    const artifacts = dir();
-    mkdirSync(join(artifacts, 'tracker'));
-    writeFileSync(join(artifacts, 'tracker', 'lap.json'), '[1]');
-    expect(() => readLap(artifacts, '')).toThrow('lap.json');
+    const { state, artifacts } = run();
+    writeFileSync(join(state, 'lap.json'), '[1]');
+    expect(() => readLap(state, artifacts, '')).toThrow('lap.json');
+  });
+  it('old run directories are pruned, fresh ones and strangers stay', () => {
+    const root = dir();
+    const old = runState(root, 'old-run');
+    runState(root, 'new-run');
+    mkdirSync(join(root, 'tracker', 'not a run'));
+    const past = (Date.now() - 10 * 86_400_000) / 1000;
+    utimesSync(old, past, past);
+    expect(pruneRunStates(root, 7 * 86_400_000)).toEqual(['old-run']);
+    expect(existsSync(join(root, 'tracker', 'new-run'))).toBe(true);
+    expect(existsSync(join(root, 'tracker', 'not a run'))).toBe(true);
   });
 });
 

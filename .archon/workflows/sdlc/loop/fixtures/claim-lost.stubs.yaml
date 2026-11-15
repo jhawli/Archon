@@ -14,6 +14,13 @@ claim:
   held: "false"
   holder: other-run
   reason: "stub: run other-run claimed https://github.com/example/app/issues/5 first; this run does no work this lap"
+# The tracker nodes: without .archon/tracker.json they read and write nothing.
+tracker-read:
+  ready: github
+  board: ""
+write-pick: &no-writes
+  applied: "0"
+  created: "{}"
 fixture:
   expect: completed
-  reached: [pick, claim]
+  reached: [tracker-read, pick, write-pick, claim]

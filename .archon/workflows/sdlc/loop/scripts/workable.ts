@@ -19,7 +19,7 @@
 import { expiryHours } from '../../.shared/claims.ts';
 import { trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
-import { githubItems, loadJiraBoard, type GithubItem } from '../../.shared/tracker-board.ts';
+import { GITHUB_FIELDS, githubItems, loadJiraBoard, openPulls, type GithubItem } from '../../.shared/tracker-board.ts';
 import { workability, type Board, type Links } from '../../.shared/workable.ts';
 
 function gh(args: string[]): unknown {
@@ -30,8 +30,6 @@ function gh(args: string[]): unknown {
   return JSON.parse(result.stdout.toString());
 }
 
-const fields = 'number,title,body,labels,comments,updatedAt';
-
 /** The newest change to any open item (a comment, a label), as gh's ISO text. */
 function newest(items: readonly GithubItem[]): string {
   return items.map(item => item.updatedAt).reduce((at, next) => (next > at ? next : at), '');
@@ -39,7 +37,7 @@ function newest(items: readonly GithubItem[]): string {
 
 /** Without a tracker: open GitHub issues and pull requests. Every open one blocks a `Depends on`. */
 function githubBoard(pulls: GithubItem[]): { board: Board; updated: string } {
-  const issues = githubItems(gh(['issue', 'list', '--state', 'open', '--limit', '200', '--json', fields]));
+  const issues = githubItems(gh(['issue', 'list', '--state', 'open', '--limit', '200', '--json', GITHUB_FIELDS]));
   const open = new Set([...issues, ...pulls].map(item => item.id));
   return { board: { issues, pulls, open }, updated: newest([...issues, ...pulls]) };
 }
@@ -48,7 +46,7 @@ const released = (run: string): string =>
   `Loop claim released: run ${run} ended. Its \`Loop review:\` comment, if any, says what it did. (Released by the scheduler: the run ended without releasing it.)`;
 
 const config = trackerConfig();
-const pulls = githubItems(gh(['pr', 'list', '--state', 'open', '--limit', '100', '--json', fields]));
+const pulls = openPulls();
 let board: Board;
 // An answer that lifts a park leaves the same items workable, and the scheduler must still
 // see the board as changed.

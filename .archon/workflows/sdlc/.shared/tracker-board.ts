@@ -3,7 +3,7 @@
  * and which `Depends on` targets still block. Used by the launch gate and by tracker-read,
  * so both see the same facts. Pull requests stay on GitHub and come in as `gh pr list` rows.
  */
-import type { Jira, Ticket } from './jira.ts';
+import type { Jira, Ticket, TicketComment } from './jira.ts';
 import { dependencyKeys, referencedKeys } from './tickets.ts';
 import { OWNER_LABEL, type Board, type BoardItem, type Links } from './workable.ts';
 
@@ -16,6 +16,8 @@ export interface JiraBoard {
   readonly board: Board;
   /** The tickets on the board: the open sprint's, in rank order, then the ones pull requests name. */
   readonly tickets: Ticket[];
+  /** Every ticket's comments, lowest id first, as read for the board. */
+  readonly comments: ReadonlyMap<string, readonly TicketComment[]>;
   /** Newest change to any ticket or pull request on the board, in ms; 0 for an empty board. */
   readonly updated: number;
   readonly links: Links;
@@ -58,6 +60,20 @@ export function githubItems(raw: unknown): GithubItem[] {
   });
 }
 
+export const GITHUB_FIELDS = 'number,title,body,labels,comments,updatedAt';
+
+/** The repository's open pull requests, as the launch gate and tracker-read both read them. */
+export function openPulls(): GithubItem[] {
+  const result = Bun.spawnSync(
+    ['gh', 'pr', 'list', '--state', 'open', '--limit', '100', '--json', GITHUB_FIELDS],
+    { stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (result.exitCode !== 0) {
+    throw new Error(`gh pr list failed (exit ${result.exitCode}): ${result.stderr.toString().trim()}`);
+  }
+  return githubItems(JSON.parse(result.stdout.toString()));
+}
+
 export async function loadJiraBoard(jira: Jira, pulls: readonly GithubItem[]): Promise<JiraBoard> {
   const c = jira.config;
   const links = jiraLinks(c.project);
@@ -91,8 +107,11 @@ export async function loadJiraBoard(jira: Jira, pulls: readonly GithubItem[]): P
   for (const key of deps) if (!known.has(key)) open.add(key);
 
   const issues: BoardItem[] = [];
+  const read = new Map<string, TicketComment[]>();
   for (const ticket of tickets) {
-    const comments = (await jira.comments(ticket.key)).map(comment => ({
+    const rows = await jira.comments(ticket.key);
+    read.set(ticket.key, rows);
+    const comments = rows.map(comment => ({
       body: comment.body,
       createdAt: new Date(comment.createdAt).toISOString(),
       url: comment.url,
@@ -112,5 +131,5 @@ export async function loadJiraBoard(jira: Jira, pulls: readonly GithubItem[]): P
     ...tickets.map(ticket => ticket.updated),
     ...pulls.map(pull => Date.parse(pull.updatedAt) || 0)
   );
-  return { board: { issues, pulls, open }, tickets, updated, links };
+  return { board: { issues, pulls, open }, tickets, comments: read, updated, links };
 }

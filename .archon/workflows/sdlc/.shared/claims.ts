@@ -15,7 +15,7 @@
  * until it is older than the expiry: a run that died without releasing must not hold an
  * item forever.
  */
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Jira, type Ticket, type TicketComment, type TrackerConfig, trackerConfig } from './jira.ts';
 import { referencedKeys, ticketKeyOf } from './tickets.ts';
@@ -189,64 +189,100 @@ export function finalStatus(
  * Lap facts travel as files, not as `with:` bindings: the engine refuses to bind the output
  * of a failed node (`if_skipped` covers skipped ones only), and a failed rollout fails the
  * deploy block. Bound to `$deploy.output`, release would fail on exactly the lap whose
- * ticket most needs Review and a question. So subject and land record what they know in
- * `$ARTIFACTS_DIR/tracker/lap.json`, the deploy block's own `deployment.md` says whether the
- * rollout was confirmed, and release reads both, whatever happened in between.
+ * ticket most needs Review and a question.
  *
- * Agents can write under $ARTIFACTS_DIR too (their outbox lives there), so none of this is
- * taken on trust. Each writer replaces the record instead of merging into it. land, the
- * last node before deploy and after every agent, also deletes any `deployment.md` it finds,
- * so the only one release can read was written by the deploy block. And `merged` counts
- * only when GitHub says so (`confirmMerge`).
+ * So the script nodes that know a fact (subject, land, the outbox writer) record it in the
+ * run's own state directory, `$STATE_DIR/tracker/<run>` (`runState`), and release reads it
+ * there. Agents read $STATE_DIR but never write it: the sandbox and the path fence give
+ * them $ARTIFACTS_DIR alone, so these records are the scripts' own. The deploy block writes
+ * `deployment.md` into $ARTIFACTS_DIR, where agents can write too; land, the last node
+ * before deploy and after every agent, deletes any it finds. A merge also has to be one
+ * GitHub reports (`confirmMerge`).
  */
 
 type LapFacts = Partial<Record<'pr' | 'landed' | 'delivers', string>>;
 
-const lapFile = (dir: string): string => join(dir, 'tracker', 'lap.json');
-const deploymentFile = (dir: string): string => join(dir, 'deployment.md');
+const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/;
+const deploymentFile = (artifacts: string): string => join(artifacts, 'deployment.md');
 
-function readFacts(dir: string): LapFacts {
-  const path = lapFile(dir);
+/** This run's state directory for tracker records, created on first use. */
+export function runState(stateDir = process.env.STATE_DIR ?? '', run = process.env.WORKFLOW_ID ?? ''): string {
+  if (stateDir === '') throw new Error('STATE_DIR is not set; the engine supplies it to every exec node.');
+  if (!RUN_ID.test(run)) throw new Error(`WORKFLOW_ID ${JSON.stringify(run)} is not a run id`);
+  const dir = join(stateDir, 'tracker', run);
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** Remove run state directories older than `maxAgeMs`; a lap that picked nothing never reaches release. */
+export function pruneRunStates(stateDir: string, maxAgeMs: number, now = Date.now()): string[] {
+  const root = join(stateDir, 'tracker');
+  if (!existsSync(root)) return [];
+  const removed: string[] = [];
+  for (const name of readdirSync(root)) {
+    const dir = join(root, name);
+    if (!RUN_ID.test(name) || !statSync(dir).isDirectory()) continue;
+    if (now - statSync(dir).mtimeMs <= maxAgeMs) continue;
+    rmSync(dir, { recursive: true, force: true });
+    removed.push(name);
+  }
+  return removed;
+}
+
+function readObject(path: string): JsonObject {
   if (!existsSync(path)) return {};
   const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error(`${path} is not an object`);
-  const facts: LapFacts = {};
-  for (const name of ['pr', 'landed', 'delivers'] as const) {
-    const value = (raw as JsonObject)[name];
-    if (typeof value === 'string') facts[name] = value;
-  }
-  return facts;
+  return raw as JsonObject;
+}
+
+function strings(raw: JsonObject): Record<string, string> {
+  const found: Record<string, string> = {};
+  for (const [name, value] of Object.entries(raw)) if (typeof value === 'string') found[name] = value;
+  return found;
+}
+
+function writeJson(path: string, value: unknown): void {
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 /** Replace this run's lap record with what the calling node knows. */
-export function recordLap(dir: string, facts: LapFacts): void {
-  mkdirSync(join(dir, 'tracker'), { recursive: true });
-  writeFileSync(lapFile(dir), `${JSON.stringify(facts, null, 2)}\n`);
+export function recordLap(state: string, facts: LapFacts): void {
+  writeJson(join(state, 'lap.json'), facts);
 }
 
 /** land's record: after it no agent runs, so it also clears a `deployment.md` an agent may have left. */
-export function recordLanding(dir: string, facts: LapFacts): void {
-  rmSync(deploymentFile(dir), { force: true });
-  recordLap(dir, facts);
+export function recordLanding(state: string, artifacts: string, facts: LapFacts): void {
+  rmSync(deploymentFile(artifacts), { force: true });
+  recordLap(state, facts);
 }
 
-function deployedFact(dir: string): string {
-  const path = deploymentFile(dir);
+/** Tickets this run filed, by marker (the outbox writer records each as soon as Jira made it). */
+export function readCreated(state: string): Record<string, string> {
+  return strings(readObject(join(state, 'created.json')));
+}
+
+export function recordCreated(state: string, marker: string, key: string): void {
+  writeJson(join(state, 'created.json'), { ...readCreated(state), [marker]: key });
+}
+
+function deployedFact(artifacts: string): string {
+  const path = deploymentFile(artifacts);
   if (!existsSync(path)) return '';
   return /^- deployed: True$/m.test(readFileSync(path, 'utf8')) ? 'true' : 'false';
 }
 
-/** What this lap did, from the record and the deploy block's `deployment.md`. */
-export function readLap(dir: string, pickedPr: string, created: Readonly<Record<string, string>> = {}): LapResult {
-  const facts = readFacts(dir);
+/** What this lap did: the run's records and the deploy block's `deployment.md`. */
+export function readLap(state: string, artifacts: string, pickedPr: string): LapResult {
+  const facts: LapFacts = strings(readObject(join(state, 'lap.json')));
   const recorded = (facts.pr ?? '').trim();
   return {
     pr: PR_URL.test(recorded) ? recorded : pickedPr,
     landed: facts.landed ?? '',
-    deployed: deployedFact(dir),
+    deployed: deployedFact(artifacts),
     delivers: facts.delivers ?? '',
-    created,
+    created: readCreated(state),
   };
 }
 

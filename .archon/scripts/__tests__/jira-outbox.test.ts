@@ -1,0 +1,296 @@
+import { describe, expect, it } from 'bun:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { readCreated, recordCreated, runState } from '../../workflows/sdlc/.shared/claims';
+import { Jira, type Ticket, type TicketComment, type TrackerConfig, type Transport } from '../../workflows/sdlc/.shared/jira';
+import {
+  applyOutbox,
+  boardMarkdown,
+  checkOutbox,
+  readOutbox,
+  writableKeys,
+  type Op,
+} from '../../workflows/sdlc/.shared/outbox';
+
+const CFG: TrackerConfig = {
+  kind: 'jira',
+  site: 'https://example.atlassian.net',
+  project: 'CONC',
+  board: 5,
+  keychain: 'none',
+  assignee: 'acc-archon',
+  owner: 'acc-julian',
+  status: {
+    todo: '10015',
+    progress: '3',
+    review: '10016',
+    staging: '10017',
+    live: '10018',
+    canceled: '10008',
+  },
+  flagField: 'customfield_10021',
+  flagOn: '10019',
+  sprintField: 'customfield_10020',
+};
+const BOARD = new Set(['CONC-5', 'CONC-6']);
+const RUN = 'https://example.atlassian.net/browse/CONC-5';
+
+function failure(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  throw new Error('expected an error');
+}
+
+describe('outbox check', () => {
+  it('pick may comment, ask, cancel and unflag on tickets of this lap’s board', () => {
+    const ops = ['comment', 'ask', 'cancel', 'unflag'].map(op => ({ op, key: 'CONC-6', text: 'warum' }));
+    expect(checkOutbox(ops, 'pick', null, 'CONC', BOARD)).toHaveLength(4);
+  });
+  it('pick never writes to a ticket outside the snapshot (Julian’s, or one a session holds)', () => {
+    expect(failure(() => checkOutbox([{ op: 'comment', key: 'CONC-77', text: 'x' }], 'pick', null, 'CONC', BOARD))).toContain(
+      "not on this lap's board"
+    );
+  });
+  it('only pick lifts a flag or cancels', () => {
+    expect(failure(() => checkOutbox([{ op: 'unflag', key: 'CONC-5', text: 'x' }], 'review', 'CONC-5', 'CONC', BOARD))).toContain(
+      'review may not unflag'
+    );
+    expect(failure(() => checkOutbox([{ op: 'cancel', key: 'CONC-5', text: 'x' }], 'build', 'CONC-5', 'CONC', BOARD))).toContain(
+      'build may not cancel'
+    );
+  });
+  it('build and review write to their target, and file new tickets', () => {
+    const ops = [
+      { op: 'comment', key: 'CONC-5', text: 'Bericht' },
+      { op: 'ask', key: 'CONC-5', text: 'Frage' },
+      { op: 'create', marker: 'rest-conc-5', title: 'Rest', text: 'Was fehlt' },
+    ];
+    expect(checkOutbox(ops, 'build', 'CONC-5', 'CONC', BOARD).map(op => op.op)).toEqual(['comment', 'ask', 'create']);
+    expect(failure(() => checkOutbox([{ op: 'comment', key: 'CONC-6', text: 'x' }], 'build', 'CONC-5', 'CONC', BOARD))).toContain(
+      'build writes only to CONC-5'
+    );
+    expect(failure(() => checkOutbox([{ op: 'comment', key: 'CONC-5', text: 'x' }], 'review', null, 'CONC', BOARD))).toContain(
+      'review writes only to its target'
+    );
+  });
+  it('refuses keys of other projects and keys no ticket can have', () => {
+    for (const key of ['VAULT-3', 'CONC-0', 'CONC-5/../x', 5]) {
+      expect(failure(() => checkOutbox([{ op: 'comment', key, text: 'x' }], 'pick', null, 'CONC', BOARD))).toContain(
+        'key must be a CONC ticket'
+      );
+    }
+  });
+  it('refuses unknown ops, empty or huge text and long lists', () => {
+    expect(failure(() => checkOutbox([{ op: 'move', key: 'CONC-5', text: 'x' }], 'pick', null, 'CONC', BOARD))).toContain('unknown op');
+    expect(failure(() => checkOutbox([{ op: 'comment', key: 'CONC-5' }], 'pick', null, 'CONC', BOARD))).toContain('text is empty');
+    expect(
+      failure(() => checkOutbox([{ op: 'comment', key: 'CONC-5', text: 'x'.repeat(30_001) }], 'pick', null, 'CONC', BOARD))
+    ).toContain('longer than 30000');
+    const many = Array.from({ length: 21 }, () => ({ op: 'comment', key: 'CONC-5', text: 'x' }));
+    expect(failure(() => checkOutbox(many, 'pick', null, 'CONC', BOARD))).toContain('more than 20');
+    expect(failure(() => checkOutbox({ op: 'comment' }, 'pick', null, 'CONC', BOARD))).toContain('JSON list');
+    expect(failure(() => checkOutbox(['x'], 'pick', null, 'CONC', BOARD))).toContain('not an object');
+  });
+  it('create needs a marker, a title and a text; pick files nothing', () => {
+    const create = (over: Record<string, unknown>): unknown[] => [{ op: 'create', marker: 'finding-a', title: 'T', text: 'x', ...over }];
+    expect(failure(() => checkOutbox(create({ marker: 'A b' }), 'review', 'CONC-5', 'CONC', BOARD))).toContain('marker');
+    expect(failure(() => checkOutbox(create({ title: 'x'.repeat(201) }), 'review', 'CONC-5', 'CONC', BOARD))).toContain('title');
+    expect(failure(() => checkOutbox(create({}), 'pick', null, 'CONC', BOARD))).toContain('pick does not create');
+  });
+  it('no file or an empty file is no writes', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'outbox-'));
+    expect(readOutbox(join(dir, 'pick.json'))).toBeUndefined();
+    writeFileSync(join(dir, 'pick.json'), '  \n');
+    expect(readOutbox(join(dir, 'pick.json'))).toBeUndefined();
+    expect(checkOutbox(undefined, 'pick', null, 'CONC', BOARD)).toEqual([]);
+    writeFileSync(join(dir, 'pick.json'), '[{"op":"comment","key":"CONC-5","text":"x"}]');
+    expect(readOutbox(join(dir, 'pick.json'))).toEqual([{ op: 'comment', key: 'CONC-5', text: 'x' }]);
+  });
+  it('a write that would read as a claim or a loop result is refused, as the readers will see it', () => {
+    for (const text of ['Loop claim: run x', '\n\nLoop claim: run x\nRoute: simple', '  Loop result: run x. Status: Staging.']) {
+      expect(failure(() => checkOutbox([{ op: 'comment', key: 'CONC-5', text }], 'pick', null, 'CONC', BOARD))).toContain(
+        'reserved'
+      );
+    }
+    expect(
+      failure(() => checkOutbox([{ op: 'comment', key: 'CONC-5', text: 'Loop review: sent back' }], 'pick', null, 'CONC', BOARD))
+    ).toContain('reserved');
+    expect(
+      checkOutbox([{ op: 'comment', key: 'CONC-5', text: 'Loop review: sent back' }], 'review', 'CONC-5', 'CONC', BOARD)
+    ).toHaveLength(1);
+    expect(checkOutbox([{ op: 'comment', key: 'CONC-5', text: '```\nLoop claim: run x\n```' }], 'pick', null, 'CONC', BOARD)).toHaveLength(1);
+  });
+});
+
+const ticket = (key: string, over: Partial<Ticket> = {}): Ticket => ({
+  key,
+  url: `https://example.atlassian.net/browse/${key}`,
+  title: `Titel ${key}`,
+  body: '',
+  status: CFG.status.todo,
+  labels: [],
+  flagged: false,
+  assignee: CFG.assignee,
+  inOpenSprint: true,
+  updated: 0,
+  ...over,
+});
+
+describe('which tickets pick may write to', () => {
+  it('Archon’s tickets in the sprint on To Do, and Archon’s on Review; never Julian’s, never one In Progress', () => {
+    const tickets = [
+      ticket('CONC-1'),
+      ticket('CONC-2', { flagged: true }),
+      ticket('CONC-3', { assignee: CFG.owner }),
+      ticket('CONC-4', { status: CFG.status.progress, inOpenSprint: false }),
+      ticket('CONC-5', { status: CFG.status.review, inOpenSprint: false }),
+      ticket('CONC-6', { status: CFG.status.review, assignee: CFG.owner, inOpenSprint: false }),
+      ticket('CONC-7', { inOpenSprint: false }),
+      ticket('CONC-8', { assignee: null }),
+    ];
+    expect([...writableKeys(tickets, CFG)]).toEqual(['CONC-1', 'CONC-2', 'CONC-5']);
+  });
+});
+
+interface Call { method: string; path: string; body: unknown }
+
+/** A Jira that knows CONC-5 and CONC-6, moves anything anywhere, and files new tickets as CONC-50 up. */
+function fakeJira(opts: { found?: string[]; sprint?: number | null } = {}): { jira: Jira; calls: Call[] } {
+  const calls: Call[] = [];
+  let next = 50;
+  const ok = (value: unknown, status = 200): { status: number; text: string } => ({
+    status,
+    text: value === undefined ? '' : JSON.stringify(value),
+  });
+  const send: Transport = async (method, path, body) => {
+    calls.push({ method, path, body });
+    if (method === 'POST' && path === '/rest/api/3/search/jql') {
+      return ok({ issues: (opts.found ?? []).map(key => ({ key, fields: {} })), isLast: true });
+    }
+    if (method === 'GET' && path.endsWith('/transitions')) {
+      return ok({ transitions: Object.values(CFG.status).map(id => ({ id: `t${id}`, to: { id } })) });
+    }
+    if (method === 'GET' && path === '/rest/api/3/project/CONC') return ok({ id: '10002' });
+    if (method === 'POST' && path === '/rest/api/3/issue') return ok({ key: `CONC-${(next += 1)}` }, 201);
+    if (method === 'POST' && path.endsWith('/comment')) return ok({ id: '10100' }, 201);
+    if (method === 'GET' && path.startsWith('/rest/agile/1.0/board/5/sprint')) {
+      return ok({ values: opts.sprint === null || opts.sprint === undefined ? [] : [{ id: opts.sprint }] });
+    }
+    return ok(undefined, 204);
+  };
+  return { jira: new Jira(CFG, send), calls };
+}
+
+const steps = (calls: Call[]): string[] => calls.map(call => `${call.method} ${call.path.split('?')[0]}`);
+const state = (): string => runState(mkdtempSync(join(tmpdir(), 'state-')), 'run-1');
+
+describe('outbox apply', () => {
+  it('unflag: the reason first, then the flag off', async () => {
+    const { jira, calls } = fakeJira();
+    await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, state());
+    expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-6/comment', 'PUT /rest/api/3/issue/CONC-6']);
+    expect(calls[1]?.body).toEqual({ fields: { customfield_10021: null } });
+  });
+  it('cancel: a comment that says why and from where, then Canceled', async () => {
+    const { jira, calls } = fakeJira();
+    await applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt zu CONC-5' }], RUN, state());
+    expect(steps(calls)).toEqual([
+      'POST /rest/api/3/issue/CONC-6/comment',
+      'GET /rest/api/3/issue/CONC-6/transitions',
+      'POST /rest/api/3/issue/CONC-6/transitions',
+    ]);
+    expect(JSON.stringify(calls[0]?.body)).toContain('Doppelt zu CONC-5');
+    expect(JSON.stringify(calls[0]?.body)).toContain(RUN);
+    expect(calls[2]?.body).toEqual({ transition: { id: `t${CFG.status.canceled}` } });
+  });
+  it('create: a new ticket with its marker, linked, on To Do, in the open sprint', async () => {
+    const { jira, calls } = fakeJira({ sprint: 7 });
+    const dir = state();
+    const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest von CONC-5', text: 'Was fehlt' };
+    expect(await applyOutbox(jira, [op], RUN, dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(steps(calls)).toEqual([
+      'POST /rest/api/3/search/jql',
+      'GET /rest/api/3/project/CONC',
+      'POST /rest/api/3/issue',
+      'POST /rest/api/3/issue/CONC-51/remotelink',
+      'GET /rest/api/3/issue/CONC-51/transitions',
+      'POST /rest/api/3/issue/CONC-51/transitions',
+      'GET /rest/agile/1.0/board/5/sprint',
+      'POST /rest/agile/1.0/sprint/7/issue',
+    ]);
+    expect((calls[0]?.body as { jql: string }).jql).toBe('issue in issuesWithRemoteLinksByGlobalId("archon:CONC:rest-conc-5")');
+    const fields = (calls[2]?.body as { fields: Record<string, unknown> }).fields;
+    expect(fields.project).toEqual({ id: '10002' });
+    expect(fields.assignee).toEqual({ accountId: CFG.assignee });
+    expect(JSON.stringify(fields.description)).toContain('Loop finding: rest-conc-5');
+    expect((calls[3]?.body as { globalId: string }).globalId).toBe('archon:CONC:rest-conc-5');
+    expect(calls[7]?.body).toEqual({ issues: ['CONC-51'] });
+    expect(readCreated(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
+  });
+  it('create: a ticket Jira already links to the marker is reused, not doubled', async () => {
+    const { jira, calls } = fakeJira({ found: ['CONC-44'] });
+    const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest', text: 'x' };
+    expect(await applyOutbox(jira, [op], RUN, state())).toEqual({ 'rest-conc-5': 'CONC-44' });
+    expect(steps(calls)).toEqual(['POST /rest/api/3/search/jql']);
+  });
+  it('create: a ticket this run already filed is reused before Jira’s lagging search is asked', async () => {
+    const { jira, calls } = fakeJira();
+    const dir = state();
+    recordCreated(dir, 'rest-conc-5', 'CONC-51');
+    const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest', text: 'x' };
+    expect(await applyOutbox(jira, [op], RUN, dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(calls).toEqual([]);
+  });
+  it('create without an open sprint files the ticket outside a sprint', async () => {
+    const { jira, calls } = fakeJira({ sprint: null });
+    await applyOutbox(jira, [{ op: 'create', marker: 'finding-a', title: 'T', text: 'x' }], RUN, state());
+    expect(steps(calls).at(-1)).toBe('GET /rest/agile/1.0/board/5/sprint');
+  });
+});
+
+describe('the board snapshot for pick', () => {
+  it('rank order, facts, why it waits, then every comment with its author', () => {
+    const comments: TicketComment[] = [
+      { id: 10018, body: 'Loop claim: run bbb', created: '2026-11-15T11:00:00.738+0100', createdAt: 0, author: 'acc-archon', url: '' },
+      { id: 10019, body: 'Bitte so', created: '2026-11-15T12:00:00.000+0100', createdAt: 0, author: 'acc-julian', url: '' },
+    ];
+    const text = boardMarkdown(
+      [
+        ticket('CONC-5', { body: 'Beschreibung', labels: ['route:simple'] }),
+        ticket('CONC-6', { flagged: true }),
+        ticket('CONC-9', { status: CFG.status.review, inOpenSprint: false }),
+      ],
+      new Map([['CONC-5', comments]]),
+      new Map([['CONC-6', 'needs-owner']]),
+      CFG
+    );
+    expect(text.split('\n')[0]).toBe('# Board (Reihenfolge = Sprint-Reihenfolge, Rang)');
+    expect(text).toContain(
+      [
+        '## CONC-5 Titel CONC-5',
+        '',
+        'URL: https://example.atlassian.net/browse/CONC-5',
+        'Status: To Do',
+        'Rang: 1',
+        'Labels: route:simple',
+        'Flagged: nein',
+        '',
+        'Beschreibung',
+        '',
+        '### Kommentar 10018 (2026-11-15T11:00:00.738+0100, Archon)',
+        '',
+        'Loop claim: run bbb',
+        '',
+        '### Kommentar 10019 (2026-11-15T12:00:00.000+0100, Julian)',
+        '',
+        'Bitte so',
+      ].join('\n')
+    );
+    expect(text).toContain('Rang: 2\nLabels: keine\nFlagged: ja\nWartet: needs-owner');
+    expect(text).toContain('## CONC-9 Titel CONC-9\n\nURL: https://example.atlassian.net/browse/CONC-9\nStatus: Review\nRang: nicht im Sprint');
+  });
+});

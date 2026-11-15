@@ -7,11 +7,11 @@
  *
  * On a Jira ticket it then sets the status the lap earned (AK18, `finalStatus`), leaves a
  * `Loop result:` comment that pick counts among its attempts, and asks the owner where the
- * lap could not decide (AK18a). The lap's facts come from files under $ARTIFACTS_DIR, not
- * from bindings: a failed rollout fails the deploy block, and a binding to a failed node
- * fails the node that reads it (see `readLap`). Agents can write there too, so a merge
- * counts only when GitHub confirms it (`confirmMerge`). If setting the status fails, the
- * ticket is flagged before the node fails.
+ * lap could not decide (AK18a). The lap's facts come from the run's state records and the
+ * deploy block's `deployment.md`, not from bindings: a failed rollout fails the deploy
+ * block, and a binding to a failed node fails the node that reads it (see `readLap`). A
+ * merge GitHub does not confirm leaves the ticket on Review with a question. If setting the
+ * status fails, the ticket is flagged before the node fails.
  */
 
 import {
@@ -22,6 +22,7 @@ import {
   finalStatus,
   type PrView,
   readLap,
+  runState,
   statusName,
   workItem,
 } from '../../.shared/claims.ts';
@@ -64,16 +65,24 @@ function prView(url: string): PrView | null {
 
 if (config !== null && jira !== undefined && item.kind === 'ticket') {
   try {
-    const recorded = readLap(artifactsDir(), pr);
+    const recorded = readLap(runState(), artifactsDir(), pr);
     const claimedAt = Math.min(...own.map(comment => comment.createdAt));
     const lap = confirmMerge(recorded, prView(recorded.pr), item.key, claimedAt, config.project);
     const ticket = await jira.ticket(item.key);
-    const result = finalStatus(item.key, ticket.status, lap, config.status);
+    const doubt = recorded.landed === 'merged' && lap.landed !== 'merged';
+    const decided = finalStatus(item.key, ticket.status, lap, config.status);
+    const result =
+      doubt && decided.status !== null && decided.ask === null
+        ? {
+            ...decided,
+            ask: `Der Merge-Schritt meldet ${lap.pr} als gemergt, GitHub bestätigt das für dieses Ticket nicht (gemergt nach dem Claim, Schlüssel im PR). Bitte PR und Status prüfen.`,
+          }
+        : decided;
     if (result.status !== null && result.status !== ticket.status) await jira.move(item.key, result.status);
     const name = statusName(result.status ?? ticket.status, config.status);
     await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.`);
     if (result.ask !== null) await jira.ask(item.key, result.ask);
-    const unconfirmed = recorded.landed === 'merged' && lap.landed !== 'merged' ? ', merge not confirmed by GitHub' : '';
+    const unconfirmed = doubt ? ', merge not confirmed by GitHub' : '';
     lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}`);
   } catch (error) {
     // The claim is already free; flag the ticket so it does not sit on In Progress unseen.

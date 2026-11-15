@@ -14,7 +14,7 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { recordLanding } from '../../.shared/claims.ts';
+import { recordLanding, runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
 import {
   CLOCK_SLACK_MS,
@@ -157,7 +157,7 @@ if (view.code !== 0) {
 
 /** The outcome, recorded first for release (a ticket's status needs it even if a later node fails). */
 const landed = (outcome: 'merged' | 'refused', reason: string): void => {
-  recordLanding(artifactsDir(), { pr: prUrl, landed: outcome, delivers });
+  recordLanding(runState(), artifactsDir(), { pr: prUrl, landed: outcome, delivers });
   emit({ outcome, reason });
 };
 
