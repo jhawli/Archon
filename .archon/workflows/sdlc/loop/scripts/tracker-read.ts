@@ -7,13 +7,16 @@
  * pull requests name) and writes it for the agents to `$ARTIFACTS_DIR/tracker/board.md`.
  * The keys pick may write to go into the run's state directory, where agents cannot write
  * (`writableKeys`). It also prunes old runs' state directories.
+ *
+ * Either way it pins the tracker config for the run: every later node reads the copy in the
+ * state directory, not the checkout the agents write in.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expiryHours, pruneRunStates, runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
-import { Jira, trackerConfig } from '../../.shared/jira.ts';
+import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
 import { boardMarkdown, clearOutbox, WRITERS, writableKeys } from '../../.shared/outbox.ts';
 import { loadJiraBoard, openPulls } from '../../.shared/tracker-board.ts';
 import { workability } from '../../.shared/workable.ts';
@@ -22,11 +25,13 @@ import { workability } from '../../.shared/workable.ts';
 const KEEP_RUN_STATE_MS = 14 * 86_400_000;
 
 const hours = expiryHours(trimmed(process.env.INPUTS_CLAIM_HOURS));
-const config = trackerConfig();
+// The loop's first node: what the checkout says now, before any agent wrote in it, is the
+// tracker config for the whole run (`pinTrackerConfig`).
+const state = runState();
+const config = pinTrackerConfig(state);
 if (config === null) {
   emit({ ready: 'github', board: '' });
 } else {
-  const state = runState();
   pruneRunStates(process.env.STATE_DIR ?? '', KEEP_RUN_STATE_MS);
   const loaded = await loadJiraBoard(new Jira(config), openPulls());
   const waiting = new Map<string, string>();

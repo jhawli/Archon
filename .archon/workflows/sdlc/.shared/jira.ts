@@ -7,7 +7,7 @@
  * from the files a script node wrote under $ARTIFACTS_DIR/tracker and leave their writes in
  * its outbox for a script node to check and apply.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface TrackerConfig {
@@ -60,11 +60,52 @@ export function repoRoot(cwd = process.cwd()): string {
 
 const STATUS_KEYS = ['todo', 'progress', 'review', 'staging', 'live', 'canceled'] as const;
 
-/** The repository's tracker, or null when it has none (the pack then uses GitHub issues). */
-export function trackerConfig(root = repoRoot()): TrackerConfig | null {
-  const path = join(root, '.archon', 'tracker.json');
+const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
+
+/** Where a run keeps the tracker config its first node read, or null outside a run. */
+function pinnedPath(stateDir = process.env.STATE_DIR ?? '', run = process.env.WORKFLOW_ID ?? ''): string | null {
+  return stateDir !== '' && RUN_ID.test(run) ? join(stateDir, 'tracker', run, 'tracker.json') : null;
+}
+
+/**
+ * The repository's tracker, or null when it has none (the pack then uses GitHub issues).
+ *
+ * Inside a run that pinned its config (`pinTrackerConfig`, the loop's first node) the pinned
+ * copy is the answer, whatever the checkout says by then: agents write in the checkout, and
+ * the file names the owner whose comment approves a merge, the statuses release sets and the
+ * keychain item the scripts read. An explicit `root` always reads that checkout.
+ */
+export function trackerConfig(root?: string): TrackerConfig | null {
+  if (root === undefined) {
+    const pinned = pinnedPath();
+    if (pinned !== null && existsSync(pinned)) {
+      const raw = JSON.parse(readFileSync(pinned, 'utf8')) as unknown;
+      return raw === null ? null : parseTracker(obj(raw));
+    }
+  }
+  const path = join(root ?? repoRoot(), '.archon', 'tracker.json');
   if (!existsSync(path)) return null;
-  const raw = obj(JSON.parse(readFileSync(path, 'utf8')));
+  return parseTracker(obj(JSON.parse(readFileSync(path, 'utf8'))));
+}
+
+/**
+ * Read the checkout's tracker config once, before the run's first agent, and keep it in the
+ * run's state directory (`state`, where agents cannot write) for every later node. A pin that
+ * is already there stays: a resumed run must not pick up what an agent wrote since. "No
+ * tracker" is pinned too, so a `tracker.json` an agent adds mid-run changes nothing.
+ */
+export function pinTrackerConfig(state: string, root = repoRoot()): TrackerConfig | null {
+  const pinned = join(state, 'tracker.json');
+  if (existsSync(pinned)) {
+    const raw = JSON.parse(readFileSync(pinned, 'utf8')) as unknown;
+    return raw === null ? null : parseTracker(obj(raw));
+  }
+  const config = trackerConfig(root);
+  writeFileSync(pinned, `${JSON.stringify(config, null, 2)}\n`);
+  return config;
+}
+
+function parseTracker(raw: Json): TrackerConfig {
   const text = (key: string): string => {
     const value = raw[key];
     if (typeof value !== 'string' || value.trim() === '') {
@@ -241,7 +282,13 @@ export type Transport = (
   method: string,
   path: string,
   body?: unknown
-) => Promise<{ status: number; text: string }>;
+) => Promise<{ status: number; text: string; retryAfter?: number }>;
+
+/** Tries per call, the first included. */
+const ATTEMPTS = 3;
+/** Statuses that say "not now" rather than "no". */
+const BUSY = [429, 502, 503, 504];
+const MAX_WAIT_MS = 30_000;
 
 /** `security` by absolute path (the keychain ACL is per binary), bounded so a prompt cannot hang a run. */
 function credentials(service: string): { mail: string; token: string } {
@@ -274,7 +321,12 @@ export function keychainTransport(config: TrackerConfig): Transport {
       body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     });
-    return { status: response.status, text: await response.text() };
+    const seconds = Number(response.headers.get('retry-after') ?? '');
+    return {
+      status: response.status,
+      text: await response.text(),
+      ...(Number.isFinite(seconds) && seconds > 0 ? { retryAfter: seconds } : {}),
+    };
   };
 }
 
@@ -315,7 +367,8 @@ const MAX_SEARCH_PAGES = 50;
 export class Jira {
   constructor(
     readonly config: TrackerConfig,
-    private readonly send: Transport = keychainTransport(config)
+    private readonly send: Transport = keychainTransport(config),
+    private readonly pause: (ms: number) => Promise<void> = ms => Bun.sleep(ms)
   ) {}
 
   /**
@@ -329,10 +382,30 @@ export class Jira {
     return `/rest/api/3/issue/${key}`;
   }
 
+  /**
+   * One REST call. A passing hiccup is tried again, up to ATTEMPTS times in all: a 429 always
+   * (Jira did nothing), and for GET and PUT also a gateway error or a transport failure such
+   * as the time limit. A POST that may have reached Jira is never sent twice: it files a
+   * ticket or a comment each time.
+   */
   async call(method: string, path: string, body?: unknown, ok = [200, 201, 204]): Promise<Json | null> {
-    const { status, text } = await this.send(method, path, body);
-    if (!ok.includes(status)) throw new Error(`Jira ${method} ${path} -> ${status}: ${text.slice(0, 500)}`);
-    return text.trim() === '' ? null : obj(JSON.parse(text));
+    const repeatable = method === 'GET' || method === 'PUT';
+    for (let attempt = 1; ; attempt += 1) {
+      const last = attempt >= ATTEMPTS;
+      let reply: Awaited<ReturnType<Transport>>;
+      try {
+        reply = await this.send(method, path, body);
+      } catch (error) {
+        if (!repeatable || last) throw error;
+        await this.pause(1000 * attempt);
+        continue;
+      }
+      const { status, text } = reply;
+      if (ok.includes(status)) return text.trim() === '' ? null : obj(JSON.parse(text));
+      const again = status === 429 || (repeatable && BUSY.includes(status));
+      if (!again || last) throw new Error(`Jira ${method} ${path} -> ${status}: ${text.slice(0, 500)}`);
+      await this.pause(Math.min(MAX_WAIT_MS, reply.retryAfter !== undefined ? reply.retryAfter * 1000 : 1000 * attempt));
+    }
   }
 
   toTicket(raw: Json, openSprint: boolean): Ticket {
@@ -432,11 +505,15 @@ export class Jira {
     await this.call('POST', `${this.issue(key)}/transitions`, { transition: { id: str(hit.id) } });
   }
 
-  /** A question for the owner (AK18a): mention, then the flag. Status and assignee stay. */
+  /**
+   * A question for the owner (AK18a): the flag, then the mention. Status and assignee stay.
+   * The flag goes first because it is what keeps the loop off the ticket; if the comment then
+   * fails, a flagged ticket without its question is seen, a question without the flag is worked on.
+   */
   async ask(key: string, text: string): Promise<void> {
-    await this.comment(key, text, this.config.owner);
     await this.call('PUT', this.issue(key), {
       fields: { [this.config.flagField]: [{ id: this.config.flagOn }] },
     });
+    await this.comment(key, text, this.config.owner);
   }
 }

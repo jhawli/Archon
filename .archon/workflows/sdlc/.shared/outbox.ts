@@ -7,9 +7,11 @@
  * $ARTIFACTS_DIR/tracker/outbox/<writer>.json; tracker-write checks the whole list against
  * the rules below before it writes anything, then applies it.
  */
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { authorName, readCreated, recordCreated, statusName } from './claims.ts';
+import { authorName, readCreated, readFinished, recordCreated, recordFinished, statusName } from './claims.ts';
+import { note } from './io.ts';
 import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
 
 export type Op =
@@ -134,34 +136,76 @@ export function writableJql(keys: readonly string[], config: TrackerConfig): str
   );
 }
 
-/** Apply checked writes. Returns marker → key for the tickets this outbox filed or found. */
+/** The keys tracker-read recorded as pick's to write to (`keys.json` in the run's state directory). */
+export function snapshotKeys(state: string): string[] {
+  const path = join(state, 'keys.json');
+  if (!existsSync(path)) return [];
+  const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  if (!Array.isArray(raw) || !raw.every(key => typeof key === 'string')) throw new Error(`${path} is not a list of keys`);
+  return raw;
+}
+
+/**
+ * Which of the lap's snapshot keys are the loop's to touch right now: on the snapshot and
+ * still so in Jira. The one rule for everything pick decides, its outbox writes and the
+ * ticket it names as the lap's target alike (decision 11).
+ */
+export async function writableNow(jira: Jira, state: string, only?: string): Promise<Set<string>> {
+  const keys = snapshotKeys(state).filter(key => only === undefined || key === only);
+  const jql = writableJql(keys, jira.config);
+  if (jql === null) return new Set();
+  return new Set((await jira.search(jql, ['status'])).map(row => String(row.key)));
+}
+
+/**
+ * Apply checked writes. Returns marker → key for the tickets this outbox filed or found.
+ *
+ * With `writer`, how far the list got is kept in the run's state directory, so a rerun after
+ * a failure goes on behind the last write that worked and repeats no comment. The record
+ * counts only for this very list; another list of the same writer starts at its first entry.
+ */
 export async function applyOutbox(
   jira: Jira,
   ops: readonly Op[],
   runUrl: string,
-  state: string
+  state: string,
+  writer?: Writer
 ): Promise<Record<string, string>> {
   const c = jira.config;
   const created: Record<string, string> = {};
-  for (const op of ops) {
-    if (op.op === 'comment') await jira.comment(op.key, op.text);
-    else if (op.op === 'ask') await jira.ask(op.key, op.text);
-    else if (op.op === 'cancel') {
-      await jira.comment(op.key, `${op.text}\n\nAbgebrochen vom Loop: ${runUrl}`);
-      await jira.move(op.key, c.status.canceled);
-    } else if (op.op === 'unflag') {
-      await jira.comment(op.key, op.text);
-      await jira.call('PUT', jira.issue(op.key), { fields: { [c.flagField]: null } });
-    } else {
-      created[op.marker] = await createTicket(jira, op, runUrl, state);
-    }
+  const digest = createHash('sha256').update(JSON.stringify(ops)).digest('hex');
+  const progress = writer === undefined ? null : join(state, `progress-${writer}.json`);
+  let done = 0;
+  if (progress !== null && existsSync(progress)) {
+    const kept = JSON.parse(readFileSync(progress, 'utf8')) as { digest?: unknown; done?: unknown };
+    if (kept.digest === digest && typeof kept.done === 'number') done = kept.done;
   }
+  for (const [index, op] of ops.entries()) {
+    if (op.op === 'create') {
+      // Always asked, also behind the progress mark: it finds its own ticket and returns its key.
+      created[op.marker] = await createTicket(jira, op, runUrl, state);
+    } else if (index >= done) {
+      if (op.op === 'comment') await jira.comment(op.key, op.text);
+      else if (op.op === 'ask') await jira.ask(op.key, op.text);
+      else if (op.op === 'cancel') {
+        // The change first: a comment saying "canceled" on a ticket that is not would be worse than the reverse.
+        await jira.move(op.key, c.status.canceled);
+        await jira.comment(op.key, `${op.text}\n\nAbgebrochen vom Loop: ${runUrl}`);
+      } else {
+        await jira.call('PUT', jira.issue(op.key), { fields: { [c.flagField]: null } });
+        await jira.comment(op.key, op.text);
+      }
+    }
+    if (progress !== null) writeFileSync(progress, `${JSON.stringify({ digest, done: Math.max(done, index + 1) })}\n`);
+  }
+  if (progress !== null) rmSync(progress, { force: true });
   return created;
 }
 
 /**
  * One ticket per marker, however often the writer runs: first this run's own record (Jira's
  * search index lags a ticket filed moments ago), then the remote link Jira keeps for the marker.
+ * A ticket this run filed but did not finish setting up (link, To Do, sprint) is finished here.
  */
 async function createTicket(
   jira: Jira,
@@ -170,40 +214,49 @@ async function createTicket(
   state: string
 ): Promise<string> {
   const c = jira.config;
-  const known = readCreated(state)[op.marker];
-  if (known !== undefined) return known;
   const globalId = `archon:${c.project}:${op.marker}`;
-  const found = await jira.search(`issue in issuesWithRemoteLinksByGlobalId("${globalId}")`, ['status']);
-  if (found.length > 1) throw new Error(`more than one ticket carries ${globalId}`);
-  if (found.length === 1) {
-    const key = String(found[0]?.key);
+  let key = readCreated(state)[op.marker];
+  if (key !== undefined && readFinished(state)[op.marker] === key) return key;
+  if (key === undefined) {
+    const found = await jira.search(`issue in issuesWithRemoteLinksByGlobalId("${globalId}")`, ['status']);
+    if (found.length > 1) throw new Error(`more than one ticket carries ${globalId}`);
+    if (found.length === 1) {
+      // Linked by an earlier run, so set up by it; where it stands by now is not this run's to change.
+      key = String(found[0]?.key);
+      recordCreated(state, op.marker, key);
+      recordFinished(state, op.marker, key);
+      return key;
+    }
+    const project = await jira.call('GET', `/rest/api/3/project/${c.project}`);
+    const issue = await jira.call('POST', '/rest/api/3/issue', {
+      fields: {
+        project: { id: String(project?.id) },
+        issuetype: { name: 'Task' },
+        summary: op.title,
+        description: adf(`Loop finding: ${op.marker}\n\n${op.text}`),
+        assignee: { accountId: c.assignee },
+      },
+    });
+    key = String(issue?.key);
+    jira.issue(key); // throws on anything but a key of this project, before it is recorded
+    // Recorded at once: a rerun after a failure below must find this ticket, not file another.
     recordCreated(state, op.marker, key);
-    return key;
   }
-  const project = await jira.call('GET', `/rest/api/3/project/${c.project}`);
-  const issue = await jira.call('POST', '/rest/api/3/issue', {
-    fields: {
-      project: { id: String(project?.id) },
-      issuetype: { name: 'Task' },
-      summary: op.title,
-      description: adf(`Loop finding: ${op.marker}\n\n${op.text}`),
-      assignee: { accountId: c.assignee },
-    },
-  });
-  const key = String(issue?.key);
-  jira.issue(key); // throws on anything but a key of this project, before it is recorded
-  // Recorded at once: a rerun after a failure below must find this ticket, not file another.
-  recordCreated(state, op.marker, key);
+  // Each step below may run twice: Jira replaces a remote link with the same globalId, the
+  // status is moved only when it differs, and a ticket already in the sprint stays there.
   await jira.call('POST', `${jira.issue(key)}/remotelink`, {
     globalId,
     object: { url: runUrl, title: `Archon loop (${op.marker})` },
   });
-  await jira.move(key, c.status.todo);
+  if ((await jira.ticket(key)).status !== c.status.todo) await jira.move(key, c.status.todo);
   const sprints = await jira.call('GET', `/rest/agile/1.0/board/${c.board}/sprint?state=active`);
   const active = Array.isArray(sprints?.values) ? (sprints.values as { id?: unknown }[])[0] : undefined;
   if (typeof active?.id === 'number') {
     await jira.call('POST', `/rest/agile/1.0/sprint/${active.id}/issue`, { issues: [key] });
+  } else {
+    note(`${key} (${op.marker}) is filed on To Do outside a sprint: board ${c.board} has no active sprint, so no lap will start it until it is planned into one.`);
   }
+  recordFinished(state, op.marker, key);
   return key;
 }
 

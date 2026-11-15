@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readCreated, recordCreated, runState } from '../../workflows/sdlc/.shared/claims';
+import { readCreated, readFinished, recordCreated, recordFinished, runState } from '../../workflows/sdlc/.shared/claims';
 import { Jira, type Ticket, type TicketComment, type TrackerConfig, type Transport } from '../../workflows/sdlc/.shared/jira';
 import {
   applyOutbox,
@@ -11,8 +11,10 @@ import {
   clearOutbox,
   outboxFile,
   readOutbox,
+  snapshotKeys,
   writableJql,
   writableKeys,
+  writableNow,
   type Op,
 } from '../../workflows/sdlc/.shared/outbox';
 
@@ -187,15 +189,22 @@ describe('the write-time check of pick’s keys', () => {
 interface Call { method: string; path: string; body: unknown }
 
 /** A Jira that knows CONC-5 and CONC-6, moves anything anywhere, and files new tickets as CONC-50 up. */
-function fakeJira(opts: { found?: string[]; sprint?: number | null } = {}): { jira: Jira; calls: Call[] } {
+function fakeJira(
+  opts: { found?: string[]; sprint?: number | null; failOnce?: string } = {}
+): { jira: Jira; calls: Call[] } {
   const calls: Call[] = [];
   let next = 50;
+  let failed = false;
   const ok = (value: unknown, status = 200): { status: number; text: string } => ({
     status,
     text: value === undefined ? '' : JSON.stringify(value),
   });
   const send: Transport = async (method, path, body) => {
     calls.push({ method, path, body });
+    if (!failed && `${method} ${path.split('?')[0]}` === opts.failOnce) {
+      failed = true;
+      return ok({ errorMessages: ['boom'] }, 400);
+    }
     if (method === 'POST' && path === '/rest/api/3/search/jql') {
       return ok({ issues: (opts.found ?? []).map(key => ({ key, fields: {} })), isLast: true });
     }
@@ -217,23 +226,58 @@ const steps = (calls: Call[]): string[] => calls.map(call => `${call.method} ${c
 const state = (): string => runState(mkdtempSync(join(tmpdir(), 'state-')), 'run-1');
 
 describe('outbox apply', () => {
-  it('unflag: the reason first, then the flag off', async () => {
+  it('unflag: the flag off first, then the reason', async () => {
     const { jira, calls } = fakeJira();
     await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, state());
-    expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-6/comment', 'PUT /rest/api/3/issue/CONC-6']);
-    expect(calls[1]?.body).toEqual({ fields: { customfield_10021: null } });
+    expect(steps(calls)).toEqual(['PUT /rest/api/3/issue/CONC-6', 'POST /rest/api/3/issue/CONC-6/comment']);
+    expect(calls[0]?.body).toEqual({ fields: { customfield_10021: null } });
   });
-  it('cancel: a comment that says why and from where, then Canceled', async () => {
+  it('cancel: Canceled first, then a comment that says why and from where', async () => {
     const { jira, calls } = fakeJira();
     await applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt zu CONC-5' }], RUN, state());
     expect(steps(calls)).toEqual([
-      'POST /rest/api/3/issue/CONC-6/comment',
       'GET /rest/api/3/issue/CONC-6/transitions',
       'POST /rest/api/3/issue/CONC-6/transitions',
+      'POST /rest/api/3/issue/CONC-6/comment',
     ]);
-    expect(JSON.stringify(calls[0]?.body)).toContain('Doppelt zu CONC-5');
-    expect(JSON.stringify(calls[0]?.body)).toContain(RUN);
-    expect(calls[2]?.body).toEqual({ transition: { id: `t${CFG.status.canceled}` } });
+    expect(JSON.stringify(calls[2]?.body)).toContain('Doppelt zu CONC-5');
+    expect(JSON.stringify(calls[2]?.body)).toContain(RUN);
+    expect(calls[1]?.body).toEqual({ transition: { id: `t${CFG.status.canceled}` } });
+  });
+  it('cancel that cannot move the ticket leaves no comment saying it was canceled', async () => {
+    const { jira, calls } = fakeJira({ failOnce: 'POST /rest/api/3/issue/CONC-6/transitions' });
+    const run = applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt' }], RUN, state(), 'pick');
+    expect(run).rejects.toThrow('400');
+    await run.catch(() => undefined);
+    expect(steps(calls)).not.toContain('POST /rest/api/3/issue/CONC-6/comment');
+  });
+  it('a rerun after a failed write goes on behind the last one that worked', async () => {
+    const { jira, calls } = fakeJira({ failOnce: 'PUT /rest/api/3/issue/CONC-6' });
+    const dir = state();
+    const ops: Op[] = [
+      { op: 'comment', key: 'CONC-5', text: 'Erster' },
+      { op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' },
+    ];
+    await applyOutbox(jira, ops, RUN, dir, 'pick').catch(() => undefined);
+    expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-5/comment', 'PUT /rest/api/3/issue/CONC-6']);
+    calls.length = 0;
+    await applyOutbox(jira, ops, RUN, dir, 'pick');
+    expect(steps(calls)).toEqual(['PUT /rest/api/3/issue/CONC-6', 'POST /rest/api/3/issue/CONC-6/comment']);
+    expect(existsSync(join(dir, 'progress-pick.json'))).toBe(false);
+  });
+  it('progress counts only for the same list: another list starts at its first entry', async () => {
+    const { jira, calls } = fakeJira({ failOnce: 'PUT /rest/api/3/issue/CONC-6' });
+    const dir = state();
+    await applyOutbox(
+      jira,
+      [{ op: 'comment', key: 'CONC-5', text: 'Erster' }, { op: 'unflag', key: 'CONC-6', text: 'x' }],
+      RUN,
+      dir,
+      'pick'
+    ).catch(() => undefined);
+    calls.length = 0;
+    await applyOutbox(jira, [{ op: 'comment', key: 'CONC-5', text: 'Anderer' }], RUN, dir, 'pick');
+    expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-5/comment']);
   });
   it('create: a new ticket with its marker, linked, on To Do, in the open sprint', async () => {
     const { jira, calls } = fakeJira({ sprint: 7 });
@@ -245,6 +289,7 @@ describe('outbox apply', () => {
       'GET /rest/api/3/project/CONC',
       'POST /rest/api/3/issue',
       'POST /rest/api/3/issue/CONC-51/remotelink',
+      'GET /rest/api/3/issue/CONC-51',
       'GET /rest/api/3/issue/CONC-51/transitions',
       'POST /rest/api/3/issue/CONC-51/transitions',
       'GET /rest/agile/1.0/board/5/sprint',
@@ -256,8 +301,28 @@ describe('outbox apply', () => {
     expect(fields.assignee).toEqual({ accountId: CFG.assignee });
     expect(JSON.stringify(fields.description)).toContain('Loop finding: rest-conc-5');
     expect((calls[3]?.body as { globalId: string }).globalId).toBe('archon:CONC:rest-conc-5');
-    expect(calls[7]?.body).toEqual({ issues: ['CONC-51'] });
+    expect(calls[8]?.body).toEqual({ issues: ['CONC-51'] });
     expect(readCreated(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(readFinished(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
+  });
+  it('create: a ticket filed but not set up is finished on the rerun, not filed again', async () => {
+    const { jira, calls } = fakeJira({ sprint: 7, failOnce: 'POST /rest/api/3/issue/CONC-51/remotelink' });
+    const dir = state();
+    const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest von CONC-5', text: 'Was fehlt' };
+    await applyOutbox(jira, [op], RUN, dir, 'review').catch(() => undefined);
+    expect(readCreated(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(readFinished(dir)).toEqual({});
+    calls.length = 0;
+    expect(await applyOutbox(jira, [op], RUN, dir, 'review')).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(steps(calls)).toEqual([
+      'POST /rest/api/3/issue/CONC-51/remotelink',
+      'GET /rest/api/3/issue/CONC-51',
+      'GET /rest/api/3/issue/CONC-51/transitions',
+      'POST /rest/api/3/issue/CONC-51/transitions',
+      'GET /rest/agile/1.0/board/5/sprint',
+      'POST /rest/agile/1.0/sprint/7/issue',
+    ]);
+    expect(readFinished(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
   });
   it('create: a ticket Jira already links to the marker is reused, not doubled', async () => {
     const { jira, calls } = fakeJira({ found: ['CONC-44'] });
@@ -269,6 +334,7 @@ describe('outbox apply', () => {
     const { jira, calls } = fakeJira();
     const dir = state();
     recordCreated(dir, 'rest-conc-5', 'CONC-51');
+    recordFinished(dir, 'rest-conc-5', 'CONC-51');
     const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest', text: 'x' };
     expect(await applyOutbox(jira, [op], RUN, dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
     expect(calls).toEqual([]);
@@ -277,6 +343,35 @@ describe('outbox apply', () => {
     const { jira, calls } = fakeJira({ sprint: null });
     await applyOutbox(jira, [{ op: 'create', marker: 'finding-a', title: 'T', text: 'x' }], RUN, state());
     expect(steps(calls).at(-1)).toBe('GET /rest/agile/1.0/board/5/sprint');
+  });
+});
+
+describe('what pick may touch right now', () => {
+  it('only keys on the snapshot that Jira still puts in the loop’s hands', async () => {
+    const dir = state();
+    writeFileSync(join(dir, 'keys.json'), JSON.stringify(['CONC-5', 'CONC-6']));
+    expect(snapshotKeys(dir)).toEqual(['CONC-5', 'CONC-6']);
+    const { jira, calls } = fakeJira({ found: ['CONC-5'] });
+    expect([...(await writableNow(jira, dir))]).toEqual(['CONC-5']);
+    expect((calls[0]?.body as { jql: string }).jql).toStartWith('key in (CONC-5,CONC-6) AND assignee');
+  });
+  it('a ticket pick names that is not on the snapshot is never asked about, and is not writable', async () => {
+    const dir = state();
+    writeFileSync(join(dir, 'keys.json'), JSON.stringify(['CONC-5']));
+    const { jira, calls } = fakeJira({ found: ['CONC-9'] });
+    expect((await writableNow(jira, dir, 'CONC-9')).size).toBe(0);
+    expect(calls).toEqual([]);
+  });
+  it('the lap’s target is asked about alone', async () => {
+    const dir = state();
+    writeFileSync(join(dir, 'keys.json'), JSON.stringify(['CONC-5', 'CONC-6']));
+    const { jira, calls } = fakeJira({ found: ['CONC-6'] });
+    expect((await writableNow(jira, dir, 'CONC-6')).has('CONC-6')).toBe(true);
+    expect((calls[0]?.body as { jql: string }).jql).toStartWith('key in (CONC-6) AND');
+  });
+  it('no snapshot, nothing writable', async () => {
+    const { jira } = fakeJira({ found: ['CONC-5'] });
+    expect((await writableNow(jira, state(), 'CONC-5')).size).toBe(0);
   });
 });
 

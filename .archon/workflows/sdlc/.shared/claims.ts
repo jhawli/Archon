@@ -118,6 +118,29 @@ export async function liveClaims(
   return claims.sort((left, right) => left.id - right.id);
 }
 
+/**
+ * The claims on an item that no run stands behind any more, or none while one may still be
+ * working: a claim is dead once the scheduler names its run as ended or it is past the expiry.
+ * Released and withdrawn claims are not claims (their text was edited).
+ */
+export function deadClaims(
+  rows: readonly ItemComment[],
+  expiryHours: number,
+  now: number,
+  ended: ReadonlySet<string>
+): Claim[] {
+  const claims = rows
+    .filter(row => row.body.startsWith(CLAIM_PREFIX))
+    .map(row => ({
+      id: row.id,
+      run: row.body.slice(CLAIM_PREFIX.length).split(/\s/, 1)[0] ?? '',
+      createdAt: row.createdAt,
+    }));
+  const dead = (claim: Claim): boolean =>
+    ended.has(claim.run) || Number.isNaN(claim.createdAt) || now - claim.createdAt > expiryHours * 3_600_000;
+  return claims.every(dead) ? claims : [];
+}
+
 export async function postComment(item: WorkItem, body: string, jira?: ClaimClient): Promise<number> {
   if (item.kind === 'ticket') return clientFor(item.key, jira).comment(item.key, body);
   const created = runGh([
@@ -258,6 +281,17 @@ export function recordLanding(state: string, artifacts: string, facts: LapFacts)
   recordLap(state, facts);
 }
 
+/** When this run's claim on its ticket was posted (claim records it once it holds the ticket). */
+export function recordClaim(state: string, at: number): void {
+  writeJson(join(state, 'claim.json'), { at });
+}
+
+/** The recorded claim time in ms, or NaN when this run recorded none. */
+export function readClaimedAt(state: string): number {
+  const at = readObject(join(state, 'claim.json')).at;
+  return typeof at === 'number' ? at : Number.NaN;
+}
+
 /** Tickets this run filed, by marker (the outbox writer records each as soon as Jira made it). */
 export function readCreated(state: string): Record<string, string> {
   return strings(readObject(join(state, 'created.json')));
@@ -265,6 +299,15 @@ export function readCreated(state: string): Record<string, string> {
 
 export function recordCreated(state: string, marker: string, key: string): void {
   writeJson(join(state, 'created.json'), { ...readCreated(state), [marker]: key });
+}
+
+/** Filed tickets that also got their link, status and sprint; one that is only in `created` is half set up. */
+export function readFinished(state: string): Record<string, string> {
+  return strings(readObject(join(state, 'finished.json')));
+}
+
+export function recordFinished(state: string, marker: string, key: string): void {
+  writeJson(join(state, 'finished.json'), { ...readFinished(state), [marker]: key });
 }
 
 function deployedFact(artifacts: string): string {

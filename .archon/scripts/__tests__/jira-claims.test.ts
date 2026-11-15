@@ -7,14 +7,17 @@ import {
   type LapResult,
   type PrView,
   confirmMerge,
+  deadClaims,
   editComment,
   finalStatus,
   itemMarkdown,
   liveClaims,
   postComment,
   pruneRunStates,
+  readClaimedAt,
   readCreated,
   readLap,
+  recordClaim,
   recordCreated,
   recordLanding,
   recordLap,
@@ -150,6 +153,42 @@ describe('claims on a ticket', () => {
       message = error instanceof Error ? error.message : String(error);
     }
     expect(message).toContain('Jira client');
+  });
+});
+
+describe('claims no run stands behind', () => {
+  const row = (id: number, body: string, at = NOW - 3_600_000): { id: number; body: string; createdAt: number } => ({
+    id,
+    body,
+    createdAt: at,
+  });
+  it('a claim of a run the scheduler names as ended is dead', () => {
+    expect(deadClaims([row(1, 'Loop claim: run aaa\n\nRoute: simple')], 6, NOW, new Set(['aaa'])).map(c => c.run)).toEqual(['aaa']);
+  });
+  it('a claim past the expiry is dead', () => {
+    expect(deadClaims([row(1, 'Loop claim: run aaa', NOW - 7 * 3_600_000)], 6, NOW, new Set())).toHaveLength(1);
+  });
+  it('one claim that may still be worked on keeps every claim on the ticket', () => {
+    const rows = [row(1, 'Loop claim: run aaa'), row(2, 'Loop claim: run bbb')];
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']))).toEqual([]);
+  });
+  it('a ticket without a claim is a session’s: nothing to recover', () => {
+    const rows = [row(1, 'Loop claim released: run aaa ended.'), row(2, 'Ich arbeite daran')];
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']))).toEqual([]);
+  });
+});
+
+describe('when this run claimed its ticket', () => {
+  it('is kept for release, and NaN when the run recorded none', () => {
+    const dir = runState(mkdtempSync(join(tmpdir(), 'state-')), 'run-1');
+    expect(readClaimedAt(dir)).toBeNaN();
+    recordClaim(dir, NOW);
+    expect(readClaimedAt(dir)).toBe(NOW);
+  });
+  it('a merge is not confirmed without a claim time (NaN), the safe side', () => {
+    const view = { state: 'MERGED', mergedAt: '2026-11-15T12:30:00Z', title: 'CONC-5 x', body: 'Refs CONC-5' };
+    expect(confirmMerge(lap({ landed: 'merged' }), view, 'CONC-5', Number.NaN, 'CONC').landed).toBe('');
+    expect(confirmMerge(lap({ landed: 'merged' }), view, 'CONC-5', NOW, 'CONC').landed).toBe('merged');
   });
 });
 

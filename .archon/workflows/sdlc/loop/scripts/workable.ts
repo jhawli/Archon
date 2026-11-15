@@ -8,7 +8,8 @@
  * open pull requests name) and GitHub only for pull requests. Its one write: the
  * scheduler names runs it knows have ended (`INPUTS_ENDED_RUNS`, comma-separated), and
  * a claim one of them still holds is released the way the run's own release step would
- * have, because a run killed before that step never frees its item.
+ * have, because a run killed before that step never frees its item. On Jira it also puts a
+ * ticket such a run left on In Progress back where a lap can take it (`recoverOrphans`).
  *
  * Output: `{ "workable": [ref], "claims": [ref + run], "ended": [...], "waiting": [...],
  * "updated" }`. A ref is `{kind: 'ticket', key}` for a Jira ticket and
@@ -16,10 +17,10 @@
  * item on the board.
  */
 
-import { expiryHours } from '../../.shared/claims.ts';
+import { deadClaims, expiryHours } from '../../.shared/claims.ts';
 import { trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
-import { GITHUB_FIELDS, githubItems, loadJiraBoard, openPulls, type GithubItem } from '../../.shared/tracker-board.ts';
+import { GITHUB_FIELDS, githubItems, jiraLinks, loadJiraBoard, openPulls, type GithubItem } from '../../.shared/tracker-board.ts';
 import { workability, type Board, type Links } from '../../.shared/workable.ts';
 
 function gh(args: string[]): unknown {
@@ -47,6 +48,50 @@ const released = (run: string): string =>
 
 const config = trackerConfig();
 const pulls = openPulls();
+const hours = expiryHours(trimmed(process.env.INPUTS_CLAIM_HOURS));
+const endedRuns = new Set(
+  trimmed(process.env.INPUTS_ENDED_RUNS)
+    .split(',')
+    .map(run => run.trim())
+    .filter(run => run !== '')
+);
+
+/**
+ * Tickets a dead run left on In Progress. Nothing else finds them: the board holds To Do
+ * tickets and the ones pull requests name, and pick may not write to In Progress. A ticket
+ * whose every claim is dead (run ended, or past the expiry) goes back where a lap can take
+ * it: Review when an open pull request names it, else To Do, with the `Loop result:` line the
+ * run never wrote, so pick counts the attempt. A ticket without any claim is a session's and
+ * stays. One ticket failing does not stop the gate; it is reported and tried again next time.
+ */
+async function recoverOrphans(client: Jira): Promise<string[]> {
+  const c = client.config;
+  const lines: string[] = [];
+  const named = new Set(pulls.flatMap(pull => jiraLinks(c.project).references(pull.body)));
+  const stuck = await client.search(
+    `project = ${c.project} AND status = ${c.status.progress} AND assignee = "${c.assignee}"`,
+    ['status']
+  );
+  for (const row of stuck) {
+    const key = String(row.key);
+    try {
+      const dead = deadClaims(await client.comments(key), hours, Date.now(), endedRuns);
+      if (dead.length === 0) continue;
+      const status = named.has(key) ? c.status.review : c.status.todo;
+      // The status first: with the claims still on it, a failure here is found again next time.
+      await client.move(key, status);
+      const name = status === c.status.review ? 'Review' : 'To Do';
+      for (const claim of dead) {
+        await client.comment(key, `Loop result: run ${claim.run}. PR: nicht bekannt. Status: ${name}. (Vom Scheduler: der Lauf endete ohne Abschluss.)`);
+        await client.editComment(key, claim.id, released(claim.run));
+      }
+      lines.push(`${key}: back to ${name}, ${dead.length} dead claim(s) released`);
+    } catch (error) {
+      lines.push(`${key}: could not recover (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  return lines;
+}
 let board: Board;
 // An answer that lifts a park leaves the same items workable, and the scheduler must still
 // see the board as changed.
@@ -57,24 +102,13 @@ if (config === null) {
   ({ board, updated } = githubBoard(pulls));
 } else {
   jira = new Jira(config);
+  for (const line of await recoverOrphans(jira)) console.error(`workable: ${line}`);
   const loaded = await loadJiraBoard(jira, pulls);
   board = loaded.board;
   links = loaded.links;
   updated = new Date(loaded.updated).toISOString();
 }
-const endedRuns = new Set(
-  trimmed(process.env.INPUTS_ENDED_RUNS)
-    .split(',')
-    .map(run => run.trim())
-    .filter(run => run !== '')
-);
-const result = workability(
-  board,
-  expiryHours(trimmed(process.env.INPUTS_CLAIM_HOURS)),
-  Date.now(),
-  endedRuns,
-  links
-);
+const result = workability(board, hours, Date.now(), endedRuns, links);
 for (const claim of result.ended) {
   if (claim.kind === 'ticket') {
     const id = /[?&]focusedCommentId=(\d+)$/.exec(claim.url)?.[1];

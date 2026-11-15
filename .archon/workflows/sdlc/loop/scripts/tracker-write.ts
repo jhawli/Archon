@@ -8,31 +8,24 @@
  * in the loop's hands (`writableJql`); build and review only to the lap's ticket. Tickets
  * filed here are recorded in the state directory by marker, for release and for a rerun of
  * this node. The outbox file is removed once applied, with a copy of what was written kept
- * in the state directory.
+ * in the state directory. If a write fails the node fails and the file stays; a rerun goes on
+ * behind the last write that worked (`applyOutbox`).
  *
  * Without `.archon/tracker.json` there is no outbox: nothing is read or written.
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
-import { applyOutbox, checkOutbox, outboxFile, readOutbox, writableJql } from '../../.shared/outbox.ts';
+import { applyOutbox, checkOutbox, outboxFile, readOutbox, writableNow } from '../../.shared/outbox.ts';
 import { ticketKeyOf } from '../../.shared/tickets.ts';
 
 const writer = trimmed(process.env.INPUTS_WRITER);
 const target = trimmed(process.env.INPUTS_TARGET);
 if (writer !== 'pick' && writer !== 'build' && writer !== 'review') {
   throw new Error(`tracker-write: writer must be pick, build or review, got '${writer}'`);
-}
-
-function snapshotKeys(state: string): string[] {
-  const path = join(state, 'keys.json');
-  if (!existsSync(path)) return [];
-  const raw = JSON.parse(readFileSync(path, 'utf8')) as unknown;
-  if (!Array.isArray(raw) || !raw.every(key => typeof key === 'string')) throw new Error(`${path} is not a list of keys`);
-  return raw;
 }
 
 const config = trackerConfig();
@@ -46,15 +39,14 @@ if (config === null) {
   let onBoard = new Set<string>();
   if (writer === 'pick' && Array.isArray(raw) && raw.length > 0) {
     jira = new Jira(config);
-    const jql = writableJql(snapshotKeys(state), config);
-    if (jql !== null) onBoard = new Set((await jira.search(jql, ['status'])).map(row => String(row.key)));
+    onBoard = await writableNow(jira, state);
   }
   const ops = checkOutbox(raw, writer, ticketKeyOf(target, config), config.project, onBoard);
   // Where a filed ticket's remote link points: the lap's ticket or pull request, else the board.
   const runUrl = target.startsWith('https://')
     ? target
     : `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;
-  const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, state);
+  const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, state, writer);
   if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
   rmSync(file, { force: true });
   emit({ applied: String(ops.length), created: JSON.stringify(created) });

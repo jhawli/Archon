@@ -6,6 +6,7 @@ import {
   Jira,
   adf,
   plain,
+  pinTrackerConfig,
   trackerConfig,
   type TrackerConfig,
   type Transport,
@@ -331,13 +332,108 @@ describe('Jira client', () => {
     expect(await failure(jira.editComment('CONC-5', 1.5, 'x'))).toContain('comment id');
     expect(calls).toHaveLength(0);
   });
-  it('ask comments with the owner mentioned and sets the flag', async () => {
+  it('ask sets the flag, then comments with the owner mentioned', async () => {
     const { send, calls } = fake([
       ['POST', '/rest/api/3/issue/CONC-8/comment', 201, { id: '1' }],
       ['PUT', '/rest/api/3/issue/CONC-8', 204, undefined],
     ]);
     await new Jira(CFG, send).ask('CONC-8', 'Frage: Testbefehl?');
-    expect(JSON.stringify(calls[0]?.[2])).toContain('acc-julian');
-    expect(calls[1]?.[2]).toEqual({ fields: { customfield_10021: [{ id: '10019' }] } });
+    expect(calls[0]?.[2]).toEqual({ fields: { customfield_10021: [{ id: '10019' }] } });
+    expect(JSON.stringify(calls[1]?.[2])).toContain('acc-julian');
+  });
+});
+
+describe('a call that hits a passing hiccup', () => {
+  /** Replies in order, the last one for every call after; `null` is a transport failure (the time limit). */
+  function flaky(replies: ({ status: number; text?: string; retryAfter?: number } | null)[]): {
+    jira: Jira;
+    sent: string[];
+    waits: number[];
+  } {
+    const sent: string[] = [];
+    const waits: number[] = [];
+    const send: Transport = async (method, path) => {
+      sent.push(`${method} ${path}`);
+      const reply = replies[Math.min(sent.length, replies.length) - 1];
+      if (reply === null || reply === undefined) throw new Error('timed out');
+      return { status: reply.status, text: reply.text ?? '{}', retryAfter: reply.retryAfter };
+    };
+    const jira = new Jira(CFG, send, async ms => {
+      waits.push(ms);
+    });
+    return { jira, sent, waits };
+  }
+  it('tries a 429 again after the time Jira names, POST included', async () => {
+    const { jira, sent, waits } = flaky([{ status: 429, retryAfter: 2 }, { status: 201, text: '{"id":"7"}' }]);
+    expect(await jira.comment('CONC-8', 'x')).toBe(7);
+    expect(sent).toHaveLength(2);
+    expect(waits).toEqual([2000]);
+  });
+  it('tries a GET again after a gateway error and after the time limit', async () => {
+    const { jira, sent } = flaky([{ status: 503 }, null, { status: 200, text: '{"transitions":[]}' }]);
+    expect(await jira.call('GET', '/rest/api/3/issue/CONC-8/transitions')).toEqual({ transitions: [] });
+    expect(sent).toHaveLength(3);
+  });
+  it('never sends a POST twice after a gateway error or the time limit: it may have arrived', async () => {
+    const gateway = flaky([{ status: 502 }, { status: 201, text: '{"id":"7"}' }]);
+    expect(await failure(gateway.jira.comment('CONC-8', 'x'))).toContain('502');
+    expect(gateway.sent).toHaveLength(1);
+    const limit = flaky([null, { status: 201, text: '{"id":"7"}' }]);
+    expect(await failure(limit.jira.comment('CONC-8', 'x'))).toContain('timed out');
+    expect(limit.sent).toHaveLength(1);
+  });
+  it('gives up after three tries and says what Jira answered', async () => {
+    const { jira, sent } = flaky([{ status: 429 }]);
+    expect(await failure(jira.call('GET', '/rest/api/3/issue/CONC-8'))).toContain('-> 429');
+    expect(sent).toHaveLength(3);
+  });
+  it('does not try a plain refusal again', async () => {
+    const { jira, sent } = flaky([{ status: 404 }]);
+    expect(await failure(jira.call('GET', '/rest/api/3/issue/CONC-8'))).toContain('-> 404');
+    expect(sent).toHaveLength(1);
+  });
+});
+
+describe('the tracker config a run pins', () => {
+  const withRun = <T>(stateDir: string, body: () => T): T => {
+    const before = { s: process.env.STATE_DIR, w: process.env.WORKFLOW_ID };
+    process.env.STATE_DIR = stateDir;
+    process.env.WORKFLOW_ID = 'run-1';
+    try {
+      return body();
+    } finally {
+      if (before.s === undefined) delete process.env.STATE_DIR;
+      else process.env.STATE_DIR = before.s;
+      if (before.w === undefined) delete process.env.WORKFLOW_ID;
+      else process.env.WORKFLOW_ID = before.w;
+    }
+  };
+  const stateOf = (stateDir: string): string => {
+    const dir = join(stateDir, 'tracker', 'run-1');
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+  it('later reads answer from the pin, whatever an agent wrote into the checkout since', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'st-'));
+    const root = repoWith(CFG);
+    expect(pinTrackerConfig(stateOf(stateDir), root)?.owner).toBe('acc-julian');
+    writeFileSync(join(root, '.archon/tracker.json'), JSON.stringify({ ...CFG, owner: 'acc-archon' }));
+    expect(withRun(stateDir, () => trackerConfig())?.owner).toBe('acc-julian');
+    // A resumed run keeps its pin too.
+    expect(pinTrackerConfig(stateOf(stateDir), root)?.owner).toBe('acc-julian');
+  });
+  it('pins "no tracker" as well: a tracker.json added mid-run changes nothing', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'st-'));
+    const root = mkdtempSync(join(tmpdir(), 'trk-'));
+    expect(pinTrackerConfig(stateOf(stateDir), root)).toBeNull();
+    mkdirSync(join(root, '.archon'));
+    writeFileSync(join(root, '.archon/tracker.json'), JSON.stringify(CFG));
+    expect(pinTrackerConfig(stateOf(stateDir), root)).toBeNull();
+    expect(withRun(stateDir, () => trackerConfig())).toBeNull();
+  });
+  it('an explicit root always reads that checkout', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'st-'));
+    pinTrackerConfig(stateOf(stateDir), mkdtempSync(join(tmpdir(), 'trk-')));
+    expect(withRun(stateDir, () => trackerConfig(repoWith(CFG)))?.project).toBe('CONC');
   });
 });

@@ -10,8 +10,9 @@
  * lap could not decide (AK18a). The lap's facts come from the run's state records and the
  * deploy block's `deployment.md`, not from bindings: a failed rollout fails the deploy
  * block, and a binding to a failed node fails the node that reads it (see `readLap`). A
- * merge GitHub does not confirm leaves the ticket on Review with a question. If setting the
- * status fails, the ticket is flagged before the node fails.
+ * merge GitHub does not confirm leaves the ticket on Review with a question. If any part of
+ * this fails, freeing the claim included, the rest is still tried and the ticket is flagged
+ * before the node fails.
  */
 
 import {
@@ -20,7 +21,9 @@ import {
   confirmMerge,
   editComment,
   finalStatus,
+  type ItemComment,
   type PrView,
+  readClaimedAt,
   readLap,
   runState,
   statusName,
@@ -38,16 +41,27 @@ const config = trackerConfig();
 const item = workItem(target !== '' ? target : pr, config);
 const jira = config !== null && item.kind === 'ticket' ? new Jira(config) : undefined;
 const prefix = `${CLAIM_PREFIX}${run}`;
-const own = (await comments(item, jira)).filter(
-  comment => comment.body.startsWith(prefix) && /^\s/.test(comment.body.slice(prefix.length) || ' ')
-);
-for (const comment of own) {
-  await editComment(
-    item,
-    comment.id,
-    `Loop claim released: run ${run} ended. Its \`Loop review:\` comment, if any, says what it did.`,
-    jira
-  );
+const ticketLap = config !== null && jira !== undefined && item.kind === 'ticket';
+
+// Free the claim. On a ticket a failure here is kept for the end: the status and the flag
+// below are still tried, so the ticket does not sit on In Progress with nothing said.
+let all: ItemComment[] = [];
+let own: ItemComment[] = [];
+let freeError: Error | undefined;
+try {
+  all = await comments(item, jira);
+  own = all.filter(comment => comment.body.startsWith(prefix) && /^\s/.test(comment.body.slice(prefix.length) || ' '));
+  for (const comment of own) {
+    await editComment(
+      item,
+      comment.id,
+      `Loop claim released: run ${run} ended. Its \`Loop review:\` comment, if any, says what it did.`,
+      jira
+    );
+  }
+} catch (error) {
+  if (!ticketLap) throw error;
+  freeError = error instanceof Error ? error : new Error(String(error));
 }
 const lines = [
   own.length > 0 ? `released ${own.length} claim(s) on ${target || pr}` : `run ${run} held no claim on ${target || pr}`,
@@ -65,8 +79,12 @@ function prView(url: string): PrView | null {
 
 if (config !== null && jira !== undefined && item.kind === 'ticket') {
   try {
-    const recorded = readLap(runState(), artifactsDir(), pr);
-    const claimedAt = Math.min(...own.map(comment => comment.createdAt));
+    const state = runState();
+    const recorded = readLap(state, artifactsDir(), pr);
+    // What claim recorded, so a second run of this node (its claim already released) still
+    // knows it. Without either the time is NaN and no merge is confirmed: the safe side.
+    const kept = readClaimedAt(state);
+    const claimedAt = Number.isNaN(kept) && own.length > 0 ? Math.min(...own.map(comment => comment.createdAt)) : kept;
     const lap = confirmMerge(recorded, prView(recorded.pr), item.key, claimedAt, config.project);
     const ticket = await jira.ticket(item.key);
     const doubt = recorded.landed === 'merged' && lap.landed !== 'merged';
@@ -80,15 +98,23 @@ if (config !== null && jira !== undefined && item.kind === 'ticket') {
         : decided;
     if (result.status !== null && result.status !== ticket.status) await jira.move(item.key, result.status);
     const name = statusName(result.status ?? ticket.status, config.status);
-    await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.`);
+    // Once per run: pick counts these lines as attempts, and this node may run again.
+    const said = all.some(comment => comment.body.startsWith(`Loop result: run ${run}.`));
+    if (!said) {
+      await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.`);
+    }
     if (result.ask !== null) await jira.ask(item.key, result.ask);
     const unconfirmed = doubt ? ', merge not confirmed by GitHub' : '';
     lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}`);
+    if (freeError !== undefined) throw freeError;
   } catch (error) {
-    // The claim is already free; flag the ticket so it does not sit on In Progress unseen.
+    // Flag the ticket so it does not sit there unseen, whatever part of the release failed.
     const why = error instanceof Error ? error.message : String(error);
     try {
-      await jira.ask(item.key, `Lauf ${run} konnte den Status nicht setzen (${why.slice(0, 300)}). Bitte den Status prüfen.`);
+      await jira.ask(
+        item.key,
+        `Lauf ${run} ist nicht sauber zu Ende gekommen (${why.slice(0, 300)}). Bitte Status und Claim des Tickets prüfen.`
+      );
     } catch (flagError) {
       lines.push(`could not flag ${item.key} either: ${flagError instanceof Error ? flagError.message : String(flagError)}`);
     }
