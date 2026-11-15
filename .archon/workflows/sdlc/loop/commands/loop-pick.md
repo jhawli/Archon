@@ -24,6 +24,7 @@ GitHub is the only state (with Jira, the work items are tickets; see below). Rea
   - `{"op": "comment", "key": "CONC-5", "text": "Contract\n\n..."}` for a `Contract` comment or a note;
   - `{"op": "ask", "key": "CONC-5", "text": "..."}` instead of labelling `needs-owner`: it mentions the owner and flags the ticket, and the text is the question;
   - `{"op": "cancel", "key": "CONC-9", "text": "Doppel von CONC-4"}` instead of closing a duplicate or an already delivered ticket, with the reference in the text.
+- Pick as the lap's target only a ticket marked `Schreibbar: ja`. The loop checks the target against this board and against Jira before it claims it; any other ticket is not claimed, and this lap does nothing.
 - Write only to tickets marked `Schreibbar: ja`. One entry for any other ticket, or one that starts like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), makes the loop refuse the whole list, and this lap does nothing.
 - A `Contract` you write this lap is on the ticket before the builder starts, and in its copy of the ticket.
 - Every run of this loop that held a ticket ends with exactly one comment `Loop result: run <id>. PR: <url or kein PR>. Status: <status>.` on it. Under Caps, count runs by these: one with `PR: kein PR` is a run that produced no pull request. The same run's `Loop review:` comment on the ticket is not a second attempt; send-backs and merge-gate refusals still count by their `Loop review:` lines, as below.
