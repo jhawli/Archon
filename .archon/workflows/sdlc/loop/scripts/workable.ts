@@ -20,7 +20,8 @@
 import { deadClaims, expiryHours } from '../../.shared/claims.ts';
 import { trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
-import { GITHUB_FIELDS, githubItems, jiraLinks, loadJiraBoard, openPulls, type GithubItem } from '../../.shared/tracker-board.ts';
+import { ticketPr, type PrRow } from '../../.shared/tickets.ts';
+import { GITHUB_FIELDS, githubItems, loadJiraBoard, openPulls, type GithubItem } from '../../.shared/tracker-board.ts';
 import { workability, type Board, type Links } from '../../.shared/workable.ts';
 
 function gh(args: string[]): unknown {
@@ -59,32 +60,45 @@ const endedRuns = new Set(
 /**
  * Tickets a dead run left on In Progress. Nothing else finds them: the board holds To Do
  * tickets and the ones pull requests name, and pick may not write to In Progress. A ticket
- * whose every claim is dead (run ended, or past the expiry) goes back where a lap can take
- * it: Review when an open pull request names it, else To Do, with the `Loop result:` line the
- * run never wrote, so pick counts the attempt. A ticket without any claim is a session's and
- * stays. One ticket failing does not stop the gate; it is reported and tried again next time.
+ * the loop itself started (`deadClaims`) whose every claim is dead goes back where a lap can
+ * take it: Review when an open pull request names it, else To Do, with the `Loop result:`
+ * line the run never wrote, so pick counts the attempt. A ticket without such a claim is a
+ * session's and stays. One ticket failing does not stop the gate; it is reported and tried
+ * again next time.
  */
 async function recoverOrphans(client: Jira): Promise<string[]> {
   const c = client.config;
   const lines: string[] = [];
-  const named = new Set(pulls.flatMap(pull => jiraLinks(c.project).references(pull.body)));
   const stuck = await client.search(
     `project = ${c.project} AND status = ${c.status.progress} AND assignee = "${c.assignee}"`,
-    ['status']
+    ['status', 'statuscategorychangedate']
   );
+  let rows: PrRow[] | undefined;
   for (const row of stuck) {
     const key = String(row.key);
     try {
-      const dead = deadClaims(await client.comments(key), hours, Date.now(), endedRuns);
-      if (dead.length === 0) continue;
-      const status = named.has(key) ? c.status.review : c.status.todo;
-      // The status first: with the claims still on it, a failure here is found again next time.
-      await client.move(key, status);
-      const name = status === c.status.review ? 'Review' : 'To Do';
-      for (const claim of dead) {
-        await client.comment(key, `Loop result: run ${claim.run}. PR: nicht bekannt. Status: ${name}. (Vom Scheduler: der Lauf endete ohne Abschluss.)`);
-        await client.editComment(key, claim.id, released(claim.run));
+      const fields = (row.fields ?? {}) as Record<string, unknown>;
+      const changed = fields.statuscategorychangedate;
+      const startedAt = typeof changed === 'string' ? Date.parse(changed) : Number.NaN;
+      const all = await client.comments(key);
+      const dead = deadClaims(all, hours, Date.now(), endedRuns, startedAt);
+      const holder = dead[0];
+      if (holder === undefined) continue;
+      rows ??= gh(['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'url,title,body,updatedAt,isCrossRepository']) as PrRow[];
+      const pr = ticketPr(rows, key, c.project);
+      const status = pr !== '' ? c.status.review : c.status.todo;
+      const name = pr !== '' ? 'Review' : 'To Do';
+      // In an order a failure can be picked up from: while the ticket is In Progress with its
+      // claims on it, the next gate finds it again, so the move comes after the line pick
+      // counts (written once) and the claims go last.
+      if (!all.some(comment => comment.body.startsWith(`Loop result: run ${holder.run}.`))) {
+        await client.comment(
+          key,
+          `Loop result: run ${holder.run}. PR: ${pr !== '' ? pr : 'kein PR'}. Status: ${name}. (Vom Scheduler: der Lauf endete ohne Abschluss.)`
+        );
       }
+      await client.move(key, status);
+      for (const claim of dead) await client.editComment(key, claim.id, released(claim.run));
       lines.push(`${key}: back to ${name}, ${dead.length} dead claim(s) released`);
     } catch (error) {
       lines.push(`${key}: could not recover (${error instanceof Error ? error.message : String(error)})`);

@@ -14,8 +14,9 @@
  * release only runs for a held claim and the ticket would stay blocked until the claim expired.
  *
  * Pick is an agent, and the ticket it names is checked like its outbox writes (decision 11):
- * it must be on this lap's snapshot and still the loop's in Jira (`writableNow`). Any other
- * ticket, the owner's or one a session works on, is not claimed and the lap does no work.
+ * it must be on this lap's snapshot, still the loop's in Jira (`writableNow`) and not flagged,
+ * and a pull request it names must not belong to a ticket that is someone else's (`prRefusal`).
+ * Anything else, the owner's or a session's, is not claimed and the lap does no work.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -33,7 +34,7 @@ import {
 } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
-import { clearOutbox, writableNow } from '../../.shared/outbox.ts';
+import { clearOutbox, type PrText, prKeys, prRefusal, writableNow } from '../../.shared/outbox.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
@@ -46,6 +47,8 @@ if (run === '') throw new Error('claim: WORKFLOW_ID is not set; the engine suppl
 const config = trackerConfig();
 const item = workItem(target !== '' ? target : pr, config);
 const jira = config !== null && item.kind === 'ticket' ? new Jira(config) : undefined;
+// The pull request the lap continues: named beside the ticket, or itself the target.
+const pull = pr !== '' ? pr : item.kind === 'github' ? target : '';
 
 /** Take this run's claim back; a failure to do so must not hide the error that led here. */
 async function withdraw(id: number, why: string): Promise<void> {
@@ -60,15 +63,38 @@ const reason = (error: unknown): string => (error instanceof Error ? error.messa
 
 let claims = await liveClaims(item, hours, Date.now(), jira);
 let mine = claims.find(claim => claim.run === run);
-// A claim of this run already on the ticket passed this check when it was posted.
-const refused =
-  mine === undefined && jira !== undefined && item.kind === 'ticket' && !(await writableNow(jira, runState(), item.key)).has(item.key);
-if (refused) {
-  emit({
-    held: 'false',
-    holder: '',
-    reason: `${target} is not the loop's to work on: not on this lap's board, or no longer assigned to the loop on To Do or Review; this run does no work this lap`,
-  });
+
+/** Why pick's choice is not the loop's to work on, or null. Jira only; GitHub has no such rule. */
+async function refusal(): Promise<string | null> {
+  if (config === null) return null;
+  const client = jira ?? new Jira(config);
+  const state = runState();
+  const key = item.kind === 'ticket' ? item.key : null;
+  if (key !== null) {
+    if (!(await writableNow(client, state, key)).has(key)) {
+      return `${key} is not on this lap's board, or no longer assigned to the loop on To Do or Review`;
+    }
+    // The launch rule leaves a flagged ticket alone; a flag pick lifted this lap is already off.
+    if ((await client.ticket(key)).flagged) return `${key} is flagged: a question to the owner is open`;
+  }
+  if (pull === '') return null;
+  const view = Bun.spawnSync(['gh', 'pr', 'view', pull, '--json', 'title,body'], { stdout: 'pipe', stderr: 'pipe' });
+  if (view.exitCode !== 0) throw new Error(`claim: gh pr view ${pull} failed: ${view.stderr.toString().trim()}`);
+  const text = JSON.parse(view.stdout.toString()) as PrText;
+  const others = prKeys(text, config.project).filter(named => named !== key);
+  const statuses = new Map<string, string>();
+  if (others.length > 0) {
+    for (const row of await client.search(`key in (${others.join(',')})`, ['status'])) {
+      statuses.set(client.toTicket(row, false).key, client.toTicket(row, false).status);
+    }
+  }
+  return prRefusal(text, key, statuses, await writableNow(client, state), config);
+}
+
+// A claim of this run already on the item passed this check when it was posted.
+const refused = mine === undefined ? await refusal() : null;
+if (refused !== null) {
+  emit({ held: 'false', holder: '', reason: `${refused}; this run does no work this lap` });
 } else {
   if (mine === undefined) {
     const body = [

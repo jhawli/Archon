@@ -118,16 +118,25 @@ export async function liveClaims(
   return claims.sort((left, right) => left.id - right.id);
 }
 
+/** A holding run moves its ticket to In Progress this soon after its claim: 5 s to settle, a few reads, one move. */
+const CLAIM_TO_START_MS = 10 * 60_000;
+
 /**
- * The claims on an item that no run stands behind any more, or none while one may still be
- * working: a claim is dead once the scheduler names its run as ended or it is past the expiry.
- * Released and withdrawn claims are not claims (their text was edited).
+ * The claims on a ticket In Progress that no run stands behind any more, newest first, or
+ * none: a claim is dead once the scheduler names its run as ended or it is past the expiry,
+ * and one claim that may still be worked on keeps them all. Released and withdrawn claims are
+ * not claims (their text was edited).
+ *
+ * `startedAt` is when the ticket went to In Progress. Only a ticket a claiming run put there
+ * is the loop's to take back: the newest claim must sit just before that moment. A stale
+ * claim on a ticket a session started hours later proves nothing about who works on it.
  */
 export function deadClaims(
   rows: readonly ItemComment[],
   expiryHours: number,
   now: number,
-  ended: ReadonlySet<string>
+  ended: ReadonlySet<string>,
+  startedAt: number
 ): Claim[] {
   const claims = rows
     .filter(row => row.body.startsWith(CLAIM_PREFIX))
@@ -138,7 +147,11 @@ export function deadClaims(
     }));
   const dead = (claim: Claim): boolean =>
     ended.has(claim.run) || Number.isNaN(claim.createdAt) || now - claim.createdAt > expiryHours * 3_600_000;
-  return claims.every(dead) ? claims : [];
+  if (claims.length === 0 || !claims.every(dead)) return [];
+  const newest = [...claims].sort((left, right) => right.id - left.id);
+  const lead = startedAt - (newest[0]?.createdAt ?? Number.NaN);
+  // NaN (no start time, no claim time) fails both comparisons: nothing is taken back.
+  return lead >= -5000 && lead <= CLAIM_TO_START_MS ? newest : [];
 }
 
 export async function postComment(item: WorkItem, body: string, jira?: ClaimClient): Promise<number> {

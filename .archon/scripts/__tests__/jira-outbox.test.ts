@@ -10,6 +10,9 @@ import {
   checkOutbox,
   clearOutbox,
   outboxFile,
+  outboxProgress,
+  prKeys,
+  prRefusal,
   readOutbox,
   snapshotKeys,
   writableJql,
@@ -246,7 +249,7 @@ describe('outbox apply', () => {
   });
   it('cancel that cannot move the ticket leaves no comment saying it was canceled', async () => {
     const { jira, calls } = fakeJira({ failOnce: 'POST /rest/api/3/issue/CONC-6/transitions' });
-    const run = applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt' }], RUN, state(), 'pick');
+    const run = applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt' }], RUN, state(), { writer: 'pick', raw: 'cancel' });
     expect(run).rejects.toThrow('400');
     await run.catch(() => undefined);
     expect(steps(calls)).not.toContain('POST /rest/api/3/issue/CONC-6/comment');
@@ -258,26 +261,34 @@ describe('outbox apply', () => {
       { op: 'comment', key: 'CONC-5', text: 'Erster' },
       { op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' },
     ];
-    await applyOutbox(jira, ops, RUN, dir, 'pick').catch(() => undefined);
+    await applyOutbox(jira, ops, RUN, dir, { writer: 'pick', raw: ops }).catch(() => undefined);
     expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-5/comment', 'PUT /rest/api/3/issue/CONC-6']);
     calls.length = 0;
-    await applyOutbox(jira, ops, RUN, dir, 'pick');
+    await applyOutbox(jira, ops, RUN, dir, { writer: 'pick', raw: ops });
     expect(steps(calls)).toEqual(['PUT /rest/api/3/issue/CONC-6', 'POST /rest/api/3/issue/CONC-6/comment']);
     expect(existsSync(join(dir, 'progress-pick.json'))).toBe(false);
   });
   it('progress counts only for the same list: another list starts at its first entry', async () => {
     const { jira, calls } = fakeJira({ failOnce: 'PUT /rest/api/3/issue/CONC-6' });
     const dir = state();
-    await applyOutbox(
-      jira,
-      [{ op: 'comment', key: 'CONC-5', text: 'Erster' }, { op: 'unflag', key: 'CONC-6', text: 'x' }],
-      RUN,
-      dir,
-      'pick'
-    ).catch(() => undefined);
+    const first: Op[] = [{ op: 'comment', key: 'CONC-5', text: 'Erster' }, { op: 'unflag', key: 'CONC-6', text: 'x' }];
+    await applyOutbox(jira, first, RUN, dir, { writer: 'pick', raw: first }).catch(() => undefined);
+    expect(outboxProgress(dir, 'pick', first)).toBe(1);
+    const other: Op[] = [{ op: 'comment', key: 'CONC-5', text: 'Anderer' }];
+    expect(outboxProgress(dir, 'pick', other)).toBe(0);
     calls.length = 0;
-    await applyOutbox(jira, [{ op: 'comment', key: 'CONC-5', text: 'Anderer' }], RUN, dir, 'pick');
+    await applyOutbox(jira, other, RUN, dir, { writer: 'pick', raw: other });
     expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-5/comment']);
+  });
+  it('a rerun does not ask the board again about entries it already wrote: a cancel took its ticket off it', () => {
+    const list = [
+      { op: 'cancel', key: 'CONC-9', text: 'Doppelt' },
+      { op: 'comment', key: 'CONC-5', text: 'Weiter' },
+    ];
+    const board = new Set(['CONC-5']);
+    expect(() => checkOutbox(list, 'pick', null, 'CONC', board)).toThrow('CONC-9 is not on this lap');
+    expect(checkOutbox(list, 'pick', null, 'CONC', board, 1)).toHaveLength(2);
+    expect(() => checkOutbox(list, 'pick', null, 'CONC', new Set(), 1)).toThrow('CONC-5 is not on this lap');
   });
   it('create: a new ticket with its marker, linked, on To Do, in the open sprint', async () => {
     const { jira, calls } = fakeJira({ sprint: 7 });
@@ -309,11 +320,11 @@ describe('outbox apply', () => {
     const { jira, calls } = fakeJira({ sprint: 7, failOnce: 'POST /rest/api/3/issue/CONC-51/remotelink' });
     const dir = state();
     const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest von CONC-5', text: 'Was fehlt' };
-    await applyOutbox(jira, [op], RUN, dir, 'review').catch(() => undefined);
+    await applyOutbox(jira, [op], RUN, dir, { writer: 'review', raw: [op] }).catch(() => undefined);
     expect(readCreated(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
     expect(readFinished(dir)).toEqual({});
     calls.length = 0;
-    expect(await applyOutbox(jira, [op], RUN, dir, 'review')).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(await applyOutbox(jira, [op], RUN, dir, { writer: 'review', raw: [op] })).toEqual({ 'rest-conc-5': 'CONC-51' });
     expect(steps(calls)).toEqual([
       'POST /rest/api/3/issue/CONC-51/remotelink',
       'GET /rest/api/3/issue/CONC-51',
@@ -372,6 +383,35 @@ describe('what pick may touch right now', () => {
   it('no snapshot, nothing writable', async () => {
     const { jira } = fakeJira({ found: ['CONC-5'] });
     expect((await writableNow(jira, state(), 'CONC-5')).size).toBe(0);
+  });
+});
+
+describe('a pull request pick wants the lap to continue', () => {
+  const pr = (title: string, body = ''): { title: string; body: string } => ({ title, body });
+  const none = new Map<string, string>();
+  it('names its tickets by the key its title opens with and by Refs and Closes', () => {
+    expect(prKeys(pr('CONC-5 Sync', 'Refs CONC-6\nCloses CONC-5'), 'CONC').sort()).toEqual(['CONC-5', 'CONC-6']);
+    expect(prKeys(pr('Bump deps'), 'CONC')).toEqual([]);
+  });
+  it('is fine when it names the lap’s ticket and nothing that is someone else’s', () => {
+    expect(prRefusal(pr('CONC-5 Sync', 'Refs CONC-5'), 'CONC-5', none, new Set(['CONC-5']), CFG)).toBeNull();
+  });
+  it('is refused when it does not name the lap’s ticket', () => {
+    expect(prRefusal(pr('CONC-9 Anderes', 'Refs CONC-9'), 'CONC-5', none, new Set(['CONC-5', 'CONC-9']), CFG)).toContain(
+      'does not name CONC-5'
+    );
+  });
+  it('is refused when it also names a ticket a session works on', () => {
+    const statuses = new Map([['CONC-9', CFG.status.progress]]);
+    expect(prRefusal(pr('CONC-5 Sync', 'Refs CONC-5\nRefs CONC-9'), 'CONC-5', statuses, new Set(['CONC-5']), CFG)).toContain('CONC-9');
+  });
+  it('a pull request alone, naming a ticket that is not the loop’s, is refused; one Jira does not report counts as open', () => {
+    expect(prRefusal(pr('CONC-9 Session', ''), null, none, new Set(['CONC-5']), CFG)).toContain('CONC-9');
+  });
+  it('a delivered or canceled ticket it names binds nobody, and a pull request naming no ticket is fine', () => {
+    const statuses = new Map([['CONC-3', CFG.status.staging], ['CONC-4', CFG.status.canceled]]);
+    expect(prRefusal(pr('CONC-5 Sync', 'Refs CONC-3, CONC-4'), 'CONC-5', statuses, new Set(['CONC-5']), CFG)).toBeNull();
+    expect(prRefusal(pr('Bump deps'), null, none, new Set(), CFG)).toBeNull();
   });
 });
 

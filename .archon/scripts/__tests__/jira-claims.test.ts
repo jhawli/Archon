@@ -157,24 +157,40 @@ describe('claims on a ticket', () => {
 });
 
 describe('claims no run stands behind', () => {
-  const row = (id: number, body: string, at = NOW - 3_600_000): { id: number; body: string; createdAt: number } => ({
+  const HOUR = 3_600_000;
+  const row = (id: number, body: string, at = NOW - HOUR): { id: number; body: string; createdAt: number } => ({
     id,
     body,
     createdAt: at,
   });
+  /** The ticket went to In Progress 20 s after the claim, as a holding run does it. */
+  const STARTED = NOW - HOUR + 20_000;
   it('a claim of a run the scheduler names as ended is dead', () => {
-    expect(deadClaims([row(1, 'Loop claim: run aaa\n\nRoute: simple')], 6, NOW, new Set(['aaa'])).map(c => c.run)).toEqual(['aaa']);
+    const rows = [row(1, 'Loop claim: run aaa\n\nRoute: simple')];
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']), STARTED).map(c => c.run)).toEqual(['aaa']);
   });
   it('a claim past the expiry is dead', () => {
-    expect(deadClaims([row(1, 'Loop claim: run aaa', NOW - 7 * 3_600_000)], 6, NOW, new Set())).toHaveLength(1);
+    const at = NOW - 7 * HOUR;
+    expect(deadClaims([row(1, 'Loop claim: run aaa', at)], 6, NOW, new Set(), at + 20_000)).toHaveLength(1);
   });
   it('one claim that may still be worked on keeps every claim on the ticket', () => {
     const rows = [row(1, 'Loop claim: run aaa'), row(2, 'Loop claim: run bbb')];
-    expect(deadClaims(rows, 6, NOW, new Set(['aaa']))).toEqual([]);
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']), STARTED)).toEqual([]);
   });
   it('a ticket without a claim is a session’s: nothing to recover', () => {
     const rows = [row(1, 'Loop claim released: run aaa ended.'), row(2, 'Ich arbeite daran')];
-    expect(deadClaims(rows, 6, NOW, new Set(['aaa']))).toEqual([]);
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa']), STARTED)).toEqual([]);
+  });
+  it('a stale claim on a ticket a session started hours later is not the loop’s to take back', () => {
+    const rows = [row(1, 'Loop claim: run aaa', NOW - 9 * HOUR)];
+    expect(deadClaims(rows, 6, NOW, new Set(), NOW - HOUR)).toEqual([]);
+  });
+  it('without the time the ticket was started nothing is taken back', () => {
+    expect(deadClaims([row(1, 'Loop claim: run aaa')], 6, NOW, new Set(['aaa']), Number.NaN)).toEqual([]);
+  });
+  it('the newest claim comes first: its run is the one that held the ticket', () => {
+    const rows = [row(1, 'Loop claim: run aaa', NOW - HOUR - 60_000), row(2, 'Loop claim: run bbb')];
+    expect(deadClaims(rows, 6, NOW, new Set(['aaa', 'bbb']), STARTED).map(c => c.run)).toEqual(['bbb', 'aaa']);
   });
 });
 

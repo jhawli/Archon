@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, statusName } from './claims.ts';
 import { note } from './io.ts';
 import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
+import { namesTicket, referencedKeys } from './tickets.ts';
 
 export type Op =
   | { readonly op: 'comment'; readonly key: string; readonly text: string }
@@ -64,14 +65,17 @@ export function readOutbox(path: string): unknown {
 /**
  * The checked writes. `target` is the lap's ticket key (null when the lap works a pull
  * request alone); build and review write only to it. `onBoard` are the keys pick may write
- * to (`writableKeys` of this lap's snapshot).
+ * to (`writableKeys` of this lap's snapshot). `done` entries were already written by an earlier
+ * try of this same list (`outboxProgress`); they passed the board check then and are not asked
+ * again, since the write itself may have taken the ticket off the board (a cancel).
  */
 export function checkOutbox(
   raw: unknown,
   writer: Writer,
   target: string | null,
   project: string,
-  onBoard: ReadonlySet<string>
+  onBoard: ReadonlySet<string>,
+  done = 0
 ): Op[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) throw new Error(`${writer} outbox must be a JSON list`);
@@ -101,7 +105,7 @@ export function checkOutbox(
     if (typeof e.key !== 'string' || !keyOk.test(e.key)) throw new Error(`${where}: key must be a ${project} ticket`);
     if ((e.op === 'cancel' || e.op === 'unflag') && writer !== 'pick') throw new Error(`${where}: ${writer} may not ${e.op}`);
     if (writer !== 'pick' && e.key !== target) throw new Error(`${where}: ${writer} writes only to ${target ?? 'its target'}`);
-    if (writer === 'pick' && !onBoard.has(e.key)) throw new Error(`${where}: ${e.key} is not on this lap's board`);
+    if (writer === 'pick' && i >= done && !onBoard.has(e.key)) throw new Error(`${where}: ${e.key} is not on this lap's board`);
     if (reserved(text, writer)) throw new Error(`${where}: the text opens like a loop record, which is reserved`);
     return { op: e.op, key: e.key, text };
   });
@@ -157,29 +161,75 @@ export async function writableNow(jira: Jira, state: string, only?: string): Pro
   return new Set((await jira.search(jql, ['status'])).map(row => String(row.key)));
 }
 
+const progressFile = (state: string, writer: Writer): string => join(state, `progress-${writer}.json`);
+const listDigest = (raw: unknown): string => createHash('sha256').update(JSON.stringify(raw)).digest('hex');
+
+/**
+ * How many entries of this very list (`raw`, as read from the outbox file) an earlier try
+ * already wrote. Another list of the same writer starts at its first entry.
+ */
+export function outboxProgress(state: string, writer: Writer, raw: unknown): number {
+  const path = progressFile(state, writer);
+  if (!existsSync(path)) return 0;
+  const kept = JSON.parse(readFileSync(path, 'utf8')) as { digest?: unknown; done?: unknown };
+  return kept.digest === listDigest(raw) && typeof kept.done === 'number' ? kept.done : 0;
+}
+
+/** A pull request as `gh pr view --json title,body` reports it. */
+export interface PrText {
+  readonly title: string;
+  readonly body: string;
+}
+
+/**
+ * Why the loop must not work on the pull request pick named, or null when it may. On Jira a
+ * pull request is someone's work on the tickets it names, so every open ticket it names has
+ * to be the loop's to touch (`writable`), and it has to name the lap's ticket when there is
+ * one. `statuses` are the named tickets' status ids; a ticket Jira does not report counts as
+ * open, a delivered or canceled one binds nobody.
+ */
+export function prRefusal(
+  pr: PrText,
+  target: string | null,
+  statuses: ReadonlyMap<string, string>,
+  writable: ReadonlySet<string>,
+  config: TrackerConfig
+): string | null {
+  if (target !== null && !namesTicket(pr, target, config.project)) {
+    return `the pull request does not name ${target}`;
+  }
+  const done = new Set([config.status.staging, config.status.live, config.status.canceled]);
+  const foreign = prKeys(pr, config.project).filter(
+    key => key !== target && !writable.has(key) && !done.has(statuses.get(key) ?? '')
+  );
+  return foreign.length > 0 ? `the pull request names ${foreign.join(', ')}, which is not the loop's to work on` : null;
+}
+
+/** The tickets a pull request names: the key its title opens with, and its `Refs`/`Closes`. */
+export function prKeys(pr: PrText, project: string): string[] {
+  const lead = new RegExp(`^\\[?(${project}-[1-9]\\d*)\\b`).exec(pr.title.trim())?.[1];
+  return [...new Set([...(lead === undefined ? [] : [lead]), ...referencedKeys(pr.body, project)])];
+}
+
 /**
  * Apply checked writes. Returns marker → key for the tickets this outbox filed or found.
  *
- * With `writer`, how far the list got is kept in the run's state directory, so a rerun after
- * a failure goes on behind the last write that worked and repeats no comment. The record
- * counts only for this very list; another list of the same writer starts at its first entry.
+ * With `resume` (the writer and its list as read), how far the list got is kept in the run's
+ * state directory, so a rerun after a failure goes on behind the last write that worked and
+ * repeats no comment.
  */
 export async function applyOutbox(
   jira: Jira,
   ops: readonly Op[],
   runUrl: string,
   state: string,
-  writer?: Writer
+  resume?: { readonly writer: Writer; readonly raw: unknown }
 ): Promise<Record<string, string>> {
   const c = jira.config;
   const created: Record<string, string> = {};
-  const digest = createHash('sha256').update(JSON.stringify(ops)).digest('hex');
-  const progress = writer === undefined ? null : join(state, `progress-${writer}.json`);
-  let done = 0;
-  if (progress !== null && existsSync(progress)) {
-    const kept = JSON.parse(readFileSync(progress, 'utf8')) as { digest?: unknown; done?: unknown };
-    if (kept.digest === digest && typeof kept.done === 'number') done = kept.done;
-  }
+  const digest = resume === undefined ? '' : listDigest(resume.raw);
+  const progress = resume === undefined ? null : progressFile(state, resume.writer);
+  const done = resume === undefined ? 0 : outboxProgress(state, resume.writer, resume.raw);
   for (const [index, op] of ops.entries()) {
     if (op.op === 'create') {
       // Always asked, also behind the progress mark: it finds its own ticket and returns its key.
