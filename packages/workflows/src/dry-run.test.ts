@@ -1991,6 +1991,52 @@ describe('dryRunWorkflow', () => {
     expect(result.trace[1]?.resolvedText).toBe('finish fresh');
   });
 
+  test('resolves $LOOP_PREV in loop-group body bindings and conditions like the executor', async () => {
+    // The executor splices `$LOOP_PREV.<id>.output` into every body field before an
+    // iteration runs ('' on iteration 1) and hands the previous iteration's snapshot to
+    // `when:`. A preview that skips this hands a script the literal token instead.
+    const workflow = makeTestWorkflow({
+      name: 'loop-group-prev',
+      nodes: [
+        {
+          id: 'group',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            nodes: [
+              {
+                id: 'count',
+                script:
+                  'const p = (process.env.INPUTS_PREVIOUS ?? "unset").trim(); console.log(p === "" ? "one" : p === "one" ? "DONE" : `bad:${p}`)',
+                runtime: 'bun' as const,
+                with: { previous: '$LOOP_PREV.count.output' },
+              },
+              { id: 'note', bash: 'printf noted', when: "$LOOP_PREV.count.output == 'one'" },
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: process.cwd(),
+      execCode: true,
+    });
+
+    expect(result.outcome).toBe('completed');
+    expect(
+      result.trace.map(entry => [entry.nodeId, entry.iteration, entry.state, entry.output])
+    ).toEqual([
+      ['count', 1, 'completed', 'one'],
+      ['note', 1, 'skipped', undefined],
+      ['count', 2, 'completed', 'DONE'],
+      ['note', 2, 'completed', 'noted'],
+      ['group', undefined, 'completed', 'DONE'],
+    ]);
+  });
+
   test('represents cancellation and unsupported subworkflows visibly', async () => {
     const cancelled = makeTestWorkflow({
       name: 'cancel',

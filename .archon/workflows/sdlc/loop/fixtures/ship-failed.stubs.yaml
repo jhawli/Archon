@@ -1,6 +1,6 @@
-# Dry-run fixture: ship fails at its green gate (run with --exec-code: the real gate
-# refuses). check-app joins with all_done, so both reviewers still run and the
-# reviewer records the attempt on the work item instead of a silent failed run.
+# Dry-run fixture: ship fails at its forge check, before triage. check-app joins with
+# all_done, so both reviewers still run and the reviewer records the attempt on the
+# work item instead of a silent failed run.
 pick:
   route: complex
   target: https://example.atlassian.net/browse/CONC-6
@@ -9,34 +9,9 @@ pick:
   depth: normal
   area: app/
   reason: 'stub: tags need a migration and search across modules'
-ship__triage__triage:
-  contract: READY
-  route: deliver
-  design_first: false
-  complexity: small
-  item:
-    repo:
-      host: ''
-      path: ''
-    number: 0
-  area_labels: []
-  proposed_edits:
-    title: ''
-    body: ''
-  blocked_reason: ''
-  blocked_by: []
-  summary: 'stub: current code confirms a complete work order'
-  report:
-    type: archon_artifact
-    run_id: fixture-run
-    path: triage.md
-ship__gate-direct: '{"gate":"direct"}'
-ship__deliver__impl__implement:
-  done: true
-  green: false
-  red_cause: ''
-  summary: 'stub: criterion 2 cannot be met as written'
-ship__deliver__impl__assert-changed: 2 files changed
+# Ship's first node refuses the run before any agent spends. The stub breaks the
+# node's output contract, which fails the node the way a refusing forge check does.
+ship__forge: { source: refused }
 subject:
   pr: ""
   head: ""
@@ -63,7 +38,7 @@ review:
   delivers: none
   dispositions: []
   judge_changes: []
-  reason: 'stub: ship stopped at its green gate'
+  reason: 'stub: ship stopped at its forge check'
 claim:
   held: "true"
   holder: fixture-run
@@ -87,7 +62,7 @@ write-build: *no-writes
 write-review: *no-writes
 fixture:
   expect: failed
-  fail-node: ship__deliver__gate-green
+  fail-node: ship__forge
   reached:
   - tracker-read
   - pick
@@ -101,5 +76,5 @@ fixture:
   - write-review
   - release
   resolved-text-contains:
-    review: "the pipeline stopped before publishing"
+    review: "handoff/app-check.json"
 exec-code: true

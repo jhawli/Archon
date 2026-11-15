@@ -1500,7 +1500,7 @@ export function substituteNodeOutputRefs(
  * outer granularity — see {@link applyLoopPrevToBodyNode}). Including descendants keeps
  * such real-but-empty refs lenient while still catching ids that exist nowhere.
  */
-function collectLoopBodyNodeIds(
+export function collectLoopBodyNodeIds(
   nodes: readonly (DagNode | IncludeDirective)[],
   into: Set<string> = new Set<string>()
 ): Set<string> {

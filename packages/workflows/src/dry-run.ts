@@ -7,8 +7,10 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import {
+  applyLoopPrevToBodyNode,
   checkComposedBlockBoundaries,
   checkTriggerRule,
+  collectLoopBodyNodeIds,
   resolveNodeBindings,
   substituteNodeOutputRefs,
   type ShellInputContext,
@@ -559,6 +561,12 @@ interface DryRunContext {
   /** Always a subset of `missingStubs` — see {@link dryRunResultSchema}'s field doc. */
   toleratedMissingStubs: Set<string>;
   halted?: 'paused' | 'cancelled';
+  /**
+   * The previous iteration's body outputs while a loop_group body simulates, for
+   * `$LOOP_PREV` in `when:` — the snapshot the executor hands `runLayers` (empty on
+   * iteration 1). Undefined outside a loop_group body.
+   */
+  loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
   /** Workflow-level provider/model fallbacks, for the per-node resolution report. */
   scope: WorkflowModelScope;
   assistantModels: Readonly<Record<string, string | undefined>>;
@@ -1028,7 +1036,10 @@ async function simulateLoopGroup(
 ): Promise<void> {
   if (!isLoopGroupNode(node)) return;
   const bodyNodes = resolvedBodyNodes(node.loop_group);
-  const bodyPlan = planGraph(bodyNodes);
+  // Same id sets the executor threads into every `$LOOP_PREV` splice: a ref to an id of
+  // no body node is a typo, a ref owned by a nested group stays for that group's pass.
+  const knownBodyIds = collectLoopBodyNodeIds(bodyNodes);
+  const directBodyIds = new Set(bodyNodes.map(body => body.id));
   // The executor builds the body's per-iteration context from the group's OWN resolved
   // provider and model (dag-executor.ts), so the body must simulate against those rather
   // than the enclosing workflow's scope. Everything the executor leaves alone — the
@@ -1050,15 +1061,28 @@ async function simulateLoopGroup(
   // Restoring in `finally` keeps the group's own trace entry on the enclosing scope and
   // nests correctly when a body contains another loop_group.
   const outerScope = ctx.scope;
+  const outerLoopPrev = ctx.loopPrevOutputs;
   let lastOutput = '';
+  // The executor splices `$LOOP_PREV.<id>.output[.field]` into every body field before an
+  // iteration runs — prompts, shell, and `with:` bindings alike, '' on iteration 1 — and
+  // hands `when:` the same snapshot. Without the splice a script would read the literal
+  // token. No `$LOOP_USER_INPUT` here: only an interactive resume carries one.
+  let prevSnapshot: Map<string, NodeOutput> | undefined;
   for (let current = 1; current <= node.loop_group.max_iterations; current++) {
+    const iterBodyNodes = bodyNodes.map(body =>
+      applyLoopPrevToBodyNode(body, prevSnapshot, '', undefined, knownBodyIds, directBodyIds)
+    );
+    const bodyPlan = planGraph(iterBodyNodes);
     const bodyOutputs = new Map(outputs);
     ctx.scope = bodyScope;
+    ctx.loopPrevOutputs = prevSnapshot ?? new Map();
     try {
       await simulateNodes(bodyPlan, bodyOutputs, ctx, current);
     } finally {
       ctx.scope = outerScope;
+      ctx.loopPrevOutputs = outerLoopPrev;
     }
+    prevSnapshot = new Map(bodyOutputs);
     lastOutput =
       bodyPlan.sinks
         .map(bodyId => bodyOutputs.get(bodyId))
@@ -1122,7 +1146,9 @@ async function simulateNode(
     try {
       // `ctx.inputs` mirrors the executor's `resolveRunInputs` (#2610): a `when:`
       // referencing `$INPUTS.<name>` branches on the same effective map a real run reads.
-      const condition = evaluateCondition(node.when, outputs, ctx.inputs);
+      const condition = evaluateCondition(node.when, outputs, ctx.inputs, {
+        loopPrevOutputs: ctx.loopPrevOutputs,
+      });
       if (!condition.parsed) {
         recordSkipped(
           node,

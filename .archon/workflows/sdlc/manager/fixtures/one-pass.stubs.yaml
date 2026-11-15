@@ -1,5 +1,7 @@
 # Dry-run fixture: one manager pass, with the runtime instructions in its prompt.
 tracker-guard: ""
+# The holdout briefs copy is a script with no decision in it.
+briefs: ""
 manage: "Closed 2 duplicates; no owner questions."
 fixture:
   expect: completed
