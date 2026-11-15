@@ -1,0 +1,24 @@
+# Dry-run fixture: a Jira ticket duplicates another ticket. A ticket is not a GitHub
+# item, so `original` is the empty value and `closure.url` the original ticket's URL;
+# the verdict derives archon-close and the run completes.
+triage:
+  decision:
+    contract: NO_ACTION
+    closure:
+      kind: duplicate
+      url: "https://example.atlassian.net/browse/CONC-41"
+      original: { repo: { host: "", path: "" }, number: 0 }
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: s, reason: "stub: size" }
+  complexity: { value: low, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  related: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: CONC-41 asks for the same outcome"
+fixture:
+  expect: completed
+  reached: [verdict]
+exec-code: true

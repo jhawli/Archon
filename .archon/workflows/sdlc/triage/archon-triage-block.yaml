@@ -115,19 +115,36 @@ nodes:
                       properties:
                         kind: { type: string, enum: [duplicate] }
                         url: { type: string, pattern: '\S' }
-                        original: &item_ref
-                          type: object
-                          additionalProperties: false
-                          properties:
-                            repo:
+                        # A Jira ticket is no GitHub item: its original is the empty
+                        # value and `url` the original ticket's URL (the verdict refuses
+                        # the empty value for a GitHub URL).
+                        original:
+                          anyOf:
+                            - &item_ref
                               type: object
-                              properties:
-                                host: { type: string, pattern: '\S' }
-                                path: { type: string, pattern: '\S' }
-                              required: [host, path]
                               additionalProperties: false
-                            number: { type: integer, minimum: 1 }
-                          required: [repo, number]
+                              properties:
+                                repo:
+                                  type: object
+                                  properties:
+                                    host: { type: string, pattern: '\S' }
+                                    path: { type: string, pattern: '\S' }
+                                  required: [host, path]
+                                  additionalProperties: false
+                                number: { type: integer, minimum: 1 }
+                              required: [repo, number]
+                            - type: object
+                              additionalProperties: false
+                              properties:
+                                repo:
+                                  type: object
+                                  properties:
+                                    host: { type: string, enum: [''] }
+                                    path: { type: string, enum: [''] }
+                                  required: [host, path]
+                                  additionalProperties: false
+                                number: { type: integer, enum: [0] }
+                              required: [repo, number]
                       required: [kind, url, original]
                     - &delivered_closure
                       type: object

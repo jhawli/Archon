@@ -12,11 +12,14 @@ import {
   readAppCheck,
   recordRefusals,
   shipFailuresInLog,
+  trackingRefs,
   untestedMerge,
   type CheckLine,
   type CitedFile,
   type Proofs,
+  type TrackingReaders,
 } from '../../workflows/sdlc/.shared/merge-gate';
+import type { TrackerConfig } from '../../workflows/sdlc/.shared/jira';
 import { protectedFiles } from '../../workflows/sdlc/.shared/protected-paths';
 
 const pack = resolve(import.meta.dir, '../../workflows/sdlc');
@@ -436,5 +439,102 @@ describe('holdouts behind a fence', () => {
     expect(isApprovalLink('Owner decision on #74')).toBe(false);
     expect(isApprovalLink('see https://github.com/o/r/issues/74')).toBe(false);
     expect(isApprovalLink('https://example.com/o/r/issues/74')).toBe(false);
+  });
+});
+
+describe('the merge gate with Jira', () => {
+  const SITE = 'https://example.atlassian.net';
+  const CFG: TrackerConfig = {
+    kind: 'jira',
+    site: SITE,
+    project: 'CONC',
+    board: 5,
+    keychain: 'none',
+    assignee: 'acc-archon',
+    owner: 'acc-julian',
+    status: { todo: '10015', progress: '3', review: '10016', staging: '10017', live: '10018', canceled: '10008' },
+    flagField: 'customfield_10021',
+    flagOn: '10019',
+    sprintField: 'customfield_10020',
+  };
+
+  it('a Jira ticket URL tracks a pre-existing failure only while it is open', () => {
+    expect(isTrackingIssue({ state: 'OPEN', url: `${SITE}/browse/CONC-41` })).toBe(true);
+    expect(isTrackingIssue({ state: 'CLOSED', url: `${SITE}/browse/CONC-41` })).toBe(false);
+    expect(isTrackingIssue({ state: 'OPEN', url: `${SITE}/browse/CONC-41?focusedCommentId=1` })).toBe(false);
+  });
+
+  it('an owner comment on a Jira ticket is an approval link only on the configured site', () => {
+    const link = `${SITE}/browse/CONC-5?focusedCommentId=10042`;
+    expect(isApprovalLink(link, SITE)).toBe(true);
+    expect(isApprovalLink(`${SITE}/browse/CONC-5`, SITE)).toBe(true);
+    // The label a reviewer adds after the link (mission control #102/#145) holds here too.
+    expect(isApprovalLink(`${link} (Owner decision, 2026-11-15)`, SITE)).toBe(true);
+    expect(isApprovalLink('https://evil.example/browse/CONC-5?focusedCommentId=1', SITE)).toBe(false);
+    // The site's dots are literal: a look-alike host is not the site.
+    expect(isApprovalLink('https://example-atlassian-net/browse/CONC-5?focusedCommentId=1', SITE)).toBe(false);
+    expect(isApprovalLink(`${SITE}.evil.example/browse/CONC-5`, SITE)).toBe(false);
+    expect(isApprovalLink(`see ${link}`, SITE)).toBe(false);
+    expect(isApprovalLink(link)).toBe(false);
+    expect(isApprovalLink('https://github.com/o/r/issues/74#issuecomment-123', SITE)).toBe(true);
+  });
+
+  it('the gate takes a Jira approval only with the site', () => {
+    const judgeChanges = [{ file: 'tests/a.test.ts', change: 'loosened', approval: `${SITE}/browse/CONC-5?focusedCommentId=10042` }];
+    expect(gate(CLEAN, { judgeChanges, approvalSite: SITE })).toEqual([]);
+    expect(gate(CLEAN, { judgeChanges })[0]).toContain('is not a link to the owner');
+  });
+
+  type ReadTicket = NonNullable<TrackingReaders['jira']>['ticket'];
+  const ticket = (status: string): ReadTicket => async key => ({ status, url: `${SITE}/browse/${key}` });
+  const readers = (over: Partial<TrackingReaders> = {}, jira: Partial<NonNullable<TrackingReaders['jira']>> = {}): TrackingReaders => ({
+    prUrl: 'https://github.com/o/r/pull/9',
+    githubIssue: () => null,
+    jira: { config: CFG, created: {}, target: 'CONC-5', ticket: ticket(CFG.status.todo), ...jira },
+    ...over,
+  });
+
+  it('an open ticket tracks; one on Staging, Live or Canceled does not', async () => {
+    expect((await trackingRefs(['CONC-41'], readers())).open).toEqual(new Set(['CONC-41']));
+    const onNew = await trackingRefs(['CONC-41'], readers({}, { ticket: ticket('10014') }));
+    expect(onNew.open).toEqual(new Set(['CONC-41']));
+    for (const done of [CFG.status.staging, CFG.status.live, CFG.status.canceled]) {
+      expect((await trackingRefs(['CONC-41'], readers({}, { ticket: ticket(done) }))).open.size).toBe(0);
+    }
+  });
+
+  it('new:<marker> is the ticket this run filed for it, checked like any other', async () => {
+    const r = readers({}, { created: { 'flaky-login': 'CONC-60' } });
+    const found = await trackingRefs(['new:flaky-login', 'new:never-filed'], r);
+    expect(found.open).toEqual(new Set(['new:flaky-login']));
+    const closed = await trackingRefs(['new:flaky-login'], readers({}, { created: { 'flaky-login': 'CONC-60' }, ticket: ticket(CFG.status.canceled) }));
+    expect(closed.open.size).toBe(0);
+  });
+
+  it('the lap\'s own ticket, a foreign key or a pull request never tracks anything', async () => {
+    const seen: string[] = [];
+    const r = readers({ githubIssue: n => (seen.push(n), { state: 'OPEN', url: 'https://github.com/o/r/issues/12' }) }, {
+      ticket: async key => (seen.push(key), { status: CFG.status.todo, url: `${SITE}/browse/${key}` }),
+    });
+    const found = await trackingRefs(['CONC-5', 'VAULT-3', 'CONC-0', '#9', '9', 'new:'], r);
+    expect(found.open.size).toBe(0);
+    expect(seen).toEqual([]);
+  });
+
+  it('a GitHub issue number tracks as before, a ticket URL like its key', async () => {
+    const r = readers({ githubIssue: n => ({ state: 'OPEN', url: `https://github.com/o/r/issues/${n}` }) });
+    expect((await trackingRefs(['#12', '13', `${SITE}/browse/CONC-41`], r)).open).toEqual(new Set(['#12', '13', `${SITE}/browse/CONC-41`]));
+  });
+
+  it('without Jira a key or marker tracks nothing and nothing asks Jira', async () => {
+    const r = readers({ jira: undefined, githubIssue: n => ({ state: 'OPEN', url: `https://github.com/o/r/issues/${n}` }) });
+    expect((await trackingRefs(['CONC-41', 'new:x-y-z', '#12'], r)).open).toEqual(new Set(['#12']));
+  });
+
+  it('a ticket Jira cannot read is untracked, with the reason kept for the refusal', async () => {
+    const r = readers({}, { ticket: async () => { throw new Error('Jira GET /rest/api/3/issue/CONC-41 -> 503: down'); } });
+    const found = await trackingRefs(['CONC-41'], r);
+    expect(found.open.size).toBe(0);
+    expect(found.problems).toEqual(['could not read CONC-41 from Jira: Jira GET /rest/api/3/issue/CONC-41 -> 503: down']);
   });
 });

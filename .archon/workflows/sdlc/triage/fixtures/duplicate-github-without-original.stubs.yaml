@@ -1,0 +1,23 @@
+# Guard fixture: a duplicate of a GitHub issue must name it as `original`, so the close
+# can link back. The empty value is only for a Jira ticket; the verdict refuses it here.
+triage:
+  decision:
+    contract: NO_ACTION
+    closure:
+      kind: duplicate
+      url: "https://github.com/example/repo/issues/41"
+      original: { repo: { host: "", path: "" }, number: 0 }
+  type: { value: feature, reason: "stub: asks for new behavior" }
+  size: { value: s, reason: "stub: size" }
+  complexity: { value: low, reason: "stub: complexity" }
+  importance: { value: medium, reason: "stub: importance" }
+  urgency: { value: none, reason: "stub: urgency" }
+  item: { repo: { host: "", path: "" }, number: 0 }
+  area_labels: []
+  related: []
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+  summary: "stub: a GitHub duplicate without its original"
+fixture:
+  expect: failed
+  fail-node: verdict
+exec-code: true

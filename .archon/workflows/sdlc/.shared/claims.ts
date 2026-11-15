@@ -18,7 +18,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Jira, type Ticket, type TicketComment, type TrackerConfig, trackerConfig } from './jira.ts';
-import { referencedKeys, ticketKeyOf } from './tickets.ts';
+import { namesTicket, ticketKeyOf } from './tickets.ts';
 
 type JsonObject = Record<string, unknown>;
 
@@ -302,9 +302,7 @@ export interface PrView {
 export function confirmMerge(lap: LapResult, view: PrView | null, key: string, claimedAt: number, project: string): LapResult {
   if (lap.landed !== 'merged') return lap;
   const mergedAt = Date.parse(view?.mergedAt ?? '');
-  const named =
-    view !== null &&
-    (new RegExp(`^\\[?${key}\\b`).test(view.title.trim()) || referencedKeys(view.body, project).includes(key));
+  const named = view !== null && namesTicket(view, key, project);
   const confirmed = view?.state === 'MERGED' && mergedAt >= claimedAt && named;
   return confirmed ? lap : { ...lap, landed: '' };
 }

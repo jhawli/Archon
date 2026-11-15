@@ -5,6 +5,9 @@
  * disk, the run log and the forge; these decide.
  */
 
+import type { TrackerConfig } from './jira.ts';
+import { ticketKeyOf } from './tickets.ts';
+
 export interface CheckLine {
   readonly id: string;
   readonly kind: 'criterion' | 'holdout' | 'probe' | 'defect';
@@ -148,9 +151,68 @@ export function parseDispositions(json: string): Map<string, Disposition> {
   return found;
 }
 
-/** What `gh issue view N --json state,url` says counts as tracking: an open issue, not a pull request. */
+const JIRA_TICKET_URL = /^https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\/[A-Z][A-Z0-9]+-\d+$/;
+
+/**
+ * What counts as tracking: an open issue (`gh issue view N --json state,url`), not a pull
+ * request, or an open Jira ticket (land reads it and passes `OPEN` unless it is done).
+ */
 export const isTrackingIssue = (view: { state?: string; url?: string }): boolean =>
-  view.state === 'OPEN' && /\/issues\/\d+$/.test(view.url ?? '');
+  view.state === 'OPEN' && (/\/issues\/\d+$/.test(view.url ?? '') || JIRA_TICKET_URL.test(view.url ?? ''));
+
+/** How land reads what a disposition's `issue` names; tests pass fakes. */
+export interface TrackingReaders {
+  /** The pull request under review: its own number never tracks anything. */
+  readonly prUrl: string;
+  /** `gh issue view <n> --json state,url`, or null when gh cannot read it. */
+  readonly githubIssue: (number: string) => { state?: string; url?: string } | null;
+  /** With Jira: the run's filed tickets by marker, a ticket reader, and the lap's own ticket key. */
+  readonly jira?: {
+    readonly config: TrackerConfig;
+    readonly created: Readonly<Record<string, string>>;
+    readonly target: string;
+    readonly ticket: (key: string) => Promise<{ status: string; url: string }>;
+  };
+}
+
+/**
+ * The references among `refs` that track something open, resolved before the gate (whose
+ * `issueExists` is synchronous). `#n` is a GitHub issue as before. With Jira, `CONC-n` (or its
+ * URL) is a ticket that is not Staging, Live or Canceled, and `new:<marker>` is the ticket this
+ * run filed for that marker. The lap's own ticket tracks nothing: it moves on with the merge.
+ * A ticket Jira cannot read is untracked; its reason goes to `problems` for the refusal.
+ */
+export async function trackingRefs(
+  refs: readonly string[],
+  readers: TrackingReaders
+): Promise<{ open: Set<string>; problems: string[] }> {
+  const open = new Set<string>();
+  const problems: string[] = [];
+  const jira = readers.jira;
+  for (const ref of new Set(refs.map(r => r.trim()).filter(r => r !== ''))) {
+    const number = /^#?(\d+)$/.exec(ref)?.[1];
+    if (number !== undefined) {
+      if (readers.prUrl.endsWith(`/pull/${number}`)) continue;
+      const view = readers.githubIssue(number);
+      if (view !== null && isTrackingIssue(view)) open.add(ref);
+      continue;
+    }
+    if (jira === undefined) continue;
+    const marker = /^new:(.+)$/.exec(ref)?.[1];
+    const filed = marker === undefined ? undefined : jira.created[marker];
+    const key = marker === undefined ? (ticketKeyOf(ref, jira.config) ?? ref) : typeof filed === 'string' ? filed : '';
+    if (!new RegExp(`^${jira.config.project}-[1-9]\\d*$`).test(key) || key === jira.target) continue;
+    const { staging, live, canceled } = jira.config.status;
+    try {
+      const ticket = await jira.ticket(key);
+      const state = [staging, live, canceled].includes(ticket.status) ? 'CLOSED' : 'OPEN';
+      if (isTrackingIssue({ state, url: ticket.url })) open.add(ref);
+    } catch (error) {
+      problems.push(`could not read ${key} from Jira: ${(error as Error).message.slice(0, 200)}`);
+    }
+  }
+  return { open, problems };
+}
 
 export interface MergeFacts {
   /** Trees (git tree ids) of the commit to merge and of what the app check tested. */
@@ -201,11 +263,21 @@ export function parseJudgeChanges(json: string): JudgeChange[] {
     .filter(entry => entry.file !== '' || entry.change !== '');
 }
 
-/** An approval is a link to an issue or a comment on one (the owner's words), never a criterion id. */
+const GITHUB_APPROVAL = /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(#issuecomment-\d+)?(\s|$)/;
+const JIRA_APPROVAL = /^(https:\/\/[^/\s]+)\/browse\/[A-Z][A-Z0-9]+-[1-9]\d*(\?focusedCommentId=\d+)?(\s|$)/;
+
+/**
+ * An approval is a link to an issue or a comment on one (the owner's words), never a criterion
+ * id. With Jira, `site` adds a ticket or a comment on one, on that site only (compared as text,
+ * so the dots in the site are not wildcards).
+ */
 // The link may be followed by a label a reviewer adds ("<url> (Owner decision, ...)"); the gate
 // needs the link, and refused correct approvals over the label (mission control #102/#145).
-export const isApprovalLink = (approval: string): boolean =>
-  /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(#issuecomment-\d+)?(\s|$)/.test(approval.trim());
+export const isApprovalLink = (approval: string, site?: string): boolean => {
+  const link = approval.trim();
+  if (GITHUB_APPROVAL.test(link)) return true;
+  return site !== undefined && site !== '' && JIRA_APPROVAL.exec(link)?.[1] === site;
+};
 
 export interface GateFacts {
   readonly report: AppCheck;
@@ -218,6 +290,8 @@ export interface GateFacts {
   /** A file the reviewer wrote during its review. */
   readonly freshFile: (path: string) => boolean;
   readonly issueExists: (ref: string) => boolean;
+  /** With Jira, the site whose ticket comments are the owner's words (`isApprovalLink`). */
+  readonly approvalSite?: string;
 }
 
 /** Why the record does not support merging; empty when it does. The forge checks are the caller's. */
@@ -263,7 +337,7 @@ export function recordRefusals(facts: GateFacts): string[] {
   for (const judge of facts.judgeChanges) {
     if (judge.approval === '') {
       refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}) with no approval named`);
-    } else if (!isApprovalLink(judge.approval)) {
+    } else if (!isApprovalLink(judge.approval, facts.approvalSite)) {
       // A criterion id is the loop's own wording; only the owner's words, linked, approve a judge change.
       refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}), and its approval (${judge.approval}) is not a link to the owner's words`);
     }

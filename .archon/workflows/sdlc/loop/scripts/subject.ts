@@ -11,12 +11,14 @@
 import { recordLap, runState } from '../../.shared/claims.ts';
 import { emit, trimmed } from '../../.shared/io.ts';
 import { trackerConfig } from '../../.shared/jira.ts';
+import { type PrRow, ticketKeyOf, ticketPr } from '../../.shared/tickets.ts';
 import { closes } from '../../.shared/workable.ts';
 
 const started = String(Date.now());
 const target = trimmed(process.env.INPUTS_TARGET);
 const chosen = trimmed(process.env.INPUTS_PR);
 const reports = `${trimmed(process.env.INPUTS_BUILDER)}\n${trimmed(process.env.INPUTS_SHIP)}`;
+const config = trackerConfig();
 
 function gh(args: string[]): unknown {
   const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -28,6 +30,12 @@ function findPr(): string {
   if (chosen !== '') return chosen;
   const named = [...reports.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g)].map(m => m[0]);
   if (named.length > 0) return named[named.length - 1];
+  const key = config === null ? null : ticketKeyOf(target, config);
+  if (config !== null && key !== null) {
+    // Listed, not searched: the search index lags a pull request the builder opened moments ago.
+    const open = gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json', 'url,title,body,updatedAt']) as PrRow[];
+    return ticketPr(open, key, config.project);
+  }
   const issue = /\/issues\/(\d+)\/?$/.exec(target)?.[1];
   if (issue === undefined) return '';
   const open = gh(['pr', 'list', '--state', 'open', '--search', issue, '--json', 'url,body,updatedAt']) as {
@@ -41,7 +49,7 @@ function findPr(): string {
 
 const pr = findPr();
 // With Jira, recorded before the pull request is read: if that read fails, release still knows there is one.
-if (trackerConfig() !== null) recordLap(runState(), { pr });
+if (config !== null) recordLap(runState(), { pr });
 if (pr === '') {
   emit({ pr: '', head: '', base: '', files: '', started });
 } else {

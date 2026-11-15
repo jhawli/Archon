@@ -51,6 +51,28 @@ export function referencedKeys(body: string, project: string): string[] {
   ];
 }
 
+/**
+ * A pull request is the work for a ticket when its title starts with the key (AK6) or its body
+ * closes or references it. A partial delivery says only `Refs`, so `closedKeys` alone misses it.
+ * `key` comes from `ticketKeyOf`, so it is safe inside a regular expression.
+ */
+export function namesTicket(pr: { readonly title: string; readonly body: string }, key: string, project: string): boolean {
+  return new RegExp(`^\\[?${key}\\b`).test(pr.title.trim()) || referencedKeys(pr.body, project).includes(key);
+}
+
+export interface PrRow {
+  readonly url: string;
+  readonly title: string;
+  readonly body: string;
+  readonly updatedAt: string;
+}
+
+/** The most recently updated pull request that is the work for the ticket, or ''. */
+export function ticketPr(rows: readonly PrRow[], key: string, project: string): string {
+  const mine = rows.filter(pr => namesTicket({ title: pr.title ?? '', body: pr.body ?? '' }, key, project));
+  return mine.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.url ?? '';
+}
+
 /** `Depends on: CONC-3, CONC-7` lines, as pick reads them. A `#n` there is a pull request and ignored. */
 export function dependencyKeys(body: string, project: string): string[] {
   const found: string[] = [];

@@ -14,8 +14,10 @@ import {
   closedKeys,
   dependencyKeys,
   isTicketKey,
+  namesTicket,
   referencedKeys,
   ticketKeyOf,
+  ticketPr,
   ticketUrl,
 } from '../../workflows/sdlc/.shared/tickets';
 
@@ -120,6 +122,26 @@ describe('ticket keys', () => {
     expect(isTicketKey('CONC-0')).toBe(false);
     expect(referencedKeys('Refs CONC-0', 'CONC')).toEqual([]);
     expect(dependencyKeys('Depends on: CONC-012, XCONC-4, CONC-4', 'CONC')).toEqual(['CONC-4']);
+  });
+});
+
+describe('the pull request for a ticket', () => {
+  it('names the ticket in its title or as Refs/Closes, never a longer key', () => {
+    expect(namesTicket({ title: 'CONC-5 Tags', body: '' }, 'CONC-5', 'CONC')).toBe(true);
+    expect(namesTicket({ title: '[CONC-5] Tags', body: '' }, 'CONC-5', 'CONC')).toBe(true);
+    expect(namesTicket({ title: 'Tags', body: 'Refs CONC-5' }, 'CONC-5', 'CONC')).toBe(true);
+    expect(namesTicket({ title: 'Tags', body: 'Closes CONC-5' }, 'CONC-5', 'CONC')).toBe(true);
+    expect(namesTicket({ title: 'CONC-50 Anderes', body: 'Closes CONC-50' }, 'CONC-5', 'CONC')).toBe(false);
+    expect(namesTicket({ title: 'Tags für CONC-5', body: 'see CONC-5' }, 'CONC-5', 'CONC')).toBe(false);
+  });
+  it('picks the most recently updated open pull request for the ticket, a partial delivery too', () => {
+    const rows = [
+      { url: 'https://github.com/o/r/pull/1', title: 'CONC-5 erster Teil', body: 'Refs CONC-5', updatedAt: '2026-11-15T09:00:00Z' },
+      { url: 'https://github.com/o/r/pull/2', title: 'Anderes', body: 'Closes CONC-50', updatedAt: '2026-11-15T12:00:00Z' },
+      { url: 'https://github.com/o/r/pull/3', title: 'Tags', body: 'Refs CONC-5', updatedAt: '2026-11-15T10:00:00Z' },
+    ];
+    expect(ticketPr(rows, 'CONC-5', 'CONC')).toBe('https://github.com/o/r/pull/3');
+    expect(ticketPr(rows, 'CONC-7', 'CONC')).toBe('');
   });
 });
 

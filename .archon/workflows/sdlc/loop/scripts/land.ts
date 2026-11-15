@@ -14,20 +14,21 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { recordLanding, runState } from '../../.shared/claims.ts';
-import { trackerConfig } from '../../.shared/jira.ts';
+import { readCreated, recordLanding, runState } from '../../.shared/claims.ts';
+import { Jira, type Ticket, trackerConfig } from '../../.shared/jira.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
 import {
   CLOCK_SLACK_MS,
-  isTrackingIssue,
   parseDispositions,
   parseJudgeChanges,
   readAppCheck,
   recordRefusals,
   shipFailuresInLog,
+  trackingRefs,
   untestedMerge,
 } from '../../.shared/merge-gate.ts';
 import { protectedFiles } from '../../.shared/protected-paths.ts';
+import { ticketKeyOf } from '../../.shared/tickets.ts';
 
 const prUrl = trimmed(process.env.INPUTS_PR);
 const named = trimmed(process.env.INPUTS_SHA);
@@ -41,7 +42,8 @@ const logPath = join(trimmed(process.env.LOG_DIR), `${trimmed(process.env.WORKFL
 const artifacts = artifactsDir();
 // With Jira, release reads the outcome from the run's state directory. Resolved before any
 // merge, so a broken one fails the gate rather than a merged pull request's bookkeeping.
-const trackerState = trackerConfig() !== null ? runState() : null;
+const config = trackerConfig();
+const trackerState = config !== null ? runState() : null;
 const report = readAppCheck(text(process.env.INPUTS_REPORT));
 
 function run(cmd: string[]): { code: number; out: string; err: string } {
@@ -53,11 +55,39 @@ function run(cmd: string[]): { code: number; out: string; err: string } {
 const resolved = named === '' ? null : run(['git', 'rev-parse', '--verify', '--quiet', `${named}^{commit}`]);
 const sha = resolved !== null && resolved.code === 0 ? resolved.out.trim() : named;
 
-const tracking = new Map<string, boolean>();
+const dispositions = parseDispositions(text(process.env.INPUTS_DISPOSITIONS));
+// The gate asks synchronously, so every reference a disposition names is read here first:
+// `#n` on GitHub, and with Jira `CONC-n` or `new:<marker>` (a ticket the review filed this run).
+let client: Jira | undefined;
+const tracking = await trackingRefs(
+  [...dispositions.values()].map(d => d.issue),
+  {
+    prUrl,
+    githubIssue: number => {
+      const view = run(['gh', 'issue', 'view', number, '--json', 'state,url']);
+      if (view.code !== 0) return null;
+      try {
+        return JSON.parse(view.out) as { state?: string; url?: string };
+      } catch {
+        return null;
+      }
+    },
+    jira:
+      config === null || trackerState === null
+        ? undefined
+        : {
+            config,
+            created: readCreated(trackerState),
+            target: ticketKeyOf(target, config) ?? '',
+            // The keychain is read only when a disposition names a ticket.
+            ticket: async (key): Promise<Ticket> => (client ??= new Jira(config)).ticket(key),
+          },
+  }
+);
 const refusals = recordRefusals({
   report,
   evidenceProblems,
-  dispositions: parseDispositions(text(process.env.INPUTS_DISPOSITIONS)),
+  dispositions,
   judgeChanges: parseJudgeChanges(text(process.env.INPUTS_JUDGE_CHANGES)),
   shipFailures: existsSync(logPath) ? shipFailuresInLog(readFileSync(logPath, 'utf8')) : [],
   // A non-empty file (not a folder, whose time moves with anything written inside it).
@@ -67,15 +97,8 @@ const refusals = recordRefusals({
     const stat = statSync(path);
     return stat.isFile() && stat.size > 0 && stat.mtimeMs + CLOCK_SLACK_MS >= reviewStarted;
   },
-  issueExists: ref => {
-    const number = /^#?(\d+)$/.exec(ref)?.[1];
-    if (number === undefined || prUrl.endsWith(`/pull/${number}`)) return false;
-    if (!tracking.has(number)) {
-      const view = run(['gh', 'issue', 'view', number, '--json', 'state,url']);
-      tracking.set(number, view.code === 0 && isTrackingIssue(JSON.parse(view.out) as { state?: string; url?: string }));
-    }
-    return tracking.get(number) ?? false;
-  },
+  issueExists: ref => tracking.open.has(ref.trim()),
+  approvalSite: config?.site,
 });
 if (route === 'complex' && !existsSync(logPath)) refusals.push('the run log is missing, so a failed shipping step cannot be ruled out');
 const prNumber = (url: string): string => /\/pull\/(\d+)/.exec(url)?.[1] ?? url;
@@ -168,6 +191,8 @@ const landed = (outcome: 'merged' | 'refused', reason: string): void => {
 const comment = (body: string): void => {
   if (prUrl !== '') run(['gh', 'pr', 'comment', prUrl, '--body', body]);
 };
+// A ticket Jira could not read explains a refusal; it does not refuse a merge that never needed it.
+if (refusals.length > 0) refusals.push(...tracking.problems);
 const list = refusals.map(r => `- ${r}`).join('\n');
 
 if (alreadyMerged) {

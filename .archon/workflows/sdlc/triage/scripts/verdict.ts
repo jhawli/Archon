@@ -71,6 +71,10 @@ function unqualifiedLink(
   if (!blockedBy.every(isQualifiedUrl)) return 'blocked_by must be a list of fully qualified http(s) URLs';
   if (!related.every(entry => isQualifiedUrl(entry.url))) return 'related urls must be fully qualified http(s) URLs';
   if (closure !== null && !isQualifiedUrl(closure.url)) return 'closure.url must be a fully qualified http(s) URL';
+  // The empty original is for a Jira ticket; a GitHub duplicate names its original so the close links back.
+  if (closure?.kind === 'duplicate' && closure.original.number === 0 && new URL(closure.url).hostname === 'github.com') {
+    return 'a duplicate of a GitHub issue must name that issue as original';
+  }
   return null;
 }
 
