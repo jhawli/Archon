@@ -9,10 +9,22 @@
  * `Loop result:` comment that pick counts among its attempts, and asks the owner where the
  * lap could not decide (AK18a). The lap's facts come from files under $ARTIFACTS_DIR, not
  * from bindings: a failed rollout fails the deploy block, and a binding to a failed node
- * fails the node that reads it (see `readLap`).
+ * fails the node that reads it (see `readLap`). Agents can write there too, so a merge
+ * counts only when GitHub confirms it (`confirmMerge`). If setting the status fails, the
+ * ticket is flagged before the node fails.
  */
 
-import { CLAIM_PREFIX, comments, editComment, finalStatus, readLap, statusName, workItem } from '../../.shared/claims.ts';
+import {
+  CLAIM_PREFIX,
+  comments,
+  confirmMerge,
+  editComment,
+  finalStatus,
+  type PrView,
+  readLap,
+  statusName,
+  workItem,
+} from '../../.shared/claims.ts';
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
 
@@ -40,14 +52,39 @@ const lines = [
   own.length > 0 ? `released ${own.length} claim(s) on ${target || pr}` : `run ${run} held no claim on ${target || pr}`,
 ];
 
+/** The pull request as GitHub reports it, or null when there is none or gh cannot tell. */
+function prView(url: string): PrView | null {
+  if (!url.startsWith('https://github.com/')) return null;
+  const result = Bun.spawnSync(['gh', 'pr', 'view', url, '--json', 'state,mergedAt,title,body'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  return result.exitCode === 0 ? (JSON.parse(result.stdout.toString()) as PrView) : null;
+}
+
 if (config !== null && jira !== undefined && item.kind === 'ticket') {
-  const lap = readLap(artifactsDir(), pr);
-  const ticket = await jira.ticket(item.key);
-  const result = finalStatus(item.key, ticket.status, lap, config.status);
-  if (result.status !== null && result.status !== ticket.status) await jira.move(item.key, result.status);
-  const name = statusName(result.status ?? ticket.status, config.status);
-  await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.`);
-  if (result.ask !== null) await jira.ask(item.key, result.ask);
-  lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}`);
+  try {
+    const recorded = readLap(artifactsDir(), pr);
+    const claimedAt = Math.min(...own.map(comment => comment.createdAt));
+    const lap = confirmMerge(recorded, prView(recorded.pr), item.key, claimedAt, config.project);
+    const ticket = await jira.ticket(item.key);
+    const result = finalStatus(item.key, ticket.status, lap, config.status);
+    if (result.status !== null && result.status !== ticket.status) await jira.move(item.key, result.status);
+    const name = statusName(result.status ?? ticket.status, config.status);
+    await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.`);
+    if (result.ask !== null) await jira.ask(item.key, result.ask);
+    const unconfirmed = recorded.landed === 'merged' && lap.landed !== 'merged' ? ', merge not confirmed by GitHub' : '';
+    lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}`);
+  } catch (error) {
+    // The claim is already free; flag the ticket so it does not sit on In Progress unseen.
+    const why = error instanceof Error ? error.message : String(error);
+    try {
+      await jira.ask(item.key, `Lauf ${run} konnte den Status nicht setzen (${why.slice(0, 300)}). Bitte den Status prüfen.`);
+    } catch (flagError) {
+      lines.push(`could not flag ${item.key} either: ${flagError instanceof Error ? flagError.message : String(flagError)}`);
+    }
+    console.error(lines.join('\n'));
+    throw error;
+  }
 }
 report(lines.join('\n'));

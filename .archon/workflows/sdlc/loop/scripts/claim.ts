@@ -64,17 +64,16 @@ if (holder.id === mine.id) {
   if (config !== null && jira !== undefined && item.kind === 'ticket') {
     try {
       const ticket = await jira.ticket(item.key);
-      let status = ticket.status;
-      if (status === config.status.todo) {
-        await jira.move(item.key, config.status.progress);
-        status = config.status.progress;
-      }
+      const start = ticket.status === config.status.todo;
+      const status = start ? config.status.progress : ticket.status;
       const dir = join(artifactsDir(), 'tracker');
       mkdirSync(dir, { recursive: true });
       writeFileSync(
         join(dir, 'item.md'),
         itemMarkdown({ ...ticket, status }, await jira.comments(item.key), config.status)
       );
+      // Last, so a failure above leaves the ticket on To Do, where pick finds it again.
+      if (start) await jira.move(item.key, config.status.progress);
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       await editComment(

@@ -1,16 +1,19 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   type ClaimClient,
   type LapResult,
+  type PrView,
+  confirmMerge,
   editComment,
   finalStatus,
   itemMarkdown,
   liveClaims,
   postComment,
   readLap,
+  recordLanding,
   recordLap,
   restMarker,
   workItem,
@@ -195,10 +198,10 @@ describe('status after the lap', () => {
 
 describe('lap facts', () => {
   const dir = (): string => mkdtempSync(join(tmpdir(), 'lap-'));
-  it('reads what subject, land and deploy left, even when deploy failed', () => {
+  it('reads what land and deploy left, even when deploy failed', () => {
     const artifacts = dir();
     recordLap(artifacts, { pr: 'https://github.com/o/r/pull/9' });
-    recordLap(artifacts, { landed: 'merged', delivers: 'part' });
+    recordLanding(artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'part' });
     writeFileSync(join(artifacts, 'deployment.md'), '# Deployment\n\n- deployed: False\n- revision: abc\n');
     expect(readLap(artifacts, '')).toEqual({
       pr: 'https://github.com/o/r/pull/9',
@@ -207,6 +210,25 @@ describe('lap facts', () => {
       delivers: 'part',
       created: {},
     });
+  });
+  it('each writer replaces the record, so a fact an agent planted earlier does not survive', () => {
+    const artifacts = dir();
+    mkdirSync(join(artifacts, 'tracker'));
+    writeFileSync(join(artifacts, 'tracker', 'lap.json'), JSON.stringify({ landed: 'merged', delivers: 'all' }));
+    recordLap(artifacts, { pr: 'https://github.com/o/r/pull/9' });
+    expect(readLap(artifacts, '')).toEqual(lap({ pr: 'https://github.com/o/r/pull/9' }));
+  });
+  it('land clears a deployment.md written before it, so only the deploy block can confirm a rollout', () => {
+    const artifacts = dir();
+    writeFileSync(join(artifacts, 'deployment.md'), '- deployed: True\n');
+    recordLanding(artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'all' });
+    expect(existsSync(join(artifacts, 'deployment.md'))).toBe(false);
+    expect(readLap(artifacts, '').deployed).toBe('');
+  });
+  it('a recorded pr that is not a pull request URL is ignored', () => {
+    const artifacts = dir();
+    recordLap(artifacts, { pr: '--web' });
+    expect(readLap(artifacts, 'https://github.com/o/r/pull/3').pr).toBe('https://github.com/o/r/pull/3');
   });
   it('a confirmed rollout reads as true', () => {
     const artifacts = dir();
@@ -223,6 +245,39 @@ describe('lap facts', () => {
     mkdirSync(join(artifacts, 'tracker'));
     writeFileSync(join(artifacts, 'tracker', 'lap.json'), '[1]');
     expect(() => readLap(artifacts, '')).toThrow('lap.json');
+  });
+});
+
+describe('a merge counts only when GitHub confirms it', () => {
+  const claimedAt = Date.parse('2026-11-15T10:00:00Z');
+  const recorded = lap({ pr: 'https://github.com/o/r/pull/9', landed: 'merged', deployed: 'true', delivers: 'all' });
+  const view = (over: Partial<PrView> = {}): PrView => ({
+    state: 'MERGED',
+    mergedAt: '2026-11-15T11:00:00Z',
+    title: 'CONC-5 Tags für Notizen',
+    body: 'Closes CONC-5',
+    ...over,
+  });
+  it('merged after the claim, naming the ticket: merged', () => {
+    expect(confirmMerge(recorded, view(), 'CONC-5', claimedAt, 'CONC').landed).toBe('merged');
+    expect(confirmMerge(recorded, view({ title: 'Tags', body: 'Refs CONC-5' }), 'CONC-5', claimedAt, 'CONC').landed).toBe(
+      'merged'
+    );
+  });
+  it('anything GitHub does not back is not merged', () => {
+    const cases: (PrView | null)[] = [
+      null,
+      view({ state: 'OPEN', mergedAt: null }),
+      view({ mergedAt: '2026-11-15T09:00:00Z' }),
+      view({ title: 'CONC-50 Anderes', body: 'Closes CONC-50' }),
+    ];
+    for (const seen of cases) {
+      expect(confirmMerge(recorded, seen, 'CONC-5', claimedAt, 'CONC').landed).toBe('');
+    }
+  });
+  it('a lap that did not claim a merge is left as it is', () => {
+    const open = lap({ pr: 'https://github.com/o/r/pull/9', landed: 'refused' });
+    expect(confirmMerge(open, null, 'CONC-5', claimedAt, 'CONC')).toEqual(open);
   });
 });
 

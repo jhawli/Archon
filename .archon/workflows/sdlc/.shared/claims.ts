@@ -15,10 +15,10 @@
  * until it is older than the expiry: a run that died without releasing must not hold an
  * item forever.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Jira, type Ticket, type TicketComment, type TrackerConfig, trackerConfig } from './jira.ts';
-import { ticketKeyOf } from './tickets.ts';
+import { referencedKeys, ticketKeyOf } from './tickets.ts';
 
 type JsonObject = Record<string, unknown>;
 
@@ -192,11 +192,19 @@ export function finalStatus(
  * ticket most needs Review and a question. So subject and land record what they know in
  * `$ARTIFACTS_DIR/tracker/lap.json`, the deploy block's own `deployment.md` says whether the
  * rollout was confirmed, and release reads both, whatever happened in between.
+ *
+ * Agents can write under $ARTIFACTS_DIR too (their outbox lives there), so none of this is
+ * taken on trust. Each writer replaces the record instead of merging into it. land, the
+ * last node before deploy and after every agent, also deletes any `deployment.md` it finds,
+ * so the only one release can read was written by the deploy block. And `merged` counts
+ * only when GitHub says so (`confirmMerge`).
  */
 
 type LapFacts = Partial<Record<'pr' | 'landed' | 'delivers', string>>;
 
 const lapFile = (dir: string): string => join(dir, 'tracker', 'lap.json');
+const deploymentFile = (dir: string): string => join(dir, 'deployment.md');
+const PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/;
 
 function readFacts(dir: string): LapFacts {
   const path = lapFile(dir);
@@ -211,14 +219,20 @@ function readFacts(dir: string): LapFacts {
   return facts;
 }
 
-/** Merge facts into this run's lap record. */
+/** Replace this run's lap record with what the calling node knows. */
 export function recordLap(dir: string, facts: LapFacts): void {
   mkdirSync(join(dir, 'tracker'), { recursive: true });
-  writeFileSync(lapFile(dir), `${JSON.stringify({ ...readFacts(dir), ...facts }, null, 2)}\n`);
+  writeFileSync(lapFile(dir), `${JSON.stringify(facts, null, 2)}\n`);
+}
+
+/** land's record: after it no agent runs, so it also clears a `deployment.md` an agent may have left. */
+export function recordLanding(dir: string, facts: LapFacts): void {
+  rmSync(deploymentFile(dir), { force: true });
+  recordLap(dir, facts);
 }
 
 function deployedFact(dir: string): string {
-  const path = join(dir, 'deployment.md');
+  const path = deploymentFile(dir);
   if (!existsSync(path)) return '';
   return /^- deployed: True$/m.test(readFileSync(path, 'utf8')) ? 'true' : 'false';
 }
@@ -226,13 +240,37 @@ function deployedFact(dir: string): string {
 /** What this lap did, from the record and the deploy block's `deployment.md`. */
 export function readLap(dir: string, pickedPr: string, created: Readonly<Record<string, string>> = {}): LapResult {
   const facts = readFacts(dir);
+  const recorded = (facts.pr ?? '').trim();
   return {
-    pr: facts.pr !== undefined && facts.pr !== '' ? facts.pr : pickedPr,
+    pr: PR_URL.test(recorded) ? recorded : pickedPr,
     landed: facts.landed ?? '',
     deployed: deployedFact(dir),
     delivers: facts.delivers ?? '',
     created,
   };
+}
+
+/** The pull request as GitHub reports it (`gh pr view --json state,mergedAt,title,body`). */
+export interface PrView {
+  readonly state: string;
+  readonly mergedAt: string | null;
+  readonly title: string;
+  readonly body: string;
+}
+
+/**
+ * `merged` stands only if GitHub agrees: the pull request is merged, after this run claimed
+ * the ticket, and it names the ticket in its title or as `Refs`/`Closes`. Anything else is
+ * read as not merged, which leaves the ticket on Review for a person to look at.
+ */
+export function confirmMerge(lap: LapResult, view: PrView | null, key: string, claimedAt: number, project: string): LapResult {
+  if (lap.landed !== 'merged') return lap;
+  const mergedAt = Date.parse(view?.mergedAt ?? '');
+  const named =
+    view !== null &&
+    (new RegExp(`^\\[?${key}\\b`).test(view.title.trim()) || referencedKeys(view.body, project).includes(key));
+  const confirmed = view?.state === 'MERGED' && mergedAt >= claimedAt && named;
+  return confirmed ? lap : { ...lap, landed: '' };
 }
 
 // --- The ticket as the agents read it ---
