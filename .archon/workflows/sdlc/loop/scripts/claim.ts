@@ -27,6 +27,7 @@ import {
 } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
+import { clearOutbox } from '../../.shared/outbox.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
@@ -61,6 +62,8 @@ if (mine === undefined) {
 
 const holder = claims[0];
 if (holder.id === mine.id) {
+  // The builder runs next: an outbox left in its name or the reviewer's by pick is not theirs.
+  if (config !== null) clearOutbox(artifactsDir(), ['build', 'review']);
   if (config !== null && jira !== undefined && item.kind === 'ticket') {
     try {
       const ticket = await jira.ticket(item.key);

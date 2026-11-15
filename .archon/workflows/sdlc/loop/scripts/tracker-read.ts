@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { expiryHours, pruneRunStates, runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
-import { boardMarkdown, writableKeys } from '../../.shared/outbox.ts';
+import { boardMarkdown, clearOutbox, WRITERS, writableKeys } from '../../.shared/outbox.ts';
 import { loadJiraBoard, openPulls } from '../../.shared/tracker-board.ts';
 import { workability } from '../../.shared/workable.ts';
 
@@ -33,6 +33,8 @@ if (config === null) {
   for (const entry of workability(loaded.board, hours, Date.now(), new Set(), loaded.links).waiting) {
     if (entry.kind === 'ticket') waiting.set(entry.key, entry.why);
   }
+  // Before the first agent: no outbox file of this run is anyone's yet.
+  clearOutbox(artifactsDir(), WRITERS);
   const dir = join(artifactsDir(), 'tracker');
   mkdirSync(dir, { recursive: true });
   const board = join(dir, 'board.md');

@@ -15,6 +15,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { recordLanding, runState } from '../../.shared/claims.ts';
+import { trackerConfig } from '../../.shared/jira.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
 import {
   CLOCK_SLACK_MS,
@@ -38,6 +39,9 @@ const reviewStarted = Number(trimmed(process.env.INPUTS_REVIEW_STARTED)) || 0;
 const prFiles = text(process.env.INPUTS_FILES).split('\n').map(f => f.trim()).filter(f => f !== '');
 const logPath = join(trimmed(process.env.LOG_DIR), `${trimmed(process.env.WORKFLOW_ID)}.jsonl`);
 const artifacts = artifactsDir();
+// With Jira, release reads the outcome from the run's state directory. Resolved before any
+// merge, so a broken one fails the gate rather than a merged pull request's bookkeeping.
+const trackerState = trackerConfig() !== null ? runState() : null;
 const report = readAppCheck(text(process.env.INPUTS_REPORT));
 
 function run(cmd: string[]): { code: number; out: string; err: string } {
@@ -157,7 +161,7 @@ if (view.code !== 0) {
 
 /** The outcome, recorded first for release (a ticket's status needs it even if a later node fails). */
 const landed = (outcome: 'merged' | 'refused', reason: string): void => {
-  recordLanding(runState(), artifactsDir(), { pr: prUrl, landed: outcome, delivers });
+  if (trackerState !== null) recordLanding(trackerState, artifacts, { pr: prUrl, landed: outcome, delivers });
   emit({ outcome, reason });
 };
 

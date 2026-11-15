@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readCreated, recordCreated, runState } from '../../workflows/sdlc/.shared/claims';
@@ -8,7 +8,10 @@ import {
   applyOutbox,
   boardMarkdown,
   checkOutbox,
+  clearOutbox,
+  outboxFile,
   readOutbox,
+  writableJql,
   writableKeys,
   type Op,
 } from '../../workflows/sdlc/.shared/outbox';
@@ -67,7 +70,7 @@ describe('outbox check', () => {
     const ops = [
       { op: 'comment', key: 'CONC-5', text: 'Bericht' },
       { op: 'ask', key: 'CONC-5', text: 'Frage' },
-      { op: 'create', marker: 'rest-conc-5', title: 'Rest', text: 'Was fehlt' },
+      { op: 'create', marker: 'finding-flaky-sync', title: 'Fund', text: 'Was auffiel' },
     ];
     expect(checkOutbox(ops, 'build', 'CONC-5', 'CONC', BOARD).map(op => op.op)).toEqual(['comment', 'ask', 'create']);
     expect(failure(() => checkOutbox([{ op: 'comment', key: 'CONC-6', text: 'x' }], 'build', 'CONC-5', 'CONC', BOARD))).toContain(
@@ -100,6 +103,21 @@ describe('outbox check', () => {
     expect(failure(() => checkOutbox(create({ marker: 'A b' }), 'review', 'CONC-5', 'CONC', BOARD))).toContain('marker');
     expect(failure(() => checkOutbox(create({ title: 'x'.repeat(201) }), 'review', 'CONC-5', 'CONC', BOARD))).toContain('title');
     expect(failure(() => checkOutbox(create({}), 'pick', null, 'CONC', BOARD))).toContain('pick does not create');
+  });
+  it('only review files a rest ticket, which release counts as the rest of a partial delivery', () => {
+    const rest = [{ op: 'create', marker: 'rest-conc-5', title: 'Rest', text: 'x' }];
+    expect(failure(() => checkOutbox(rest, 'build', 'CONC-5', 'CONC', BOARD))).toContain('only review files rest tickets');
+    expect(checkOutbox(rest, 'review', 'CONC-5', 'CONC', BOARD)).toHaveLength(1);
+  });
+  it('the script before an agent clears the outbox files of the writers still to come', () => {
+    const artifacts = mkdtempSync(join(tmpdir(), 'outbox-'));
+    mkdirSync(join(artifacts, 'tracker', 'outbox'), { recursive: true });
+    for (const writer of ['pick', 'build', 'review'] as const) writeFileSync(outboxFile(artifacts, writer), '[]');
+    clearOutbox(artifacts, ['build', 'review']);
+    expect(existsSync(outboxFile(artifacts, 'pick'))).toBe(true);
+    expect(existsSync(outboxFile(artifacts, 'build'))).toBe(false);
+    expect(existsSync(outboxFile(artifacts, 'review'))).toBe(false);
+    clearOutbox(artifacts, ['review']);
   });
   it('no file or an empty file is no writes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'outbox-'));
@@ -153,6 +171,16 @@ describe('which tickets pick may write to', () => {
       ticket('CONC-8', { assignee: null }),
     ];
     expect([...writableKeys(tickets, CFG)]).toEqual(['CONC-1', 'CONC-2', 'CONC-5']);
+  });
+});
+
+describe('the write-time check of pick’s keys', () => {
+  it('asks Jira for the same rule as the snapshot, for the snapshot’s keys only', () => {
+    expect(writableJql(['CONC-5', 'CONC-6', 'VAULT-3', 'CONC-0'], CFG)).toBe(
+      'key in (CONC-5,CONC-6) AND assignee = "acc-archon" AND (status = 10016 OR (status = 10015 AND sprint in openSprints()))'
+    );
+    expect(writableJql([], CFG)).toBeNull();
+    expect(writableJql(['VAULT-3'], CFG)).toBeNull();
   });
 });
 

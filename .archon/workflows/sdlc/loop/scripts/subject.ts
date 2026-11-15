@@ -10,6 +10,7 @@
 
 import { recordLap, runState } from '../../.shared/claims.ts';
 import { emit, trimmed } from '../../.shared/io.ts';
+import { trackerConfig } from '../../.shared/jira.ts';
 import { closes } from '../../.shared/workable.ts';
 
 const started = String(Date.now());
@@ -39,8 +40,8 @@ function findPr(): string {
 }
 
 const pr = findPr();
-// Recorded before the pull request is read: if that read fails, release still knows there is one.
-recordLap(runState(), { pr });
+// With Jira, recorded before the pull request is read: if that read fails, release still knows there is one.
+if (trackerConfig() !== null) recordLap(runState(), { pr });
 if (pr === '') {
   emit({ pr: '', head: '', base: '', files: '', started });
 } else {

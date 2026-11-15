@@ -7,7 +7,8 @@
  * $ARTIFACTS_DIR/tracker/outbox/<writer>.json; tracker-write checks the whole list against
  * the rules below before it writes anything, then applies it.
  */
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
 import { readCreated, recordCreated, statusName } from './claims.ts';
 import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
 
@@ -20,6 +21,21 @@ export type Op =
   | { readonly op: 'create'; readonly marker: string; readonly title: string; readonly text: string };
 
 export type Writer = 'pick' | 'build' | 'review';
+
+export const WRITERS: readonly Writer[] = ['pick', 'build', 'review'];
+
+export const outboxFile = (artifacts: string, writer: Writer): string =>
+  join(artifacts, 'tracker', 'outbox', `${writer}.json`);
+
+/**
+ * Remove these writers' outbox files. The script right before an agent runs this for the
+ * writers still to come, so a file an earlier agent left in their name never passes as
+ * theirs: tracker-read clears all three before pick, claim clears build and review before
+ * the builder, handoff clears review before the reviewer.
+ */
+export function clearOutbox(artifacts: string, writers: readonly Writer[]): void {
+  for (const writer of writers) rmSync(outboxFile(artifacts, writer), { force: true });
+}
 
 const MAX_TEXT = 30_000;
 const MAX_OPS = 20;
@@ -70,6 +86,8 @@ export function checkOutbox(
       if (typeof e.marker !== 'string' || !/^[a-z0-9-]{3,60}$/.test(e.marker)) {
         throw new Error(`${where}: marker must be 3-60 of a-z, 0-9, -`);
       }
+      // A rest ticket tells release that a partial delivery is accounted for; only the reviewer decides that.
+      if (e.marker.startsWith('rest-') && writer !== 'review') throw new Error(`${where}: only review files rest tickets`);
       if (typeof e.title !== 'string' || e.title.trim() === '' || e.title.length > 200) {
         throw new Error(`${where}: title is empty or longer than 200`);
       }
@@ -99,6 +117,20 @@ export function writableKeys(tickets: readonly Ticket[], config: TrackerConfig):
       .filter(t => t.assignee === config.assignee)
       .filter(t => (t.inOpenSprint && t.status === s.todo) || t.status === s.review)
       .map(t => t.key)
+  );
+}
+
+/**
+ * The search that confirms, at write time, which of the snapshot's keys pick may still write
+ * to: the same rule as `writableKeys`, asked of Jira rather than of a file. Null for no keys.
+ */
+export function writableJql(keys: readonly string[], config: TrackerConfig): string | null {
+  const valid = keys.filter(key => new RegExp(`^${config.project}-[1-9]\\d*$`).test(key));
+  if (valid.length === 0) return null;
+  const s = config.status;
+  return (
+    `key in (${valid.join(',')}) AND assignee = "${config.assignee}" AND ` +
+    `(status = ${s.review} OR (status = ${s.todo} AND sprint in openSprints()))`
   );
 }
 
