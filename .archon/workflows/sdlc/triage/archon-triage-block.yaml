@@ -246,7 +246,8 @@ nodes:
   # chosen by the model: one state label and one type label, plus a size label
   # while the item can still be worked. Each field's own type and vocabulary were certified on the
   # node above. Labels are written only under publish, after the item's identity
-  # is verified on the tracker, and read back before the node reports them.
+  # is verified on the tracker, and read back before the node reports them. A
+  # target that is a Jira ticket of the repository's tracker is labelled on Jira.
   - id: verdict
     script: verdict
     runtime: bun
@@ -264,6 +265,7 @@ nodes:
       summary: "$triage.output.summary"
       report: { from: "$triage.output.report" }
       publish: "$INPUTS.publish"
+      target: "$INPUTS.target"
     output_format:
       type: object
       properties:

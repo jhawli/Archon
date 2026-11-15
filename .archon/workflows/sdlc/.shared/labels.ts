@@ -1,14 +1,16 @@
 /**
- * The pack's labels and the one write that applies them.
+ * The pack's labels and the writes that apply them.
  *
  * Every label the pack writes is declared here with its color and description,
- * and every stage that writes labels goes through `writeLabels`. Stages are
- * joined by labels, one stage's exit label being the next stage's entry label,
- * so a name declared anywhere else is a copy that can drift.
+ * and every stage that writes labels goes through `writeLabels`, or
+ * `writeTicketLabels` for a Jira ticket. Stages are joined by labels, one stage's
+ * exit label being the next stage's entry label, so a name declared anywhere else
+ * is a copy that can drift.
  */
 
 import { forgeSource, invokeForge, readRepositoryLabels, type QualifiedPr } from './forge.ts';
 import { viewIssue } from './issue.ts';
+import type { Jira } from './jira.ts';
 
 interface LabelSpec {
   readonly color: string;
@@ -235,6 +237,39 @@ function forgeWrite(
   }
   for (const name of remove.filter(label => current.has(label))) {
     invokeForge('workitem.label.remove', { subject, name });
+  }
+  return applied;
+}
+
+/**
+ * The same delta write for a Jira ticket, read back like the GitHub path. Jira labels need no
+ * declaration, so every label is added as asked; an owned label is only ever removed. Reading
+ * the ticket first verifies the key on Jira before anything is written.
+ */
+export async function writeTicketLabels(
+  jira: Jira,
+  key: string,
+  add: readonly string[],
+  remove: readonly OwnedLabel[]
+): Promise<string[]> {
+  const current = new Set((await jira.ticket(key)).labels);
+  const applied = [...new Set(add)].sort();
+  const removing = new Set<string>(remove);
+  const stale = [...current].filter(name => removing.has(name) && !applied.includes(name)).sort();
+  const changes = [
+    ...applied.filter(name => !current.has(name)).map(name => ({ add: name })),
+    ...stale.map(name => ({ remove: name })),
+  ];
+  if (changes.length === 0) return applied;
+  // Single add and remove operations, never the whole set, so labels another writer set survive.
+  await jira.call('PUT', jira.issue(key), { update: { labels: changes } });
+  const after = new Set((await jira.ticket(key)).labels);
+  const missing = applied.filter(name => !after.has(name));
+  const lingering = stale.filter(name => after.has(name));
+  if (missing.length > 0 || lingering.length > 0) {
+    throw new Error(
+      `label read-back disagrees: missing=${JSON.stringify(missing)} lingering=${JSON.stringify(lingering)}`
+    );
   }
   return applied;
 }

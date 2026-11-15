@@ -11,12 +11,15 @@
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
  * read them back. Area labels are never created: the prompt may only pick labels
- * the repository already has. Publishing uses the selected forge source.
+ * the repository already has. Publishing uses the selected forge source; a target
+ * that is a Jira ticket of the repository's own tracker (`.archon/tracker.json`) is
+ * labelled on Jira instead, its `item` being the empty value.
  */
 
 import type { Closure } from '../../.shared/close.ts';
 import { record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
+import { Jira, trackerConfig } from '../../.shared/jira.ts';
 import {
   type Contract,
   isOwnedLabel,
@@ -26,7 +29,9 @@ import {
   type WorkType,
   wantedLabels,
   writeLabels,
+  writeTicketLabels,
 } from '../../.shared/labels.ts';
+import { ticketKeyOf } from '../../.shared/tickets.ts';
 
 type Item = QualifiedPr;
 /** One of triage's judged fields: a value and the one-line reason for it. */
@@ -80,7 +85,18 @@ function unqualifiedLink(
   return null;
 }
 
-function main(): void {
+/**
+ * The Jira ticket a target names, when it is one of the repository's own tracker. The
+ * tracker is read only for a ticket URL, so no other target needs a checkout.
+ */
+function jiraTicket(target: string): { jira: Jira; key: string } | null {
+  if (!JIRA_TICKET_URL.test(target.trim())) return null;
+  const config = trackerConfig();
+  const key = config === null ? null : ticketKeyOf(target, config);
+  return config === null || key === null ? null : { jira: new Jira(config), key };
+}
+
+async function main(): Promise<void> {
   const decision = bound(process.env.INPUTS_DECISION) as Decision;
   const contract: Contract = decision.contract;
   const route = 'route' in decision ? decision.route : 'no_action';
@@ -96,6 +112,8 @@ function main(): void {
   const importance = bound(process.env.INPUTS_IMPORTANCE) as Field<string>;
   const urgency = bound(process.env.INPUTS_URGENCY) as Field<string>;
   const publish = text(process.env.INPUTS_PUBLISH) === 'true';
+  // An empty target means the run's trigger message is the target.
+  const target = text(process.env.INPUTS_TARGET) || text(process.env.ARGUMENTS);
   const summary = text(process.env.INPUTS_SUMMARY);
   const area = bound(process.env.INPUTS_AREA_LABELS) as string[];
   const related = bound(process.env.INPUTS_RELATED) as { url: string; relation: string }[];
@@ -148,14 +166,14 @@ function main(): void {
 
   const wanted = wantedLabels(decision, type.value, size.value);
 
-  const published = publish && item !== undefined;
-  const labels = published
-    ? writeLabels(
-        item,
-        [...wanted, ...area],
-        OWNED_LABEL_NAMES.filter(name => !wanted.some(label => label === name))
-      )
-    : [...new Set([...wanted, ...area])].sort();
+  const adding = [...wanted, ...area];
+  const removing = OWNED_LABEL_NAMES.filter(name => !wanted.some(label => label === name));
+  const ticket = publish && item === undefined ? jiraTicket(target) : null;
+  const published = publish && (item !== undefined || ticket !== null);
+  let labels: string[];
+  if (publish && item !== undefined) labels = writeLabels(item, adding, removing);
+  else if (ticket !== null) labels = await writeTicketLabels(ticket.jira, ticket.key, adding, removing);
+  else labels = [...new Set(adding)].sort();
 
   emit({
     contract,
@@ -180,7 +198,7 @@ function main(): void {
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   refuse(`triage labels: ${error instanceof Error ? error.message : String(error)}`);
 }
