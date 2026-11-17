@@ -1,15 +1,16 @@
 /**
  * The lap's board from Jira, before pick reads it.
  *
- * Without `.archon/tracker.json` the pack works on GitHub issues and this writes nothing.
- * With Jira it loads the same board as the launch gate (the open sprint's tickets in rank
- * order, flagged ones included so pick may lift a bookkeeping flag, and the tickets open
- * pull requests name) and writes it for the agents to `$ARTIFACTS_DIR/tracker/board.md`.
- * The keys pick may write to go into the run's state directory, where agents cannot write
- * (`writableKeys`). It also prunes old runs' state directories.
+ * Without `.archon/tracker.json` the run ends here, before any agent (AK18e): this fork
+ * tracks work in Jira only. It loads the same board as the launch gate (the open sprint's
+ * tickets in rank order, flagged ones included so pick may lift a bookkeeping flag, and the
+ * tickets open pull requests name) and writes it for the agents to
+ * `$ARTIFACTS_DIR/tracker/board.md`. The keys pick may write to go into the run's state
+ * directory, where agents cannot write (`writableKeys`). It also prunes old runs' state
+ * directories.
  *
- * Either way it pins the tracker config for the run: every later node reads the copy in the
- * state directory, not the checkout the agents write in.
+ * It pins the tracker config for the run: every later node reads the copy in the state
+ * directory, not the checkout the agents write in.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -18,6 +19,7 @@ import { expiryHours, pruneRunStates, runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
 import { boardMarkdown, clearOutbox, WRITERS, writableKeys } from '../../.shared/outbox.ts';
+import { trackerCheck } from '../../.shared/tracker-check.ts';
 import { loadJiraBoard, openPulls } from '../../.shared/tracker-board.ts';
 import { workability } from '../../.shared/workable.ts';
 
@@ -26,24 +28,21 @@ const KEEP_RUN_STATE_MS = 14 * 86_400_000;
 
 const hours = expiryHours(trimmed(process.env.INPUTS_CLAIM_HOURS));
 // The loop's first node: what the checkout says now, before any agent wrote in it, is the
-// tracker config for the whole run (`pinTrackerConfig`).
+// tracker config for the whole run (`pinTrackerConfig`). A resumed run reads its pin.
 const state = runState();
+trackerCheck('archon-loop');
 const config = pinTrackerConfig(state);
-if (config === null) {
-  emit({ ready: 'github', board: '' });
-} else {
-  pruneRunStates(process.env.STATE_DIR ?? '', KEEP_RUN_STATE_MS);
-  const loaded = await loadJiraBoard(new Jira(config), openPulls());
-  const waiting = new Map<string, string>();
-  for (const entry of workability(loaded.board, hours, Date.now(), new Set(), loaded.links).waiting) {
-    if (entry.kind === 'ticket') waiting.set(entry.key, entry.why);
-  }
-  // Before the first agent: no outbox file of this run is anyone's yet.
-  clearOutbox(artifactsDir(), WRITERS);
-  const dir = join(artifactsDir(), 'tracker');
-  mkdirSync(dir, { recursive: true });
-  const board = join(dir, 'board.md');
-  writeFileSync(board, boardMarkdown(loaded.tickets, loaded.comments, waiting, config));
-  writeFileSync(join(state, 'keys.json'), `${JSON.stringify([...writableKeys(loaded.tickets, config)])}\n`);
-  emit({ ready: 'jira', board });
+pruneRunStates(process.env.STATE_DIR ?? '', KEEP_RUN_STATE_MS);
+const loaded = await loadJiraBoard(new Jira(config), openPulls());
+const waiting = new Map<string, string>();
+for (const entry of workability(loaded.board, hours, Date.now(), new Set(), loaded.links).waiting) {
+  if (entry.kind === 'ticket') waiting.set(entry.key, entry.why);
 }
+// Before the first agent: no outbox file of this run is anyone's yet.
+clearOutbox(artifactsDir(), WRITERS);
+const dir = join(artifactsDir(), 'tracker');
+mkdirSync(dir, { recursive: true });
+const board = join(dir, 'board.md');
+writeFileSync(board, boardMarkdown(loaded.tickets, loaded.comments, waiting, config));
+writeFileSync(join(state, 'keys.json'), `${JSON.stringify([...writableKeys(loaded.tickets, config)])}\n`);
+emit({ ready: 'jira', board });

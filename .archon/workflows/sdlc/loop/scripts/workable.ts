@@ -21,6 +21,7 @@ import { deadClaims, expiryHours } from '../../.shared/claims.ts';
 import { trimmed } from '../../.shared/io.ts';
 import { Jira, trackerConfig } from '../../.shared/jira.ts';
 import { ticketPr, type PrRow } from '../../.shared/tickets.ts';
+import { trackerCheck } from '../../.shared/tracker-check.ts';
 import { GITHUB_FIELDS, githubItems, loadJiraBoard, openPulls, type GithubItem } from '../../.shared/tracker-board.ts';
 import { workability, type Board, type Links } from '../../.shared/workable.ts';
 
@@ -47,6 +48,8 @@ function githubBoard(pulls: GithubItem[]): { board: Board; updated: string } {
 const released = (run: string): string =>
   `Loop claim released: run ${run} ended. Its \`Loop review:\` comment, if any, says what it did. (Released by the scheduler: the run ended without releasing it.)`;
 
+// Before anything reads GitHub or Jira: a repository without tracker.json gets no lap (AK18e).
+trackerCheck('archon-loop');
 const config = trackerConfig();
 const pulls = openPulls();
 const hours = expiryHours(trimmed(process.env.INPUTS_CLAIM_HOURS));

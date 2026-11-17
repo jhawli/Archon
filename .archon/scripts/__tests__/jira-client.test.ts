@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   Jira,
+  NEEDS_TRACKER,
   adf,
   plain,
   pinTrackerConfig,
@@ -74,7 +75,7 @@ function repoWith(config: unknown): string {
 }
 
 describe('tracker config', () => {
-  it('is null without .archon/tracker.json, so the pack stays on GitHub issues', () => {
+  it('is null without .archon/tracker.json', () => {
     expect(trackerConfig(mkdtempSync(join(tmpdir(), 'trk-')))).toBeNull();
   });
   it('reads the file', () => {
@@ -422,18 +423,25 @@ describe('the tracker config a run pins', () => {
     // A resumed run keeps its pin too.
     expect(pinTrackerConfig(stateOf(stateDir), root)?.owner).toBe('acc-julian');
   });
-  it('pins "no tracker" as well: a tracker.json added mid-run changes nothing', () => {
+  it('pinTrackerConfig without tracker.json throws and pins nothing', () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'st-'));
     const root = mkdtempSync(join(tmpdir(), 'trk-'));
-    expect(pinTrackerConfig(stateOf(stateDir), root)).toBeNull();
+    expect(() => pinTrackerConfig(stateOf(stateDir), root)).toThrow(NEEDS_TRACKER);
+    // Nothing was pinned: a tracker.json in the same checkout is pinned on the next call.
     mkdirSync(join(root, '.archon'));
     writeFileSync(join(root, '.archon/tracker.json'), JSON.stringify(CFG));
-    expect(pinTrackerConfig(stateOf(stateDir), root)).toBeNull();
-    expect(withRun(stateDir, () => trackerConfig())).toBeNull();
+    expect(pinTrackerConfig(stateOf(stateDir), root).project).toBe('CONC');
+    expect(withRun(stateDir, () => trackerConfig())?.project).toBe('CONC');
+  });
+  it('a "no tracker" pin an older run left behind ends the run too', () => {
+    const stateDir = mkdtempSync(join(tmpdir(), 'st-'));
+    writeFileSync(join(stateOf(stateDir), 'tracker.json'), 'null\n');
+    expect(() => pinTrackerConfig(stateOf(stateDir), repoWith(CFG))).toThrow(NEEDS_TRACKER);
   });
   it('an explicit root always reads that checkout', () => {
     const stateDir = mkdtempSync(join(tmpdir(), 'st-'));
-    pinTrackerConfig(stateOf(stateDir), mkdtempSync(join(tmpdir(), 'trk-')));
+    pinTrackerConfig(stateOf(stateDir), repoWith({ ...CFG, project: 'PIN' }));
+    expect(withRun(stateDir, () => trackerConfig())?.project).toBe('PIN');
     expect(withRun(stateDir, () => trackerConfig(repoWith(CFG)))?.project).toBe('CONC');
   });
 });

@@ -1,0 +1,13 @@
+# Dry-run fixture (with --exec-code: tracker-read really runs). AK18e: this fork tracks
+# work in Jira only. The scratch checkout of HEAD has no .archon/tracker.json, so the
+# loop's first node refuses the run and no agent starts: pick has no stub and is not in
+# the failed set, so it never ran. That it fails with the tracker sentence is shown by
+# tracker-check.test.ts; here it is the node and the place in the run.
+#
+# write-build, subject and release join with `trigger_rule: all_done` and fail on their
+# `when:` (`$pick.output.route` of a pick that never ran) before any script: stubs for
+# them stay unused. Any failure of tracker-read ends a lap this way.
+fixture:
+  expect: failed
+  fail-node: [tracker-read, write-build, subject, release]
+exec-code: true

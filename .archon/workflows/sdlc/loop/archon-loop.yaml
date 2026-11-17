@@ -66,8 +66,8 @@ inputs:
       (it died). Longer than the longest lap; a run that ends releases its claim.
 
 nodes:
-  # With Jira (.archon/tracker.json), the lap's board as files: agents hold no token.
-  # Without it, nothing to do; the agents read GitHub as before.
+  # The lap's board from Jira (.archon/tracker.json) as files: agents hold no token.
+  # Without tracker.json the run ends here, before any agent (AK18e).
   - id: tracker-read
     script: tracker-read
     runtime: bun
@@ -76,7 +76,7 @@ nodes:
     output_format:
       type: object
       properties:
-        ready: { type: string, enum: [github, jira] }
+        ready: { type: string, enum: [jira] }
         board: { type: string }
       required: [ready, board]
 

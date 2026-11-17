@@ -68,7 +68,8 @@ function pinnedPath(stateDir = process.env.STATE_DIR ?? '', run = process.env.WO
 }
 
 /**
- * The repository's tracker, or null when it has none (the pack then uses GitHub issues).
+ * The repository's tracker, or null when it has none. Only a reader: whatever needs a tracker
+ * calls `requireTracker`, because this fork tracks work in Jira only (AK18e).
  *
  * Inside a run that pinned its config (`pinTrackerConfig`, the loop's first node) the pinned
  * copy is the answer, whatever the checkout says by then: agents write in the checkout, and
@@ -88,19 +89,31 @@ export function trackerConfig(root?: string): TrackerConfig | null {
   return parseTracker(obj(JSON.parse(readFileSync(path, 'utf8'))));
 }
 
+/** The one sentence a run without a tracker ends with (AK18e). */
+export const NEEDS_TRACKER = 'braucht .archon/tracker.json: dieser Fork führt Tickets nur in Jira';
+
+/** The repository's tracker; there is no GitHub-issue mode any more, so a missing file is an error. */
+export function requireTracker(root?: string): TrackerConfig {
+  const config = trackerConfig(root);
+  if (config === null) throw new Error(NEEDS_TRACKER);
+  return config;
+}
+
 /**
  * Read the checkout's tracker config once, before the run's first agent, and keep it in the
  * run's state directory (`state`, where agents cannot write) for every later node. A pin that
- * is already there stays: a resumed run must not pick up what an agent wrote since. "No
- * tracker" is pinned too, so a `tracker.json` an agent adds mid-run changes nothing.
+ * is already there stays: a resumed run must not pick up what an agent wrote since. Without
+ * a tracker nothing is pinned and the run ends here (AK18e); a "no tracker" pin an older run
+ * left behind ends it the same way.
  */
-export function pinTrackerConfig(state: string, root = repoRoot()): TrackerConfig | null {
+export function pinTrackerConfig(state: string, root = repoRoot()): TrackerConfig {
   const pinned = join(state, 'tracker.json');
   if (existsSync(pinned)) {
     const raw = JSON.parse(readFileSync(pinned, 'utf8')) as unknown;
-    return raw === null ? null : parseTracker(obj(raw));
+    if (raw === null) throw new Error(NEEDS_TRACKER);
+    return parseTracker(obj(raw));
   }
-  const config = trackerConfig(root);
+  const config = requireTracker(root);
   writeFileSync(pinned, `${JSON.stringify(config, null, 2)}\n`);
   return config;
 }
