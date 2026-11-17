@@ -9,8 +9,9 @@
  */
 
 import { recordLap, runState } from '../../.shared/claims.ts';
-import { emit, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { requireTracker } from '../../.shared/jira.ts';
+import { writeBaseResults } from '../../.shared/metrics.ts';
 import { type PrRow, ticketKeyOf, ticketPr } from '../../.shared/tickets.ts';
 
 const started = String(Date.now());
@@ -55,3 +56,5 @@ if (pr === '') {
   const head = fetched.exitCode === 0 ? fetched.stdout.toString().trim() : view.headRefOid;
   emit({ pr, head: head || view.headRefOid, base: view.baseRefName, files: view.files.map(f => f.path).join('\n'), started });
 }
+// The app check runs next: the manager's latest holdout line is its comparison value (AK18n).
+writeBaseResults(artifactsDir(), process.env.STATE_DIR ?? '');
