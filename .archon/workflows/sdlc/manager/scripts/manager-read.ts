@@ -26,14 +26,24 @@ const board = writeBoardAll(all, Date.now(), config, artifacts, state);
 const dir = join(artifacts, 'manager');
 mkdirSync(dir, { recursive: true });
 const runs = join(dir, 'runs.json');
-const listed = Bun.spawnSync([...archonCommand(), 'workflow', 'runs', '--limit', '60', '--cwd', repoRoot(), '--json'], {
-  stdout: 'pipe',
-  stderr: 'pipe',
-});
-if (listed.exitCode === 0) {
-  writeFileSync(runs, listed.stdout);
-} else {
-  writeFileSync(runs, `${JSON.stringify({ error: listed.stderr.toString().trim().slice(0, 500) })}\n`);
+// Help, not a condition: any failure (no CLI command published, a missing binary, a failed or
+// unreadable list) leaves `{ error }` for the agent, never a failed node.
+let failed = '';
+try {
+  const listed = Bun.spawnSync([...archonCommand(), 'workflow', 'runs', '--limit', '60', '--cwd', repoRoot(), '--json'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if (listed.exitCode !== 0) failed = listed.stderr.toString().trim() || `exit ${listed.exitCode}`;
+  else {
+    JSON.parse(listed.stdout.toString());
+    writeFileSync(runs, listed.stdout);
+  }
+} catch (error) {
+  failed = error instanceof Error ? error.message : String(error);
+}
+if (failed !== '') {
+  writeFileSync(runs, `${JSON.stringify({ error: failed.slice(0, 500) })}\n`);
   note('archon workflow runs failed; the manager reports without the run list');
 }
 const metrics = join(process.env.STATE_DIR ?? '', METRICS_FILE);

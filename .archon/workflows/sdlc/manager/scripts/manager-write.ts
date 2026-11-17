@@ -47,11 +47,13 @@ const resumedPath = join(stateDir, 'manager-resumed.json');
 const resumed = new Set<string>(existsSync(resumedPath) ? (JSON.parse(readFileSync(resumedPath, 'utf8')) as string[]) : []);
 const allowed: RunOp[] = [];
 const skipped: string[] = [];
+const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 300);
+// Never at the cost of the ticket writes: whatever goes wrong with the run list (no CLI command
+// published, a missing binary, output that is not JSON) skips the run actions and is logged.
 if (runOps.length > 0) {
-  const listed = cli(['workflow', 'runs', '--limit', '100', '--json']);
-  if (listed.exitCode !== 0) {
-    skipped.push(...runOps.map(op => `${op.op} ${op.run}: archon workflow runs failed`));
-  } else {
+  try {
+    const listed = cli(['workflow', 'runs', '--limit', '100', '--json']);
+    if (listed.exitCode !== 0) throw new Error(`archon workflow runs failed (exit ${listed.exitCode})`);
     const rows = (JSON.parse(listed.stdout.toString()) as { runs?: RunRow[] }).runs ?? [];
     const now = Date.now();
     // One action per run and pass: a second entry for the same run would pass this check too
@@ -68,6 +70,10 @@ if (runOps.length > 0) {
       if (why === null) allowed.push(op);
       else skipped.push(`${op.op} ${op.run}: ${why}`);
     }
+  } catch (error) {
+    allowed.length = 0;
+    skipped.length = 0;
+    skipped.push(...runOps.map(op => `${op.op} ${op.run}: the run list could not be read (${reason(error)})`));
   }
 }
 
@@ -92,9 +98,13 @@ for (const op of allowed) {
     resumed.add(op.run);
     writeFileSync(resumedPath, `${JSON.stringify([...resumed])}\n`); // before the resume: a crash never resumes twice
   }
-  const done = cli(op.op === 'abandon' ? ['workflow', 'abandon', op.run] : ['workflow', 'resume', op.run, '--detach']);
-  if (done.exitCode === 0) acted.push(`${op.op} ${op.run}: ${op.text}`);
-  else skipped.push(`${op.op} ${op.run}: failed: ${done.stderr.toString().trim().slice(0, 300)}`);
+  try {
+    const done = cli(op.op === 'abandon' ? ['workflow', 'abandon', op.run] : ['workflow', 'resume', op.run, '--detach']);
+    if (done.exitCode === 0) acted.push(`${op.op} ${op.run}: ${op.text}`);
+    else skipped.push(`${op.op} ${op.run}: failed: ${done.stderr.toString().trim().slice(0, 300)}`);
+  } catch (error) {
+    skipped.push(`${op.op} ${op.run}: failed: ${reason(error)}`);
+  }
 }
 for (const line of skipped) note(`manager run action skipped: ${line}`);
 const tickets = ops.filter(op => op.op !== 'abandon' && op.op !== 'resume').length;
