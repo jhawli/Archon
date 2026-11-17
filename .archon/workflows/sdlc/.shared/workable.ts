@@ -4,13 +4,13 @@
  * A scheduler calls this before it starts a lap. A lap that finds nothing to do still
  * costs a pick, a worktree and a database run, and a backlog that is one long chain of
  * dependencies leaves most parallel laps with nothing. This mirrors the pick rules that
- * are facts rather than judgement: an item with a live claim is taken, an item labelled
- * `needs-owner` waits for the owner, an issue waits for its `Depends on:` items, and the
- * issues the manager keeps for itself are not work. Anything it is unsure of counts as
- * workable, so the gate can only skip laps that would have picked nothing.
+ * are facts rather than judgement: an item with a live claim is taken, a flagged ticket (or
+ * one labelled `needs-owner`) waits for the owner, and a ticket waits for its `Depends on:`
+ * tickets. Anything it is unsure of counts as workable, so the gate can only skip laps that
+ * would have picked nothing.
  *
- * Items carry text ids: `CONC-5` for a Jira ticket, `#5` for a GitHub issue or pull request.
- * The result names them as `{kind: 'ticket', key}` or `{kind: 'issue' | 'pull', number}`.
+ * Work items are Jira tickets (`CONC-5`); pull requests stay on GitHub (`#5`). The result
+ * names them as `{kind: 'ticket', key}` or `{kind: 'pull', number}`.
  */
 
 import { CLAIM_PREFIX } from './claims.ts';
@@ -23,7 +23,7 @@ export interface BoardComment {
 }
 
 export interface BoardItem {
-  /** `CONC-5` for a Jira ticket, `#5` for a GitHub issue or pull request. */
+  /** `CONC-5` for a Jira ticket, `#5` for a GitHub pull request. */
   readonly id: string;
   readonly title: string;
   readonly body: string;
@@ -36,22 +36,23 @@ export interface BoardItem {
 }
 
 export interface Board {
+  /** The tickets (Jira work items). */
   readonly issues: readonly BoardItem[];
   readonly pulls: readonly BoardItem[];
   /** Ids that still block a `Depends on` line. */
   readonly open: ReadonlySet<string>;
 }
 
-/** How the board's text names other items: `#n` on GitHub, `CONC-n` with Jira. */
+/** How the board's text names tickets (`CONC-n`, `tracker-board.ts` `jiraLinks`). */
 export interface Links {
   readonly references: (body: string) => string[];
   readonly dependencies: (body: string) => string[];
 }
 
-/** A Jira ticket by key, or a GitHub issue or pull request by number. */
+/** A Jira ticket by key, or a GitHub pull request by number. */
 export type ItemRef =
   | { readonly kind: 'ticket'; readonly key: string }
-  | { readonly kind: 'issue' | 'pull'; readonly number: number };
+  | { readonly kind: 'pull'; readonly number: number };
 
 export type LiveClaim = ItemRef & { readonly run: string };
 
@@ -67,35 +68,6 @@ export interface Workability {
 
 /** The label an owner decision carries; the loop never works an item under it. */
 export const OWNER_LABEL = 'needs-owner';
-
-/** Issues the manager keeps for its own records. They hold questions and metrics, not work. */
-export const MANAGER_TITLES = new Set(['Owner decisions needed', 'Loop metrics']);
-
-/** `Depends on: #12, #14` lines, as pick reads them. */
-export function dependencies(body: string): number[] {
-  const found: number[] = [];
-  for (const line of body.split(/\r?\n/)) {
-    const match = /^\s*[-*]?\s*\**depends on\**:?\**\s*(.*)$/i.exec(line);
-    if (match === null) continue;
-    for (const ref of match[1].matchAll(/#(\d+)/g)) found.push(Number(ref[1]));
-  }
-  return found;
-}
-
-/** Issues a pull request says it delivers (`Closes #n`, `Fixes #n`, `Resolves #n`). */
-export function closes(body: string): number[] {
-  return [...body.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/gi)].map(m => Number(m[1]));
-}
-
-/**
- * Issues a pull request is the work for: the ones it closes, and the ones it only references
- * (`Refs #n`, `Relates to #n`). A delivery links its issue with `Refs` until its final review
- * adds the closing keyword, and while it does, a lap holding the issue holds the pull request too.
- */
-export function references(body: string): number[] {
-  const refs = [...body.matchAll(/\b(?:refs?|relates? to|references?)\s+#(\d+)/gi)].map(m => Number(m[1]));
-  return [...new Set([...closes(body), ...refs])];
-}
 
 /** Unexpired claim comments on an item, oldest first, with the run each names. */
 export function liveClaimComments(
@@ -113,43 +85,42 @@ export function liveClaimComments(
   return found;
 }
 
-export const GITHUB_LINKS: Links = {
-  references: body => references(body).map(n => `#${n}`),
-  dependencies: body => dependencies(body).map(n => `#${n}`),
-};
+function ticketRef(id: string): ItemRef {
+  return { kind: 'ticket', key: id };
+}
 
-function ref(kind: 'issue' | 'pull', id: string): ItemRef {
-  return id.startsWith('#') ? { kind, number: Number(id.slice(1)) } : { kind: 'ticket', key: id };
+function pullRef(id: string): ItemRef {
+  return { kind: 'pull', number: Number(id.replace(/^#/, '')) };
 }
 
 /**
  * The board as a lap would find it. `endedRuns` are runs the scheduler knows have
  * finished, failed or been cancelled: a run killed before its release step never frees
  * its item, so its claim is treated as dead here and returned in `ended` for release.
- * `links` reads how items name each other; GitHub's `#n` unless the board comes from Jira.
+ * `links` reads how tickets and pull requests name tickets.
  */
 export function workability(
   board: Board,
   expiryHours: number,
-  now = Date.now(),
-  endedRuns: ReadonlySet<string> = new Set(),
-  links: Links = GITHUB_LINKS
+  now: number,
+  endedRuns: ReadonlySet<string>,
+  links: Links
 ): Workability {
   const claims: LiveClaim[] = [];
   const ended: EndedClaim[] = [];
   const claimed = new Map<string, string>();
-  for (const [kind, items] of [
-    ['issue', board.issues],
-    ['pull', board.pulls],
+  for (const [kind, items, ref] of [
+    ['ticket', board.issues, ticketRef],
+    ['pull', board.pulls, pullRef],
   ] as const) {
     for (const item of items) {
       for (const { run, comment } of liveClaimComments(item.comments, expiryHours, now)) {
         if (endedRuns.has(run)) {
-          if (comment.url) ended.push({ ...ref(kind, item.id), run, url: comment.url });
+          if (comment.url) ended.push({ ...ref(item.id), run, url: comment.url });
           continue;
         }
         if (claimed.has(`${kind}:${item.id}`)) continue;
-        claims.push({ ...ref(kind, item.id), run });
+        claims.push({ ...ref(item.id), run });
         claimed.set(`${kind}:${item.id}`, run);
       }
     }
@@ -165,23 +136,22 @@ export function workability(
   for (const pull of board.pulls) {
     const linked = links.references(pull.body).filter(id => byId.has(id));
     const owner = pull.owner || linked.some(id => byId.get(id)?.owner === true);
-    const holder = claimed.get(`pull:${pull.id}`) ?? linked.map(id => claimed.get(`issue:${id}`)).find(Boolean);
-    if (owner) waiting.push({ ...ref('pull', pull.id), why: OWNER_LABEL });
-    else if (holder) waiting.push({ ...ref('pull', pull.id), why: `claimed by run ${holder}` });
-    else workable.push(ref('pull', pull.id));
+    const holder = claimed.get(`pull:${pull.id}`) ?? linked.map(id => claimed.get(`ticket:${id}`)).find(Boolean);
+    if (owner) waiting.push({ ...pullRef(pull.id), why: OWNER_LABEL });
+    else if (holder) waiting.push({ ...pullRef(pull.id), why: `claimed by run ${holder}` });
+    else workable.push(pullRef(pull.id));
   }
-  for (const issue of board.issues) {
-    const blockers = links.dependencies(issue.body).filter(id => board.open.has(id));
-    const holder = claimed.get(`issue:${issue.id}`);
+  for (const ticket of board.issues) {
+    const blockers = links.dependencies(ticket.body).filter(id => board.open.has(id));
+    const holder = claimed.get(`ticket:${ticket.id}`);
     let why: string | null = null;
-    if (MANAGER_TITLES.has(issue.title.trim())) why = "the manager's own record";
-    else if (issue.owner) why = OWNER_LABEL;
-    else if (deliveredBy.has(issue.id)) why = `delivered by pull request ${deliveredBy.get(issue.id)}`;
+    if (ticket.owner) why = OWNER_LABEL;
+    else if (deliveredBy.has(ticket.id)) why = `delivered by pull request ${deliveredBy.get(ticket.id)}`;
     else if (holder) why = `claimed by run ${holder}`;
     else if (blockers.length > 0) why = `depends on ${blockers.join(', ')}`;
-    else if (!issue.candidate) why = 'not startable';
-    if (why === null) workable.push(ref('issue', issue.id));
-    else waiting.push({ ...ref('issue', issue.id), why });
+    else if (!ticket.candidate) why = 'not startable';
+    if (why === null) workable.push(ticketRef(ticket.id));
+    else waiting.push({ ...ticketRef(ticket.id), why });
   }
   return { workable, claims, ended, waiting };
 }

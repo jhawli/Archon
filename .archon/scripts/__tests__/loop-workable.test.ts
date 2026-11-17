@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'bun:test';
+import { dependencyKeys, referencedKeys } from '../../workflows/sdlc/.shared/tickets';
+import { jiraLinks } from '../../workflows/sdlc/.shared/tracker-board';
 import {
-  closes,
-  references,
-  dependencies,
   workability as workabilityOf,
   type Board,
   type BoardItem,
@@ -12,33 +11,38 @@ import {
 const now = Date.parse('2026-10-17T12:00:00Z');
 const hoursAgo = (h: number): string => new Date(now - h * 3_600_000).toISOString();
 
-function item(number: number, extra: Partial<BoardItem> = {}): BoardItem {
+/** A ticket `CONC-n` on the board. Work items live in Jira; pull requests stay on GitHub. */
+function ticket(n: number, extra: Partial<BoardItem> = {}): BoardItem {
   const labels = extra.labels ?? [];
   return {
-    id: `#${number}`,
-    title: `item ${number}`,
+    id: `CONC-${n}`,
+    title: `ticket ${n}`,
     body: '',
     comments: [],
     candidate: true,
     ...extra,
     labels,
-    owner: labels.includes('needs-owner'),
+    owner: extra.owner ?? labels.includes('needs-owner'),
   };
 }
 
-/** GitHub boards block on every open issue and pull request, as the launch gate builds them. */
+/** A pull request `#n` on the board. */
+function pull(n: number, extra: Partial<BoardItem> = {}): BoardItem {
+  return { ...ticket(n, extra), id: `#${n}`, title: `pull ${n}` };
+}
+
+/** Every item on the board still blocks a `Depends on`, as an open sprint would. */
 function workability(
   board: Omit<Board, 'open'>,
   expiryHours: number,
   at: number,
-  endedRuns?: ReadonlySet<string>
+  endedRuns: ReadonlySet<string> = new Set()
 ): Workability {
   const open = new Set([...board.issues, ...board.pulls].map(i => i.id));
-  return workabilityOf({ ...board, open }, expiryHours, at, endedRuns);
+  return workabilityOf({ ...board, open }, expiryHours, at, endedRuns, jiraLinks('CONC'));
 }
 
-const numbers = (refs: readonly { kind: string; number?: number }[]): (number | undefined)[] =>
-  refs.map(r => r.number);
+const keys = (refs: readonly { kind: string; key?: string }[]): (string | undefined)[] => refs.map(r => r.key);
 
 const claim = (run: string, h = 1): BoardItem['comments'][number] => ({
   body: `Loop claim: run ${run}\n\nRoute: simple\nArea: a`,
@@ -47,112 +51,116 @@ const claim = (run: string, h = 1): BoardItem['comments'][number] => ({
 
 describe('loop launch gate', () => {
   it('reads Depends on lines and closing keywords the way pick does', () => {
-    expect(dependencies('Intro\nDepends on: #3, #5\n- **Depends on:** #9')).toEqual([3, 5, 9]);
-    expect(dependencies('This depends on nothing; see #4')).toEqual([]);
-    expect(closes('Closes #12. Also fixes #13 and Resolves #14')).toEqual([12, 13, 14]);
+    expect(dependencyKeys('Intro\nDepends on: CONC-3, CONC-5\n- **Depends on:** CONC-9', 'CONC')).toEqual([
+      'CONC-3',
+      'CONC-5',
+      'CONC-9',
+    ]);
+    expect(dependencyKeys('This depends on nothing; see CONC-4', 'CONC')).toEqual([]);
+    // `#n` is a pull request, never a work item.
+    expect(dependencyKeys('Depends on: #3', 'CONC')).toEqual([]);
+    expect(referencedKeys('Closes CONC-12. Also fixes CONC-13 and Resolves CONC-14', 'CONC')).toEqual([
+      'CONC-12',
+      'CONC-13',
+      'CONC-14',
+    ]);
   });
 
-  it('an open issue with no claim, owner label or open dependency is workable', () => {
-    const result = workability({ issues: [item(1), item(2, { body: 'Depends on: #9' })], pulls: [] }, 6, now);
-    // #9 is not open, so it is closed: #2 is free too.
+  it('ein Ticket im Sprint ohne Claim, Flag oder offene Abhängigkeit ist wählbar', () => {
+    const result = workability({ issues: [ticket(1), ticket(2, { body: 'Depends on: CONC-9' })], pulls: [] }, 6, now);
+    // CONC-9 is not on the board, so it is done: CONC-2 is free too.
     expect(result.workable).toEqual([
-      { kind: 'issue', number: 1 },
-      { kind: 'issue', number: 2 },
+      { kind: 'ticket', key: 'CONC-1' },
+      { kind: 'ticket', key: 'CONC-2' },
     ]);
   });
 
   it('a serial chain leaves only its head workable', () => {
     const result = workability(
       {
-        issues: [item(1), item(2, { body: 'Depends on: #1' }), item(3, { body: 'Depends on: #2' })],
+        issues: [ticket(1), ticket(2, { body: 'Depends on: CONC-1' }), ticket(3, { body: 'Depends on: CONC-2' })],
         pulls: [],
       },
       6,
       now
     );
-    expect(result.workable).toEqual([{ kind: 'issue', number: 1 }]);
-    expect(result.waiting.map(w => w.why)).toEqual(['depends on #1', 'depends on #2']);
+    expect(result.workable).toEqual([{ kind: 'ticket', key: 'CONC-1' }]);
+    expect(result.waiting.map(w => w.why)).toEqual(['depends on CONC-1', 'depends on CONC-2']);
   });
 
-  it('live claims take items; released, withdrawn and expired claims do not', () => {
+  it('live claims take tickets; released, withdrawn and expired claims do not', () => {
     const result = workability(
       {
         issues: [
-          item(1, { comments: [claim('run-a')] }),
-          item(2, { comments: [{ body: 'Loop claim released: run run-b ended.', createdAt: hoursAgo(1) }] }),
-          item(3, { comments: [{ body: 'Loop claim withdrawn: run run-c', createdAt: hoursAgo(1) }] }),
-          item(4, { comments: [claim('run-d', 7)] }),
+          ticket(1, { comments: [claim('run-a')] }),
+          ticket(2, { comments: [{ body: 'Loop claim released: run run-b ended.', createdAt: hoursAgo(1) }] }),
+          ticket(3, { comments: [{ body: 'Loop claim withdrawn: run run-c', createdAt: hoursAgo(1) }] }),
+          ticket(4, { comments: [claim('run-d', 7)] }),
         ],
         pulls: [],
       },
       6,
       now
     );
-    expect(result.claims).toEqual([{ kind: 'issue', number: 1, run: 'run-a' }]);
-    expect(numbers(result.workable)).toEqual([2, 3, 4]);
+    expect(result.claims).toEqual([{ kind: 'ticket', key: 'CONC-1', run: 'run-a' }]);
+    expect(keys(result.workable)).toEqual(['CONC-2', 'CONC-3', 'CONC-4']);
   });
 
   it('a claim held by a run the scheduler knows has ended is dead and returned for release', () => {
-    const dead = { ...claim('run-gone'), url: 'https://github.com/o/r/issues/1#issuecomment-77' };
+    const dead = { ...claim('run-gone'), url: 'https://example.atlassian.net/browse/CONC-1?focusedCommentId=77' };
     const result = workability(
-      { issues: [item(1, { comments: [dead, claim('run-live')] })], pulls: [] },
+      { issues: [ticket(1, { comments: [dead, claim('run-live')] })], pulls: [] },
       6,
       now,
       new Set(['run-gone'])
     );
-    // The next live claim holds the item; the dead one is released, not counted.
-    expect(result.claims).toEqual([{ kind: 'issue', number: 1, run: 'run-live' }]);
-    expect(result.ended).toEqual([{ kind: 'issue', number: 1, run: 'run-gone', url: dead.url }]);
+    // The next live claim holds the ticket; the dead one is released, not counted.
+    expect(result.claims).toEqual([{ kind: 'ticket', key: 'CONC-1', run: 'run-live' }]);
+    expect(result.ended).toEqual([{ kind: 'ticket', key: 'CONC-1', run: 'run-gone', url: dead.url }]);
     expect(result.workable).toEqual([]);
 
-    const alone = workability({ issues: [item(2, { comments: [dead] })], pulls: [] }, 6, now, new Set(['run-gone']));
-    expect(alone.workable).toEqual([{ kind: 'issue', number: 2 }]);
+    const alone = workability({ issues: [ticket(2, { comments: [dead] })], pulls: [] }, 6, now, new Set(['run-gone']));
+    expect(alone.workable).toEqual([{ kind: 'ticket', key: 'CONC-2' }]);
   });
 
-  it("owner decisions and the manager's records are not work", () => {
+  it('owner decisions are not work: a flagged ticket, or one labelled needs-owner', () => {
     const result = workability(
-      {
-        issues: [
-          item(1, { labels: ['needs-owner'] }),
-          item(2, { title: 'Owner decisions needed' }),
-          item(3, { title: 'Loop metrics' }),
-        ],
-        pulls: [],
-      },
+      { issues: [ticket(1, { labels: ['needs-owner'] }), ticket(2, { owner: true })], pulls: [] },
       6,
       now
     );
     expect(result.workable).toEqual([]);
+    expect(result.waiting.map(w => w.why)).toEqual(['needs-owner', 'needs-owner']);
   });
 
-  it('an open pull request is the work for the issue it closes, and shares its claim', () => {
-    const free = workability({ issues: [item(1)], pulls: [item(20, { body: 'Closes #1' })] }, 6, now);
+  it('an open pull request is the work for the ticket it closes, and shares its claim', () => {
+    const free = workability({ issues: [ticket(1)], pulls: [pull(20, { body: 'Closes CONC-1' })] }, 6, now);
     expect(free.workable).toEqual([{ kind: 'pull', number: 20 }]);
 
     const held = workability(
-      { issues: [item(1, { comments: [claim('run-a')] })], pulls: [item(20, { body: 'Closes #1' })] },
+      { issues: [ticket(1, { comments: [claim('run-a')] })], pulls: [pull(20, { body: 'Closes CONC-1' })] },
       6,
       now
     );
     expect(held.workable).toEqual([]);
 
     const parked = workability(
-      { issues: [item(1, { labels: ['needs-owner'] })], pulls: [item(20, { body: 'Closes #1' })] },
+      { issues: [ticket(1, { labels: ['needs-owner'] })], pulls: [pull(20, { body: 'Closes CONC-1' })] },
       6,
       now
     );
     expect(parked.workable).toEqual([]);
   });
 
-  it('a pull request that only references its issue (Refs #n, until its final review) shares the claim too', () => {
-    expect(references('Refs #1. Relates to #2; see also #3')).toEqual([1, 2]);
+  it('a pull request that only references its ticket (Refs CONC-n, until its final review) shares the claim too', () => {
+    expect(referencedKeys('Refs CONC-1. Relates to CONC-2; see also CONC-3', 'CONC')).toEqual(['CONC-1', 'CONC-2']);
     const held = workability(
-      { issues: [item(1, { comments: [claim('run-a')] })], pulls: [item(28, { body: 'Refs #1' })] },
+      { issues: [ticket(1, { comments: [claim('run-a')] })], pulls: [pull(28, { body: 'Refs CONC-1' })] },
       6,
       now
     );
     expect(held.workable).toEqual([]);
-    const free = workability({ issues: [item(1)], pulls: [item(28, { body: 'Refs #1' })] }, 6, now);
+    const free = workability({ issues: [ticket(1)], pulls: [pull(28, { body: 'Refs CONC-1' })] }, 6, now);
     expect(free.workable).toEqual([{ kind: 'pull', number: 28 }]);
   });
 });

@@ -33,7 +33,7 @@ import {
   workItem,
 } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
-import { Jira, trackerConfig } from '../../.shared/jira.ts';
+import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { clearOutbox, type PrText, prAddressRefusal, prKeys, prRefusal, writableNow } from '../../.shared/outbox.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
@@ -44,11 +44,11 @@ const hours = expiryHours(trimmed(process.env.INPUTS_CLAIM_HOURS));
 const run = trimmed(process.env.WORKFLOW_ID);
 if (run === '') throw new Error('claim: WORKFLOW_ID is not set; the engine supplies it to every exec node.');
 
-const config = trackerConfig();
+const config = requireTracker();
 const item = workItem(target !== '' ? target : pr, config);
-const jira = config !== null && item.kind === 'ticket' ? new Jira(config) : undefined;
+const jira = item.kind === 'ticket' ? new Jira(config) : undefined;
 // The pull request the lap continues: named beside the ticket, or itself the target.
-const pull = pr !== '' ? pr : item.kind === 'github' ? target : '';
+const pull = pr !== '' ? pr : item.kind === 'pull' ? target : '';
 
 /** Take this run's claim back; a failure to do so must not hide the error that led here. */
 async function withdraw(id: number, why: string): Promise<void> {
@@ -64,9 +64,8 @@ const reason = (error: unknown): string => (error instanceof Error ? error.messa
 let claims = await liveClaims(item, hours, Date.now(), jira);
 let mine = claims.find(claim => claim.run === run);
 
-/** Why pick's choice is not the loop's to work on, or null. Jira only; GitHub has no such rule. */
+/** Why pick's choice is not the loop's to work on, or null. */
 async function refusal(): Promise<string | null> {
-  if (config === null) return null;
   const client = jira ?? new Jira(config);
   const state = runState();
   const key = item.kind === 'ticket' ? item.key : null;
@@ -131,8 +130,8 @@ if (refused !== null) {
   const holder = claims[0];
   if (holder.id === mine.id) {
     // The builder runs next: an outbox left in its name or the reviewer's by pick is not theirs.
-    if (config !== null) clearOutbox(artifactsDir(), ['build', 'review']);
-    if (config !== null && jira !== undefined && item.kind === 'ticket') {
+    clearOutbox(artifactsDir(), ['build', 'review']);
+    if (jira !== undefined && item.kind === 'ticket') {
       try {
         // For release: a merge counts only when it came after this claim.
         recordClaim(runState(), mine.createdAt);

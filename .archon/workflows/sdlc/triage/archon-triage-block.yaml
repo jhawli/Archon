@@ -191,24 +191,23 @@ nodes:
             value: { type: string, enum: [none, soon, now] }
             reason: { type: string, pattern: '\S' }
           required: [value, reason]
-        # The tracker item the labels address: a qualified repository and a
-        # positive number, or the empty repository with number 0 when the target
-        # was not a tracker issue. Any other pairing is re-asked at this node.
+        # Always the empty placeholder (host '', path '', number 0): work items
+        # live in Jira, and a ticket is addressed through `target`. Kept as a
+        # field so the schema and its callers stay stable; anything else is
+        # re-asked at this node.
         item:
-          anyOf:
-            - *item_ref
-            - type: object
-              additionalProperties: false
+          type: object
+          additionalProperties: false
+          properties:
+            repo:
+              type: object
               properties:
-                repo:
-                  type: object
-                  properties:
-                    host: { type: string, enum: [''] }
-                    path: { type: string, enum: [''] }
-                  required: [host, path]
-                  additionalProperties: false
-                number: { type: integer, enum: [0] }
-              required: [repo, number]
+                host: { type: string, enum: [''] }
+                path: { type: string, enum: [''] }
+              required: [host, path]
+              additionalProperties: false
+            number: { type: integer, enum: [0] }
+          required: [repo, number]
         area_labels:
           type: array
           items:
@@ -245,9 +244,9 @@ nodes:
   # derives the pack's labels here rather than
   # chosen by the model: one state label and one type label, plus a size label
   # while the item can still be worked. Each field's own type and vocabulary were certified on the
-  # node above. Labels are written only under publish, after the item's identity
-  # is verified on the tracker, and read back before the node reports them. A
-  # target that is a Jira ticket of the repository's tracker is labelled on Jira.
+  # node above. Labels are written only under publish and only when the target is a
+  # Jira ticket of the repository's tracker, read on Jira first and read back
+  # before the node reports them.
   - id: verdict
     script: verdict
     runtime: bun

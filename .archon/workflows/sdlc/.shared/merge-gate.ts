@@ -154,20 +154,16 @@ export function parseDispositions(json: string): Map<string, Disposition> {
 const JIRA_TICKET_URL = /^https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\/[A-Z][A-Z0-9]+-\d+$/;
 
 /**
- * What counts as tracking: an open issue (`gh issue view N --json state,url`), not a pull
- * request, or an open Jira ticket (land reads it and passes `OPEN` unless it is done).
+ * What counts as tracking: an open Jira ticket (land reads it and passes `OPEN` unless it is
+ * done). Work items live in Jira only; a pull request tracks nothing.
  */
 export const isTrackingIssue = (view: { state?: string; url?: string }): boolean =>
-  view.state === 'OPEN' && (/\/issues\/\d+$/.test(view.url ?? '') || JIRA_TICKET_URL.test(view.url ?? ''));
+  view.state === 'OPEN' && JIRA_TICKET_URL.test(view.url ?? '');
 
 /** How land reads what a disposition's `issue` names; tests pass fakes. */
 export interface TrackingReaders {
-  /** The pull request under review: its own number never tracks anything. */
-  readonly prUrl: string;
-  /** `gh issue view <n> --json state,url`, or null when gh cannot read it. */
-  readonly githubIssue: (number: string) => { state?: string; url?: string } | null;
-  /** With Jira: the run's filed tickets by marker, a ticket reader, and the lap's own ticket key. */
-  readonly jira?: {
+  /** The run's filed tickets by marker, a ticket reader, and the lap's own ticket key. */
+  readonly jira: {
     readonly config: TrackerConfig;
     readonly created: Readonly<Record<string, string>>;
     readonly target: string;
@@ -177,10 +173,10 @@ export interface TrackingReaders {
 
 /**
  * The references among `refs` that track something open, resolved before the gate (whose
- * `issueExists` is synchronous). `#n` is a GitHub issue as before. With Jira, `CONC-n` (or its
- * URL) is a ticket that is not Staging, Live or Canceled, and `new:<marker>` is the ticket this
- * run filed for that marker. The lap's own ticket tracks nothing: it moves on with the merge.
- * A ticket Jira cannot read is untracked; its reason goes to `problems` for the refusal.
+ * `issueExists` is synchronous). `CONC-n` (or its URL) is a ticket that is not Staging, Live
+ * or Canceled, and `new:<marker>` is the ticket this run filed for that marker; anything else
+ * (a `#n`, another project) tracks nothing. The lap's own ticket tracks nothing: it moves on
+ * with the merge. A ticket Jira cannot read is untracked; its reason goes to `problems`.
  */
 export async function trackingRefs(
   refs: readonly string[],
@@ -190,14 +186,6 @@ export async function trackingRefs(
   const problems: string[] = [];
   const jira = readers.jira;
   for (const ref of new Set(refs.map(r => r.trim()).filter(r => r !== ''))) {
-    const number = /^#?(\d+)$/.exec(ref)?.[1];
-    if (number !== undefined) {
-      if (readers.prUrl.endsWith(`/pull/${number}`)) continue;
-      const view = readers.githubIssue(number);
-      if (view !== null && isTrackingIssue(view)) open.add(ref);
-      continue;
-    }
-    if (jira === undefined) continue;
     const marker = /^new:(.+)$/.exec(ref)?.[1];
     const filed = marker === undefined ? undefined : jira.created[marker];
     const key = marker === undefined ? (ticketKeyOf(ref, jira.config) ?? ref) : typeof filed === 'string' ? filed : '';
@@ -263,11 +251,14 @@ export function parseJudgeChanges(json: string): JudgeChange[] {
     .filter(entry => entry.file !== '' || entry.change !== '');
 }
 
-/** An approval is a link to an issue or a comment on one (the owner's words), never a criterion id. */
+/**
+ * An approval on GitHub is a link to a pull request or a comment on one (the owner's words),
+ * never a criterion id; a link to an owner's Jira comment counts through `ownerApprovals`.
+ */
 // The link may be followed by a label a reviewer adds ("<url> (Owner decision, ...)"); the gate
 // needs the link, and refused correct approvals over the label (mission control #102/#145).
 export const isApprovalLink = (approval: string): boolean =>
-  /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(issues|pull)\/\d+(#issuecomment-\d+)?(\s|$)/.test(approval.trim());
+  /^https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+(#issuecomment-\d+)?(\s|$)/.test(approval.trim());
 
 const JIRA_COMMENT_LINK = /^(https:\/\/[^/\s]+)\/browse\/([A-Z][A-Z0-9]+-[1-9]\d*)\?focusedCommentId=(\d+)(\s|$)/;
 

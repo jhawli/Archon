@@ -30,18 +30,18 @@ import {
   workItem,
 } from '../../.shared/claims.ts';
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
-import { Jira, trackerConfig } from '../../.shared/jira.ts';
+import { Jira, requireTracker } from '../../.shared/jira.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
 const run = trimmed(process.env.WORKFLOW_ID);
 if (run === '') throw new Error('release: WORKFLOW_ID is not set; the engine supplies it to every exec node.');
 
-const config = trackerConfig();
+const config = requireTracker();
 const item = workItem(target !== '' ? target : pr, config);
-const jira = config !== null && item.kind === 'ticket' ? new Jira(config) : undefined;
+const jira = item.kind === 'ticket' ? new Jira(config) : undefined;
 const prefix = `${CLAIM_PREFIX}${run}`;
-const ticketLap = config !== null && jira !== undefined && item.kind === 'ticket';
+const ticketLap = jira !== undefined && item.kind === 'ticket';
 
 // Free the claim. On a ticket a failure here is kept for the end: the status and the flag
 // below are still tried, so the ticket does not sit on In Progress with nothing said.
@@ -77,7 +77,7 @@ function prView(url: string): PrView | null {
   return result.exitCode === 0 ? (JSON.parse(result.stdout.toString()) as PrView) : null;
 }
 
-if (config !== null && jira !== undefined && item.kind === 'ticket') {
+if (jira !== undefined && item.kind === 'ticket') {
   try {
     const state = runState();
     const recorded = readLap(state, artifactsDir(), pr);

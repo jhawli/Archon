@@ -10,15 +10,14 @@
 
 import { recordLap, runState } from '../../.shared/claims.ts';
 import { emit, trimmed } from '../../.shared/io.ts';
-import { trackerConfig } from '../../.shared/jira.ts';
+import { requireTracker } from '../../.shared/jira.ts';
 import { type PrRow, ticketKeyOf, ticketPr } from '../../.shared/tickets.ts';
-import { closes } from '../../.shared/workable.ts';
 
 const started = String(Date.now());
 const target = trimmed(process.env.INPUTS_TARGET);
 const chosen = trimmed(process.env.INPUTS_PR);
 const reports = `${trimmed(process.env.INPUTS_BUILDER)}\n${trimmed(process.env.INPUTS_SHIP)}`;
-const config = trackerConfig();
+const config = requireTracker();
 
 function gh(args: string[]): unknown {
   const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -30,26 +29,16 @@ function findPr(): string {
   if (chosen !== '') return chosen;
   const named = [...reports.matchAll(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g)].map(m => m[0]);
   if (named.length > 0) return named[named.length - 1];
-  const key = config === null ? null : ticketKeyOf(target, config);
-  if (config !== null && key !== null) {
-    // Listed, not searched: the search index lags a pull request the builder opened moments ago.
-    const open = gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json', 'url,title,body,updatedAt,isCrossRepository']) as PrRow[];
-    return ticketPr(open, key, config.project);
-  }
-  const issue = /\/issues\/(\d+)\/?$/.exec(target)?.[1];
-  if (issue === undefined) return '';
-  const open = gh(['pr', 'list', '--state', 'open', '--search', issue, '--json', 'url,body,updatedAt']) as {
-    url: string;
-    body: string;
-    updatedAt: string;
-  }[];
-  const closing = open.filter(pr => closes(pr.body ?? '').includes(Number(issue)));
-  return closing.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]?.url ?? '';
+  const key = ticketKeyOf(target, config);
+  if (key === null) return '';
+  // Listed, not searched: the search index lags a pull request the builder opened moments ago.
+  const open = gh(['pr', 'list', '--state', 'open', '--limit', '200', '--json', 'url,title,body,updatedAt,isCrossRepository']) as PrRow[];
+  return ticketPr(open, key, config.project);
 }
 
 const pr = findPr();
-// With Jira, recorded before the pull request is read: if that read fails, release still knows there is one.
-if (config !== null) recordLap(runState(), { pr });
+// Recorded before the pull request is read: if that read fails, release still knows there is one.
+recordLap(runState(), { pr });
 if (pr === '') {
   emit({ pr: '', head: '', base: '', files: '', started });
 } else {

@@ -2,14 +2,12 @@
  * The pack's labels and the writes that apply them.
  *
  * Every label the pack writes is declared here with its color and description,
- * and every stage that writes labels goes through `writeLabels`, or
- * `writeTicketLabels` for a Jira ticket. Stages are joined by labels, one stage's
+ * and every stage that writes labels goes through `writeTicketLabels` (tickets live
+ * in Jira; this fork has no GitHub-issue path). Stages are joined by labels, one stage's
  * exit label being the next stage's entry label, so a name declared anywhere else
  * is a copy that can drift.
  */
 
-import { forgeSource, invokeForge, readRepositoryLabels, type QualifiedPr } from './forge.ts';
-import { viewIssue } from './issue.ts';
 import type { Jira } from './jira.ts';
 
 interface LabelSpec {
@@ -149,102 +147,10 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
   return wanted;
 }
 
-function gh(...args: string[]): string {
-  const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  if (result.exitCode !== 0) {
-    throw new Error(`gh ${args.slice(0, 3).join(' ')} failed: ${result.stderr.toString().trim()}`);
-  }
-  return result.stdout.toString();
-}
-
-function ghRepositoryLabels(repository: string): Set<string> {
-  const rows = JSON.parse(
-    gh('label', 'list', '--repo', repository, '--limit', '500', '--json', 'name')
-  ) as { name: string }[];
-  return new Set(rows.map(row => row.name));
-}
-
 /**
- * Add and remove labels on an issue as a delta, then read the result back.
- *
- * The issue's identity is verified before anything is written. A missing pack
- * label is created with its declared color and description; any other label is
- * added only when the repository already has it, because the pack never creates
- * a label it does not own. Returns the added labels now on the issue, sorted.
- */
-export function writeLabels(
-  item: QualifiedPr,
-  add: readonly string[],
-  remove: readonly OwnedLabel[]
-): string[] {
-  return forgeSource() === 'forge' ? forgeWrite(item, add, remove) : ghWrite(item, add, remove);
-}
-
-function ghWrite(item: QualifiedPr, add: readonly string[], remove: readonly OwnedLabel[]): string[] {
-  const repository = `${item.repo.host}/${item.repo.path}`;
-  const current = new Set(viewIssue(item).labels);
-  const present = ghRepositoryLabels(repository);
-  for (const name of add) {
-    if (!present.has(name) && isPackLabel(name)) {
-      const { color, description } = PACK_LABELS[name];
-      gh('label', 'create', name, '--repo', repository, '--color', color, '--description', description);
-      present.add(name);
-    }
-  }
-  const applied = [...new Set(add.filter(name => present.has(name)))].sort();
-  const toAdd = applied.filter(name => !current.has(name));
-  const removing = new Set<string>(remove);
-  const stale = [...current].filter(name => removing.has(name)).sort();
-  // Single add and remove operations, never a whole-set write, so labels another
-  // writer adds concurrently survive.
-  if (toAdd.length > 0 || stale.length > 0) {
-    const args = ['issue', 'edit', String(item.number), '--repo', repository];
-    for (const name of toAdd) args.push('--add-label', name);
-    for (const name of stale) args.push('--remove-label', name);
-    gh(...args);
-  }
-  const after = new Set(viewIssue(item).labels);
-  const missing = applied.filter(name => !after.has(name));
-  const lingering = stale.filter(name => after.has(name));
-  if (missing.length > 0 || lingering.length > 0) {
-    throw new Error(
-      `label read-back disagrees: missing=${JSON.stringify(missing)} lingering=${JSON.stringify(lingering)}`
-    );
-  }
-  return applied;
-}
-
-// Single add and remove operations, as on the gh path, so labels another writer adds
-// concurrently survive. Each forge write reads itself back, and a write that does not
-// fails with its outcome, so there is nothing left to re-check here.
-function forgeWrite(
-  item: QualifiedPr,
-  add: readonly string[],
-  remove: readonly OwnedLabel[]
-): string[] {
-  const current = new Set(viewIssue(item).labels);
-  const present = new Set(readRepositoryLabels(item.repo));
-  for (const name of add) {
-    if (!present.has(name) && isPackLabel(name)) {
-      invokeForge('repo.label.ensure', { repo: item.repo, name, ...PACK_LABELS[name] });
-      present.add(name);
-    }
-  }
-  const applied = [...new Set(add.filter(name => present.has(name)))].sort();
-  const subject = { kind: 'issue', ref: item };
-  for (const name of applied.filter(label => !current.has(label))) {
-    invokeForge('workitem.label.add', { subject, name });
-  }
-  for (const name of remove.filter(label => current.has(label))) {
-    invokeForge('workitem.label.remove', { subject, name });
-  }
-  return applied;
-}
-
-/**
- * The same delta write for a Jira ticket, read back like the GitHub path. Jira labels need no
- * declaration, so every label is added as asked; an owned label is only ever removed. Reading
- * the ticket first verifies the key on Jira before anything is written.
+ * Add and remove labels on a Jira ticket as a delta, then read the result back. Jira labels
+ * need no declaration, so every label is added as asked; an owned label is only ever removed.
+ * Reading the ticket first verifies the key on Jira before anything is written.
  */
 export async function writeTicketLabels(
   jira: Jira,

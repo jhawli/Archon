@@ -3,27 +3,27 @@
  *
  * Not a node. A scheduler runs it in the repository checkout before it starts a lap,
  * and starts one only when there is more workable work than laps already looking for
- * some (see `.shared/workable.ts` for the rules). It reads GitHub. With
- * `.archon/tracker.json` it reads Jira (startable tickets in the open sprint, the tickets
- * open pull requests name) and GitHub only for pull requests. Its one write: the
+ * some (see `.shared/workable.ts` for the rules). It needs `.archon/tracker.json` (AK18e)
+ * and reads Jira (startable tickets in the open sprint, the tickets open pull requests
+ * name) and GitHub only for pull requests. Its one write: the
  * scheduler names runs it knows have ended (`INPUTS_ENDED_RUNS`, comma-separated), and
  * a claim one of them still holds is released the way the run's own release step would
- * have, because a run killed before that step never frees its item. On Jira it also puts a
- * ticket such a run left on In Progress back where a lap can take it (`recoverOrphans`).
+ * have, because a run killed before that step never frees its item. It also puts a ticket
+ * such a run left on In Progress back where a lap can take it (`recoverOrphans`).
  *
  * Output: `{ "workable": [ref], "claims": [ref + run], "ended": [...], "waiting": [...],
  * "updated" }`. A ref is `{kind: 'ticket', key}` for a Jira ticket and
- * `{kind: 'issue' | 'pull', number}` on GitHub; `updated` is the newest change to any
- * item on the board.
+ * `{kind: 'pull', number}` for a pull request; `updated` is the newest change to any item
+ * on the board.
  */
 
 import { deadClaims, expiryHours } from '../../.shared/claims.ts';
 import { trimmed } from '../../.shared/io.ts';
-import { Jira, trackerConfig } from '../../.shared/jira.ts';
+import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { ticketPr, type PrRow } from '../../.shared/tickets.ts';
 import { trackerCheck } from '../../.shared/tracker-check.ts';
-import { GITHUB_FIELDS, githubItems, loadJiraBoard, openPulls, type GithubItem } from '../../.shared/tracker-board.ts';
-import { workability, type Board, type Links } from '../../.shared/workable.ts';
+import { loadJiraBoard, openPulls } from '../../.shared/tracker-board.ts';
+import { workability } from '../../.shared/workable.ts';
 
 function gh(args: string[]): unknown {
   const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
@@ -33,24 +33,12 @@ function gh(args: string[]): unknown {
   return JSON.parse(result.stdout.toString());
 }
 
-/** The newest change to any open item (a comment, a label), as gh's ISO text. */
-function newest(items: readonly GithubItem[]): string {
-  return items.map(item => item.updatedAt).reduce((at, next) => (next > at ? next : at), '');
-}
-
-/** Without a tracker: open GitHub issues and pull requests. Every open one blocks a `Depends on`. */
-function githubBoard(pulls: GithubItem[]): { board: Board; updated: string } {
-  const issues = githubItems(gh(['issue', 'list', '--state', 'open', '--limit', '200', '--json', GITHUB_FIELDS]));
-  const open = new Set([...issues, ...pulls].map(item => item.id));
-  return { board: { issues, pulls, open }, updated: newest([...issues, ...pulls]) };
-}
-
 const released = (run: string): string =>
   `Loop claim released: run ${run} ended. Its \`Loop review:\` comment, if any, says what it did. (Released by the scheduler: the run ended without releasing it.)`;
 
 // Before anything reads GitHub or Jira: a repository without tracker.json gets no lap (AK18e).
 trackerCheck('archon-loop');
-const config = trackerConfig();
+const config = requireTracker();
 const pulls = openPulls();
 const hours = expiryHours(trimmed(process.env.INPUTS_CLAIM_HOURS));
 const endedRuns = new Set(
@@ -109,29 +97,20 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
   }
   return lines;
 }
-let board: Board;
+const jira = new Jira(config);
+for (const line of await recoverOrphans(jira)) console.error(`workable: ${line}`);
+const loaded = await loadJiraBoard(jira, pulls);
 // An answer that lifts a park leaves the same items workable, and the scheduler must still
 // see the board as changed.
-let updated: string;
-let links: Links | undefined;
-let jira: Jira | undefined;
-if (config === null) {
-  ({ board, updated } = githubBoard(pulls));
-} else {
-  jira = new Jira(config);
-  for (const line of await recoverOrphans(jira)) console.error(`workable: ${line}`);
-  const loaded = await loadJiraBoard(jira, pulls);
-  board = loaded.board;
-  links = loaded.links;
-  updated = new Date(loaded.updated).toISOString();
-}
-const result = workability(board, hours, Date.now(), endedRuns, links);
+const updated = new Date(loaded.updated).toISOString();
+const result = workability(loaded.board, hours, Date.now(), endedRuns, loaded.links);
 for (const claim of result.ended) {
   if (claim.kind === 'ticket') {
     const id = /[?&]focusedCommentId=(\d+)$/.exec(claim.url)?.[1];
-    if (id !== undefined && jira !== undefined) await jira.editComment(claim.key, Number(id), released(claim.run));
+    if (id !== undefined) await jira.editComment(claim.key, Number(id), released(claim.run));
     continue;
   }
+  // A pull request's claim: GitHub keeps its conversation comments under `issues/comments`.
   const id = /#issuecomment-(\d+)$/.exec(claim.url)?.[1];
   if (id === undefined) continue;
   gh(['api', `repos/{owner}/{repo}/issues/comments/${id}`, '--method', 'PATCH', '-f', `body=${released(claim.run)}`]);

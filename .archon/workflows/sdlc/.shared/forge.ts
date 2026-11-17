@@ -345,16 +345,3 @@ export function archonCommand(): readonly string[] {
 export function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
   return left.number === right.number && sameRepo(left.repo, right.repo);
 }
-
-export function readRepositoryLabels(repo: QualifiedPr['repo']): string[] {
-  const value = invokeForge('repo.labels.list', { repo });
-  const observed = qualifiedRepo(value?.repo);
-  if (!observed || !sameRepo(repo, observed) || !Array.isArray(value?.labels))
-    throw new Error('forge returned invalid repository labels');
-  return value.labels.map(row => {
-    const label = record(row);
-    if (typeof label?.name !== 'string' || label.name === '')
-      throw new Error('forge returned invalid repository label');
-    return label.name;
-  });
-}

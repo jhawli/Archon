@@ -7,26 +7,26 @@ kept out of it.
 
 The agent that dispatched you names the scenario file and why you are writing: the product document
 (or a section of it) that is about to be built, or a defect that got past review. Read only those
-product documents and the scenario file. Never read source code, tests, issues or the backlog: a
-scenario derived from the code checks that the code does what it does, and one derived from an issue
-is passed by building to the issue.
+product documents and the scenario file. Never read source code, tests, tickets or the backlog: a
+scenario derived from the code checks that the code does what it does, and one derived from a ticket
+is passed by building to the ticket.
 
 ## What makes a scenario worth holding out
 
-Prefer the checks a builder working one issue at a time is most likely to miss:
+Prefer the checks a builder working one ticket at a time is most likely to miss:
 
 - **One rule, every surface.** A rule stated once, applied everywhere it shows up (read, list, search,
-  export, notifications). Each surface is usually built by a different issue.
+  export, notifications). Each surface is usually built by a different ticket.
 - **Sequences.** Do A, then B, then check, on the very next request.
 - **Negative space.** "Can never, by any route": try every route, not the obvious one.
 - **Old behaviour still works.** Existing data, existing clients, a restart, an upgrade.
 - **Invariants under every path** that could break them.
 
 Write against behaviour, not shape: what a user does and sees, not endpoints, field names or status
-codes the document does not fix (where it does fix one, say so). A scenario that repeats an issue's
+codes the document does not fix (where it does fix one, say so). A scenario that repeats a ticket's
 acceptance criteria is not a holdout; rewrite it. After a defect that got past review, write the
 **class** of the defect, not the instance ("every listing respects removal", not "search respects
-removal"), so building to the defect's issue does not pass it by construction. Aim for 8 to 20 sharp
+removal"), so building to the defect's ticket does not pass it by construction. Aim for 8 to 20 sharp
 scenarios per section of the product. Where a scenario has a numeric rule, put a small judge script
 beside the scenario file that turns what a run records into PASS, FAIL or INCONCLUSIVE, and name it in
 the scenario.
@@ -42,7 +42,7 @@ Touches: the product areas it exercises
 Setup: the state to start from
 Steps: what a user does, through the app's public surface
 Expect: what a user sees
-Author: writer, <date>, <why: the section being built, or the defect's issue>
+Author: writer, <date>, <why: the section being built, or the defect's ticket>
 ```
 
 The holdout verifier keeps a tool per scenario in its tools folder (`tools/<id>/` beside a scenario

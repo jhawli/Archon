@@ -7,7 +7,7 @@ import type { Jira, Ticket, TicketComment } from './jira.ts';
 import { dependencyKeys, referencedKeys } from './tickets.ts';
 import { OWNER_LABEL, type Board, type BoardItem, type Links } from './workable.ts';
 
-/** A GitHub issue or pull request as a board item (`#n`), with gh's `updatedAt`. */
+/** A GitHub pull request as a board item (`#n`), with gh's `updatedAt`. */
 export interface GithubItem extends BoardItem {
   readonly updatedAt: string;
 }
@@ -38,7 +38,7 @@ function rows(value: unknown): Record<string, unknown>[] {
   return Array.isArray(value) ? (value as Record<string, unknown>[]) : [];
 }
 
-/** `gh issue list` / `gh pr list --json number,title,body,labels,comments,updatedAt` rows. */
+/** `gh pr list --json number,title,body,labels,comments,updatedAt` rows. */
 export function githubItems(raw: unknown): GithubItem[] {
   if (!Array.isArray(raw)) throw new Error('gh returned no list');
   return rows(raw).map(row => {

@@ -58,7 +58,8 @@ that was already true when the node started.
 ## Forge source
 
 One switch selects the source for every pull-request and check read and write
-this pack makes; issue writes go through `gh` either way (see below).
+this pack makes. Work items are tickets in Jira (`.archon/tracker.json`, read and
+written only by script nodes through `.shared/jira.ts`); pull requests stay on GitHub.
 [`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected;
 [`.shared/checks.ts`](.shared/checks.ts) owns the check read and its gate policy,
 and [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes. Both
@@ -84,10 +85,9 @@ forge source is for host execution: a container execution receives neither
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
 applies the resync, `publish-review` upserts the one marked review comment,
-`flip-ready` flips it out of draft, and `file-discoveries` files each discovery
-the review accepted as a tracker issue. The forge contract has no issue
-operation yet, so that one — like triage's labels — goes through `gh` whichever
-source the run selected. Each takes a recorded intent from the agent
+`flip-ready` flips it out of draft, and the tracker nodes (`tracker-write`)
+apply an agent's checked outbox to its Jira ticket; triage's labels go to the
+ticket too. Each takes a recorded intent from the agent
 before it, writes through the selected source, and fails unless the result reads
 back — so "the write failed" and "the write may have landed" stay different
 outcomes, in the pack as in the forge contract.

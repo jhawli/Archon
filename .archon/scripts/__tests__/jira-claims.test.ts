@@ -90,22 +90,13 @@ describe('work items', () => {
   });
   it('a pull request stays on GitHub', () => {
     expect(workItem('https://github.com/o/r/pull/9', CFG)).toEqual({
-      kind: 'github',
+      kind: 'pull',
       repository: 'o/r',
       number: 9,
     });
   });
-  it('with Jira, a GitHub issue is refused', () => {
-    expect(() => workItem('https://github.com/o/r/issues/9', CFG)).toThrow(
-      "Jira tracks this repository's work items"
-    );
-  });
-  it('without Jira, GitHub issues work as before', () => {
-    expect(workItem('https://github.com/o/r/issues/9', null)).toEqual({
-      kind: 'github',
-      repository: 'o/r',
-      number: 9,
-    });
+  it('eine GitHub-Issue-Adresse ist kein Arbeitsstück', () => {
+    expect(() => workItem('https://github.com/o/r/issues/9', CFG)).toThrow('not a work item URL');
   });
   it('a ticket of another site or project is not a work item', () => {
     expect(() => workItem('https://other.atlassian.net/browse/CONC-5', CFG)).toThrow('not a work item');

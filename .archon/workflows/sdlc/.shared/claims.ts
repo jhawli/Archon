@@ -2,8 +2,8 @@
  * Work-item claims: how several runs of one loop share a backlog without two of them
  * working the same item.
  *
- * A claim is a comment on the work item (a Jira ticket or GitHub issue, or a pull request
- * when no ticket is involved) whose body starts with `Loop claim: run <id>`. Among the live
+ * A claim is a comment on the work item (a Jira ticket, or a GitHub pull request when no
+ * ticket is involved) whose body starts with `Loop claim: run <id>`. Among the live
  * claims on one item the lowest comment id holds it. GitHub numbers comments in the order it
  * stores them; Jira's ids are unique but not always in `created` order under concurrent
  * writes, which does not matter: every run orders by the same number. That is the whole
@@ -17,7 +17,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Jira, type Ticket, type TicketComment, type TrackerConfig, trackerConfig } from './jira.ts';
+import { type Jira, requireTracker, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
 import { namesTicket, ticketKeyOf } from './tickets.ts';
 
 type JsonObject = Record<string, unknown>;
@@ -26,12 +26,12 @@ export const CLAIM_PREFIX = 'Loop claim: run ';
 
 export type WorkItem =
   | { readonly kind: 'ticket'; readonly key: string }
-  | { readonly kind: 'github'; readonly repository: string; readonly number: number };
+  | { readonly kind: 'pull'; readonly repository: string; readonly number: number };
 
 /** The part of the Jira client the claim protocol uses; tests pass a fake. */
 export type ClaimClient = Pick<Jira, 'comments' | 'comment' | 'editComment'>;
 
-/** A comment on either tracker, as the claim protocol reads it. */
+/** A comment on a ticket or a pull request, as the claim protocol reads it. */
 export interface ItemComment {
   readonly id: number;
   readonly body: string;
@@ -44,22 +44,22 @@ export interface Claim {
   readonly createdAt: number;
 }
 
-/** A Jira ticket URL, or a GitHub issue or pull request URL. With Jira, GitHub issues are refused. */
-export function workItem(url: string, config: TrackerConfig | null = trackerConfig()): WorkItem {
-  if (config !== null) {
-    const key = ticketKeyOf(url, config);
-    if (key !== null) return { kind: 'ticket', key };
-  }
-  const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/(issues|pull)\/(\d+)\/?$/.exec(
-    url.trim()
-  );
-  if (match === null) throw new Error(`not a work item URL: '${url}'`);
-  if (config !== null && match[2] === 'issues') {
-    throw new Error(`Jira tracks this repository's work items, not ${url}`);
-  }
-  return { kind: 'github', repository: match[1], number: Number(match[3]) };
+/**
+ * A ticket URL of this tracker, or a GitHub pull request URL (a pull request that names no
+ * ticket). Work items live in Jira only: a GitHub issue URL is not one.
+ */
+export function workItem(url: string, config: TrackerConfig = requireTracker()): WorkItem {
+  const key = ticketKeyOf(url, config);
+  if (key !== null) return { kind: 'ticket', key };
+  const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d+)\/?$/.exec(url.trim());
+  if (match === null) throw new Error(`not a work item URL: '${url}' (work items are ${config.project} tickets)`);
+  return { kind: 'pull', repository: match[1], number: Number(match[2]) };
 }
 
+/**
+ * `gh api` for a pull request's conversation comments. GitHub keeps them under
+ * `repos/<r>/issues/<n>/comments`, a pull request being an issue there; no issue is read.
+ */
 export function runGh(args: string[]): unknown {
   const result = Bun.spawnSync(['gh', 'api', '--hostname', 'github.com', ...args], {
     stdout: 'pipe',
@@ -77,7 +77,7 @@ function clientFor(key: string, jira: ClaimClient | undefined): ClaimClient {
   return jira;
 }
 
-/** Every comment on the item, lowest id first. */
+/** Every comment on the item, lowest id first. A pull request's are its conversation comments. */
 export async function comments(item: WorkItem, jira?: ClaimClient): Promise<ItemComment[]> {
   if (item.kind === 'ticket') {
     const rows: TicketComment[] = await clientFor(item.key, jira).comments(item.key);

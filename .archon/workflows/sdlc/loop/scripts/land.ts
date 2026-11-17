@@ -15,7 +15,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { readCreated, recordLanding, runState } from '../../.shared/claims.ts';
-import { Jira, type Ticket, type TicketComment, trackerConfig } from '../../.shared/jira.ts';
+import { Jira, requireTracker, type Ticket, type TicketComment } from '../../.shared/jira.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
 import {
   CLOCK_SLACK_MS,
@@ -41,10 +41,10 @@ const reviewStarted = Number(trimmed(process.env.INPUTS_REVIEW_STARTED)) || 0;
 const prFiles = text(process.env.INPUTS_FILES).split('\n').map(f => f.trim()).filter(f => f !== '');
 const logPath = join(trimmed(process.env.LOG_DIR), `${trimmed(process.env.WORKFLOW_ID)}.jsonl`);
 const artifacts = artifactsDir();
-// With Jira, release reads the outcome from the run's state directory. Resolved before any
-// merge, so a broken one fails the gate rather than a merged pull request's bookkeeping.
-const config = trackerConfig();
-const trackerState = config !== null ? runState() : null;
+// Release reads the outcome from the run's state directory. Resolved before any merge, so a
+// broken one fails the gate rather than a merged pull request's bookkeeping.
+const config = requireTracker();
+const trackerState = runState();
 const report = readAppCheck(text(process.env.INPUTS_REPORT));
 
 function run(cmd: string[]): { code: number; out: string; err: string } {
@@ -58,42 +58,23 @@ const sha = resolved !== null && resolved.code === 0 ? resolved.out.trim() : nam
 
 const dispositions = parseDispositions(text(process.env.INPUTS_DISPOSITIONS));
 // The gate asks synchronously, so every reference a disposition names is read here first:
-// `#n` on GitHub, and with Jira `CONC-n` or `new:<marker>` (a ticket the review filed this run).
+// `CONC-n` or `new:<marker>` (a ticket the review filed this run).
 let client: Jira | undefined;
-const tracking = await trackingRefs(
-  [...dispositions.values()].map(d => d.issue),
-  {
-    prUrl,
-    githubIssue: number => {
-      const view = run(['gh', 'issue', 'view', number, '--json', 'state,url']);
-      if (view.code !== 0) return null;
-      try {
-        return JSON.parse(view.out) as { state?: string; url?: string };
-      } catch {
-        return null;
-      }
-    },
-    jira:
-      config === null || trackerState === null
-        ? undefined
-        : {
-            config,
-            created: readCreated(trackerState),
-            target: ticketKeyOf(target, config) ?? '',
-            // The keychain is read only when a disposition names a ticket or an approval a comment.
-            ticket: async (key): Promise<Ticket> => (client ??= new Jira(config)).ticket(key),
-          },
-  }
-);
+const tracking = await trackingRefs([...dispositions.values()].map(d => d.issue), {
+  jira: {
+    config,
+    created: readCreated(trackerState),
+    target: ticketKeyOf(target, config) ?? '',
+    // The keychain is read only when a disposition names a ticket or an approval a comment.
+    ticket: async (key): Promise<Ticket> => (client ??= new Jira(config)).ticket(key),
+  },
+});
 const judgeChanges = parseJudgeChanges(text(process.env.INPUTS_JUDGE_CHANGES));
-// With Jira, an approval is a link to a comment the owner wrote: read here, as the gate is synchronous.
-const approvals =
-  config === null
-    ? { approved: new Set<string>(), problems: [] }
-    : await ownerApprovals(
-        judgeChanges.map(j => j.approval),
-        { config, comments: async (key): Promise<TicketComment[]> => (client ??= new Jira(config)).comments(key) }
-      );
+// An approval is a link to a comment the owner wrote: read here, as the gate is synchronous.
+const approvals = await ownerApprovals(judgeChanges.map(j => j.approval), {
+  config,
+  comments: async (key): Promise<TicketComment[]> => (client ??= new Jira(config)).comments(key),
+});
 const refusals = recordRefusals({
   report,
   evidenceProblems,
@@ -194,7 +175,7 @@ if (view.code !== 0) {
 
 /** The outcome, recorded first for release (a ticket's status needs it even if a later node fails). */
 const landed = (outcome: 'merged' | 'refused', reason: string): void => {
-  if (trackerState !== null) recordLanding(trackerState, artifacts, { pr: prUrl, landed: outcome, delivers });
+  recordLanding(trackerState, artifacts, { pr: prUrl, landed: outcome, delivers });
   emit({ outcome, reason });
 };
 
@@ -219,11 +200,6 @@ if (alreadyMerged) {
     landed('refused', `gh pr merge failed: ${why}`);
   } else {
     if (branch !== '') run(['git', 'push', '--quiet', 'origin', '--delete', branch]);
-    const issue = /\/issues\/(\d+)\/?$/.exec(target)?.[1];
-    if (issue !== undefined && delivers === 'all') {
-      const state = run(['gh', 'issue', 'view', issue, '--json', 'state', '--jq', '.state']).out.trim();
-      if (state === 'OPEN') run(['gh', 'issue', 'close', issue, '--comment', `Delivered by ${prUrl}.`]);
-    }
     comment(`Loop review: merged (route: ${route}) at ${landSha} by the merge gate, after the review above${note}.`);
     landed('merged', `merged ${landSha}${note}`);
   }

@@ -6,20 +6,17 @@
  * combination is re-asked at that node rather than refused here. This flattens the
  * decision into the fields every caller reads and checks what a schema cannot:
  * blockers and a closure's link are qualified URLs. Closing the item is not this
- * node's write: archon-intake performs it. The pack's own labels
- * derive from the declared fields here rather than being chosen by the model, and
- * only when the run was launched with publish=true and the target is a tracker
- * issue does this verify the item's identity on the tracker, apply the labels, and
- * read them back. Area labels are never created: the prompt may only pick labels
- * the repository already has. Publishing uses the selected forge source; a target
- * that is a Jira ticket of the repository's own tracker (`.archon/tracker.json`) is
- * labelled on Jira instead, its `item` being the empty value.
+ * node's write: a duplicate or delivered ticket is cancelled by pick's outbox (`cancel`).
+ * The pack's own labels derive from the declared fields here rather than being chosen
+ * by the model, and only when the run was launched with publish=true and the target is
+ * a ticket of the repository's tracker (`.archon/tracker.json`) does this read the
+ * ticket on Jira, apply the labels, and read them back. Work items live in Jira only:
+ * `item` is always the empty value, and any other target gets no labels.
  */
 
-import type { Closure } from '../../.shared/close.ts';
 import { record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
-import { Jira, trackerConfig } from '../../.shared/jira.ts';
+import { Jira, requireTracker } from '../../.shared/jira.ts';
 import {
   type Contract,
   isOwnedLabel,
@@ -28,12 +25,24 @@ import {
   type Size,
   type WorkType,
   wantedLabels,
-  writeLabels,
   writeTicketLabels,
 } from '../../.shared/labels.ts';
 import { ticketKeyOf } from '../../.shared/tickets.ts';
 
-type Item = QualifiedPr;
+/** What made a `NO_ACTION` item closable, as triage declared it. Data only: nothing here closes. */
+export type Closure =
+  | {
+      readonly kind: 'duplicate';
+      /** The ticket (or, in old verdicts, the issue) this one duplicates, and its URL. */
+      readonly url: string;
+      readonly original: QualifiedPr;
+    }
+  | {
+      readonly kind: 'delivered';
+      /** The merged change that already delivered the item's outcome. */
+      readonly url: string;
+    };
+
 /** One of triage's judged fields: a value and the one-line reason for it. */
 interface Field<Value extends string> {
   readonly value: Value;
@@ -91,9 +100,9 @@ function unqualifiedLink(
  */
 function jiraTicket(target: string): { jira: Jira; key: string } | null {
   if (!JIRA_TICKET_URL.test(target.trim())) return null;
-  const config = trackerConfig();
-  const key = config === null ? null : ticketKeyOf(target, config);
-  return config === null || key === null ? null : { jira: new Jira(config), key };
+  const config = requireTracker();
+  const key = ticketKeyOf(target, config);
+  return key === null ? null : { jira: new Jira(config), key };
 }
 
 async function main(): Promise<void> {
@@ -119,25 +128,10 @@ async function main(): Promise<void> {
   const related = bound(process.env.INPUTS_RELATED) as { url: string; relation: string }[];
   const boundItem = record(bound(process.env.INPUTS_ITEM));
   const repo = record(boundItem?.repo);
-  if (
-    typeof repo?.host !== 'string' ||
-    typeof repo.path !== 'string' ||
-    typeof boundItem?.number !== 'number' ||
-    !Number.isInteger(boundItem.number) ||
-    !(
-      (repo.host === '' && repo.path === '' && boundItem.number === 0) ||
-      (repo.host.trim() !== '' && repo.path.trim() !== '' && boundItem.number > 0)
-    )
-  ) {
-    refuse(
-      'invalid triage verdict: item requires a qualified repo and positive number, or the empty repo and zero sentinel'
-    );
+  if (repo?.host !== '' || repo.path !== '' || boundItem?.number !== 0) {
+    refuse('invalid triage verdict: item must be the empty repo and zero sentinel; tickets go through target');
     return;
   }
-  const item: Item | undefined =
-    boundItem.number === 0
-      ? undefined
-      : { repo: { host: repo.host, path: repo.path }, number: boundItem.number };
   const report = bound(process.env.INPUTS_REPORT);
 
   const invalid = (message: string): void => {
@@ -168,12 +162,10 @@ async function main(): Promise<void> {
 
   const adding = [...wanted, ...area];
   const removing = OWNED_LABEL_NAMES.filter(name => !wanted.some(label => label === name));
-  const ticket = publish && item === undefined ? jiraTicket(target) : null;
-  const published = publish && (item !== undefined || ticket !== null);
-  let labels: string[];
-  if (publish && item !== undefined) labels = writeLabels(item, adding, removing);
-  else if (ticket !== null) labels = await writeTicketLabels(ticket.jira, ticket.key, adding, removing);
-  else labels = [...new Set(adding)].sort();
+  const ticket = publish ? jiraTicket(target) : null;
+  const published = ticket !== null;
+  const labels =
+    ticket !== null ? await writeTicketLabels(ticket.jira, ticket.key, adding, removing) : [...new Set(adding)].sort();
 
   emit({
     contract,

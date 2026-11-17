@@ -10,15 +10,13 @@
  * this node. The outbox file is removed once applied, with a copy of what was written kept
  * in the state directory. If a write fails the node fails and the file stays; a rerun goes on
  * behind the last write that worked (`applyOutbox`).
- *
- * Without `.archon/tracker.json` there is no outbox: nothing is read or written.
  */
 
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
-import { Jira, trackerConfig } from '../../.shared/jira.ts';
+import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { applyOutbox, checkOutbox, outboxFile, outboxProgress, readOutbox, writableNow } from '../../.shared/outbox.ts';
 import { ticketKeyOf } from '../../.shared/tickets.ts';
 
@@ -28,26 +26,22 @@ if (writer !== 'pick' && writer !== 'build' && writer !== 'review') {
   throw new Error(`tracker-write: writer must be pick, build or review, got '${writer}'`);
 }
 
-const config = trackerConfig();
-if (config === null) {
-  emit({ applied: '0', created: '{}' });
-} else {
-  const state = runState();
-  const file = outboxFile(artifactsDir(), writer);
-  const raw = readOutbox(file);
-  let jira: Jira | undefined;
-  let onBoard = new Set<string>();
-  if (writer === 'pick' && Array.isArray(raw) && raw.length > 0) {
-    jira = new Jira(config);
-    onBoard = await writableNow(jira, state);
-  }
-  const ops = checkOutbox(raw, writer, ticketKeyOf(target, config), config.project, onBoard, outboxProgress(state, writer, raw));
-  // Where a filed ticket's remote link points: the lap's ticket or pull request, else the board.
-  const runUrl = target.startsWith('https://')
-    ? target
-    : `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;
-  const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, state, { writer, raw });
-  if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
-  rmSync(file, { force: true });
-  emit({ applied: String(ops.length), created: JSON.stringify(created) });
+const config = requireTracker();
+const state = runState();
+const file = outboxFile(artifactsDir(), writer);
+const raw = readOutbox(file);
+let jira: Jira | undefined;
+let onBoard = new Set<string>();
+if (writer === 'pick' && Array.isArray(raw) && raw.length > 0) {
+  jira = new Jira(config);
+  onBoard = await writableNow(jira, state);
 }
+const ops = checkOutbox(raw, writer, ticketKeyOf(target, config), config.project, onBoard, outboxProgress(state, writer, raw));
+// Where a filed ticket's remote link points: the lap's ticket or pull request, else the board.
+const runUrl = target.startsWith('https://')
+  ? target
+  : `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;
+const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, state, { writer, raw });
+if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
+rmSync(file, { force: true });
+emit({ applied: String(ops.length), created: JSON.stringify(created) });

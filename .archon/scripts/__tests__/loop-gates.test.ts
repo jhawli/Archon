@@ -272,11 +272,10 @@ describe('what the record proves (2026-10-19 audit)', () => {
     ]);
   });
 
-  it('only an open issue tracks anything: not a pull request, not a closed issue', () => {
-    expect(isTrackingIssue({ state: 'OPEN', url: 'https://github.com/o/r/issues/12' })).toBe(true);
+  it('a GitHub issue or pull request never tracks anything: work items live in Jira', () => {
+    expect(isTrackingIssue({ state: 'OPEN', url: 'https://github.com/o/r/issues/12' })).toBe(false);
     expect(isTrackingIssue({ state: 'MERGED', url: 'https://github.com/o/r/pull/409' })).toBe(false);
     expect(isTrackingIssue({ state: 'OPEN', url: 'https://github.com/o/r/pull/430' })).toBe(false);
-    expect(isTrackingIssue({ state: 'CLOSED', url: 'https://github.com/o/r/issues/12' })).toBe(false);
   });
 
   it('the merged commit must be what the check tested, or that plus a clean merge of the base away from this change', () => {
@@ -306,7 +305,7 @@ describe('what the record proves (2026-10-19 audit)', () => {
         {
           file: 'game/harness/HudCheck.cs',
           change: 'exceptions for foes',
-          approval: 'https://github.com/o/r/issues/502#issuecomment-6303074947',
+          approval: 'https://github.com/o/r/pull/502#issuecomment-6303074947',
         },
       ])
     );
@@ -344,13 +343,15 @@ describe('loop wiring', () => {
     expect(prompt).toContain('change no code at all (only the pull request');
   });
 
-  it('a lap that changes no code checks nothing again, and pick follows the critical path', () => {
+  it('a lap that changes no code checks nothing again, and pick follows the sprint order', () => {
     const work = readFileSync(resolve(pack, 'loop/commands/loop-work.md'), 'utf8');
     expect(work).toContain('A run that changes no code runs no checks either');
     expect(work).toContain('a green CI run on the commit you push is that full run');
     const pick = readFileSync(resolve(pack, 'loop/commands/loop-pick.md'), 'utf8');
-    expect(pick).toContain('that unblocks the most other open work');
-    expect(pick).toContain('an open issue labeled `priority`');
+    // The owner ranks the sprint; there are no GitHub issues or `priority` labels to read.
+    expect(pick).toContain('start** the first ticket in sprint order whose dependencies are done');
+    expect(pick).not.toContain('gh issue');
+    expect(pick).not.toContain('labeled `priority`');
     expect(pick).toContain('asked for no code change (only the record, the evidence, or merging the default branch) is `light`');
     expect(pick).not.toContain('lowest number first unless');
   });
@@ -434,13 +435,15 @@ describe('holdouts behind a fence', () => {
 
   it('takes an approval link with a label after it, never text without a link', () => {
     // Reviewers wrote "<url> (Manager decision, ...)" and the gate refused correct approvals.
-    const url = 'https://github.com/o/r/issues/74#issuecomment-123';
+    const url = 'https://github.com/o/r/pull/74#issuecomment-123';
     expect(isApprovalLink(url)).toBe(true);
     expect(isApprovalLink(`${url} (Owner decision, 2026-10-26)`)).toBe(true);
     expect(isApprovalLink('https://github.com/o/r/pull/145 (Manager decision, manager pass 675828cb)')).toBe(true);
     expect(isApprovalLink('Owner decision on #74')).toBe(false);
-    expect(isApprovalLink('see https://github.com/o/r/issues/74')).toBe(false);
-    expect(isApprovalLink('https://example.com/o/r/issues/74')).toBe(false);
+    expect(isApprovalLink('see https://github.com/o/r/pull/74')).toBe(false);
+    expect(isApprovalLink('https://example.com/o/r/pull/74')).toBe(false);
+    // Work items live in Jira: a comment on a GitHub issue approves nothing.
+    expect(isApprovalLink('https://github.com/o/r/issues/74#issuecomment-123')).toBe(false);
   });
 });
 
@@ -519,35 +522,32 @@ describe('the merge gate with Jira', () => {
     expect(found.problems).toEqual(['could not read the comments of CONC-5 from Jira: Jira GET /rest/api/3/issue/CONC-5/comment -> 503: down']);
   });
 
-  type ReadTicket = NonNullable<TrackingReaders['jira']>['ticket'];
+  type ReadTicket = TrackingReaders['jira']['ticket'];
   const ticket = (status: string): ReadTicket => async key => ({ status, url: `${SITE}/browse/${key}` });
-  const readers = (over: Partial<TrackingReaders> = {}, jira: Partial<NonNullable<TrackingReaders['jira']>> = {}): TrackingReaders => ({
-    prUrl: 'https://github.com/o/r/pull/9',
-    githubIssue: () => null,
+  const readers = (jira: Partial<TrackingReaders['jira']> = {}): TrackingReaders => ({
     jira: { config: CFG, created: {}, target: 'CONC-5', ticket: ticket(CFG.status.todo), ...jira },
-    ...over,
   });
 
   it('an open ticket tracks; one on Staging, Live or Canceled does not', async () => {
     expect((await trackingRefs(['CONC-41'], readers())).open).toEqual(new Set(['CONC-41']));
-    const onNew = await trackingRefs(['CONC-41'], readers({}, { ticket: ticket('10014') }));
+    const onNew = await trackingRefs(['CONC-41'], readers({ ticket: ticket('10014') }));
     expect(onNew.open).toEqual(new Set(['CONC-41']));
     for (const done of [CFG.status.staging, CFG.status.live, CFG.status.canceled]) {
-      expect((await trackingRefs(['CONC-41'], readers({}, { ticket: ticket(done) }))).open.size).toBe(0);
+      expect((await trackingRefs(['CONC-41'], readers({ ticket: ticket(done) }))).open.size).toBe(0);
     }
   });
 
   it('new:<marker> is the ticket this run filed for it, checked like any other', async () => {
-    const r = readers({}, { created: { 'flaky-login': 'CONC-60' } });
+    const r = readers({ created: { 'flaky-login': 'CONC-60' } });
     const found = await trackingRefs(['new:flaky-login', 'new:never-filed'], r);
     expect(found.open).toEqual(new Set(['new:flaky-login']));
-    const closed = await trackingRefs(['new:flaky-login'], readers({}, { created: { 'flaky-login': 'CONC-60' }, ticket: ticket(CFG.status.canceled) }));
+    const closed = await trackingRefs(['new:flaky-login'], readers({ created: { 'flaky-login': 'CONC-60' }, ticket: ticket(CFG.status.canceled) }));
     expect(closed.open.size).toBe(0);
   });
 
   it('the lap\'s own ticket, a foreign key or a pull request never tracks anything', async () => {
     const seen: string[] = [];
-    const r = readers({ githubIssue: n => (seen.push(n), { state: 'OPEN', url: 'https://github.com/o/r/issues/12' }) }, {
+    const r = readers({
       ticket: async key => (seen.push(key), { status: CFG.status.todo, url: `${SITE}/browse/${key}` }),
     });
     const found = await trackingRefs(['CONC-5', 'VAULT-3', 'CONC-0', '#9', '9', 'new:'], r);
@@ -555,18 +555,12 @@ describe('the merge gate with Jira', () => {
     expect(seen).toEqual([]);
   });
 
-  it('a GitHub issue number tracks as before, a ticket URL like its key', async () => {
-    const r = readers({ githubIssue: n => ({ state: 'OPEN', url: `https://github.com/o/r/issues/${n}` }) });
-    expect((await trackingRefs(['#12', '13', `${SITE}/browse/CONC-41`], r)).open).toEqual(new Set(['#12', '13', `${SITE}/browse/CONC-41`]));
-  });
-
-  it('without Jira a key or marker tracks nothing and nothing asks Jira', async () => {
-    const r = readers({ jira: undefined, githubIssue: n => ({ state: 'OPEN', url: `https://github.com/o/r/issues/${n}` }) });
-    expect((await trackingRefs(['CONC-41', 'new:x-y-z', '#12'], r)).open).toEqual(new Set(['#12']));
+  it('a ticket URL tracks like its key; a GitHub issue number tracks nothing', async () => {
+    expect((await trackingRefs(['#12', '13', `${SITE}/browse/CONC-41`], readers())).open).toEqual(new Set([`${SITE}/browse/CONC-41`]));
   });
 
   it('a ticket Jira cannot read is untracked, with the reason kept for the refusal', async () => {
-    const r = readers({}, { ticket: async () => { throw new Error('Jira GET /rest/api/3/issue/CONC-41 -> 503: down'); } });
+    const r = readers({ ticket: async () => { throw new Error('Jira GET /rest/api/3/issue/CONC-41 -> 503: down'); } });
     const found = await trackingRefs(['CONC-41'], r);
     expect(found.open.size).toBe(0);
     expect(found.problems).toEqual(['could not read CONC-41 from Jira: Jira GET /rest/api/3/issue/CONC-41 -> 503: down']);

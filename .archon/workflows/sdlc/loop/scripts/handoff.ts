@@ -10,7 +10,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
-import { trackerConfig } from '../../.shared/jira.ts';
 import { clearOutbox } from '../../.shared/outbox.ts';
 
 const dir = join(artifactsDir(), 'handoff');
@@ -20,5 +19,5 @@ writeFileSync(join(dir, 'ship.json'), text(process.env.INPUTS_SHIP));
 writeFileSync(join(dir, 'app-check.json'), text(process.env.INPUTS_APP_CHECK));
 writeFileSync(join(dir, 'evidence-problems.txt'), text(process.env.INPUTS_EVIDENCE_PROBLEMS));
 // The reviewer runs next: an outbox the app check left in its name is not the reviewer's.
-if (trackerConfig() !== null) clearOutbox(artifactsDir(), ['review']);
+clearOutbox(artifactsDir(), ['review']);
 emit({ dir });

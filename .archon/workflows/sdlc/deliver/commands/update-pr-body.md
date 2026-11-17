@@ -35,17 +35,17 @@ through the source this run selected, `$INPUTS.source`:
    judged `inherited` or `environment`, the description must say so near the top:
    the check and why it is not this change's. Keep an existing disclosure that is
    still true.
-4. Link the issue the description references by the latest review's contract
+4. Link the ticket the description references (`CONC-n`, its text in
+   `$ARTIFACTS_DIR/tracker/item.md`) by the latest review's contract
    coverage. What it left open, as a JSON list (empty text when no review judged
    coverage): `$INPUTS.contract_left`. On an empty list (`[]`), and only then,
-   the reference becomes `Closes #N`, replacing a `Refs #N`. Anything else gets a non-closing reference (`Refs #N`)
+   the reference becomes `Closes CONC-5`, replacing a `Refs CONC-5`. Anything else gets a non-closing reference (`Refs CONC-5`)
    in place of any closing keyword (`Closes`, `Fixes`, `Resolves` and their
    variants), and a short "Left open" section listing each item, or saying no
    review judged coverage. An item left open as an operator check names the check
    the operator runs. Keep at most one "Left open" section, current, and
    remove it on an empty list. Change no other reference, and add none when the
-   description links no issue. A Jira ticket reference (`Refs CONC-5`) becomes
-   `Closes CONC-5` the same way, and back to `Refs CONC-5`.
+   description links no ticket. `#n` is a pull request, never the work item.
 5. When something changed, apply the complete description. On `forge`, write
    the request `{"ref":<ref>,"body":<description>}` to
    `$ARTIFACTS_DIR/pr-body-final.json` and pass it with `--data-file`. On `gh`,
@@ -59,5 +59,5 @@ state, or touch the review comment.
 ## Output
 
 - `changed`: whether you edited the description.
-- `summary`: which claims you corrected and how the issue is linked, or that it
+- `summary`: which claims you corrected and how the ticket is linked, or that it
   was already accurate.

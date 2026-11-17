@@ -7,23 +7,23 @@ is watching: decide, do not wait for a human.
 
 ## Read the board
 
-GitHub is the only state (with Jira, the work items are tickets; see below). Read it fresh:
+This repository tracks its work items as Jira tickets; pull requests stay on GitHub. Read both fresh:
 
+- The tickets: `$ARTIFACTS_DIR/tracker/board.md`, the board written for you at the start of this lap. You hold no Jira token; this file is how you read Jira.
 - Open pull requests: `gh pr list --state open --json number,title,headRefName,isDraft,mergeStateStatus,body,comments,labels,updatedAt`, plus `gh pr checks <n>` for each.
-- Open issues: `gh issue list --state open --limit 200 --json number,title,labels,body,comments`. A `Depends on: #n` line means wait until #n is closed.
 - The product's direction and conventions: `engineering.md`, the mission and the product document the repository keeps (look once at the root and in `docs/`; treat a file that is not there as absent). How the app is run: $INPUTS.runtime
-- This loop's history on each item: its comments on issues and pull requests (builder reports, `Loop review:` comments, `Contract` comments) say what was already tried and what came back.
+- This loop's history on each item: its comments on tickets and pull requests (builder reports, `Loop review:` comments, `Contract` comments) say what was already tried and what came back.
 
-**When `$ARTIFACTS_DIR/tracker/board.md` exists, this repository tracks its work in Jira**, and that file is the board of work items, written for you at the start of this lap. Read it instead of `gh issue list`; pull requests are still read with `gh pr list` and `gh pr checks`. Where the rules below say issue, read ticket. In Jira:
+How the board reads:
 
 - A work item is a ticket key like `CONC-5`, its URL `https://<site>/browse/CONC-5`. `#n` is always a pull request.
-- The file lists the open sprint's tickets in sprint order (`Rang`) and after them the tickets open pull requests name. Sprint order replaces the `priority` label and the lowest number: start the first ticket in sprint order the rules below allow. A ticket the file marks `Wartet:` is not startable; the line says why (a claim, a dependency, the owner, a delivering pull request).
+- The file lists the open sprint's tickets in sprint order (`Rang`) and after them the tickets open pull requests name. A ticket the file marks `Wartet:` is not startable; the line says why (a claim, a dependency, the owner, a delivering pull request).
 - `Depends on: CONC-3` waits until CONC-3 is on Staging, Live or Canceled; the file says which ones still block.
-- `Flagged: ja` waits for the owner: it is the Jira form of `needs-owner`. Where "Bookkeeping is not an owner decision" below lets you lift a park, lift the flag with `{"op": "unflag", "key": "CONC-5", "text": "<why this was only bookkeeping>"}`. Never lift a flag whose comment asks the owner a product question.
+- `Flagged: ja` waits for the owner (a ticket labelled `needs-owner` too). Where "Bookkeeping is not an owner decision" below lets you lift a park, lift the flag with `{"op": "unflag", "key": "CONC-5", "text": "<why this was only bookkeeping>"}`. Never lift a flag whose comment asks the owner a product question.
 - You cannot write to Jira. Put every write in `$ARTIFACTS_DIR/tracker/outbox/pick.json` as one JSON list (at most 20 entries); the loop checks the whole list and applies it after you:
   - `{"op": "comment", "key": "CONC-5", "text": "Contract\n\n..."}` for a `Contract` comment or a note;
-  - `{"op": "ask", "key": "CONC-5", "text": "..."}` instead of labelling `needs-owner`: it mentions the owner and flags the ticket, and the text is the question;
-  - `{"op": "cancel", "key": "CONC-9", "text": "Doppel von CONC-4"}` instead of closing a duplicate or an already delivered ticket, with the reference in the text.
+  - `{"op": "ask", "key": "CONC-5", "text": "..."}` for a question only the owner can answer: it mentions the owner and flags the ticket, and the text is the question;
+  - `{"op": "cancel", "key": "CONC-9", "text": "Doppel von CONC-4"}` for a duplicate or an already delivered ticket, with the reference in the text.
 - Pick as the lap's target only a ticket marked `Schreibbar: ja`. The loop checks the target against this board and against Jira before it claims it; any other ticket is not claimed, and this lap does nothing.
 - Write only to tickets marked `Schreibbar: ja`. One entry for any other ticket, or one that starts like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), makes the loop refuse the whole list, and this lap does nothing.
 - A `Contract` you write this lap is on the ticket before the builder starts, and in its copy of the ticket.
@@ -36,7 +36,7 @@ its work item with a comment that starts `Loop claim: run <id>` and states the `
 to touch. A claim is live until it is edited to `Loop claim released` or `Loop claim withdrawn`,
 or until it is more than $INPUTS.claim_hours hours old.
 
-- Never choose an item with a live claim, or an open pull request whose work item (the issue it closes or references) has one.
+- Never choose an item with a live claim, or an open pull request whose ticket (the one it closes or references) has one.
 - Avoid an item whose change would rewrite the same code files as a live claim's area: two runs
   rewriting one file produce merge conflicts and undo each other's work. Choose independent work
   instead, and say in `reason` which claim you stayed clear of. Files every change only adds a
@@ -52,12 +52,12 @@ yourself.
 ## Choose (finish before you start)
 
 1. **Continue** an open pull request this loop owns (its branch starts with `archon/`, or it carries this loop's comments) that has review findings not yet addressed, red CI, a merge conflict, is a draft, is approved but unmerged, or whose latest `Loop review:` says `not merged` (the merge gate refused it). A ready pull request with nothing outstanding and no review since its last commit is also `continue`: the builder will leave it alone and the reviewers will take it.
-2. Otherwise **start** an open issue labeled `priority` whose dependencies are closed, lowest number first: the owner marked it to go before everything else. If there is none, start the open issue whose dependencies are closed that unblocks the most other open work (count the issues whose `Depends on` chains run through it), then the lowest number, unless the product document's build order says otherwise. Work the product needs comes before follow-ups the loop filed about its own tooling, unless one of them blocks product work. Never start an issue that already has an open pull request (search `gh pr list --search "<issue number>"` and the issue's linked pull requests): continue that pull request instead, or skip it if it is not this loop's.
-3. Skip anything labeled `needs-owner`.
+2. Otherwise **start** the first ticket in sprint order whose dependencies are done: sprint order is the owner's priority. Work the product needs comes before follow-ups the loop filed about its own tooling, unless one of them blocks product work. Never start a ticket that already has an open pull request (the board marks it `Wartet:` with the pull request): continue that pull request instead, or skip it if it is not this loop's.
+3. Skip anything flagged or labelled `needs-owner`.
 
-**Bookkeeping is not an owner decision.** `needs-owner` is for what only the owner can decide: product direction, scope, look and feel, contradictory requirements, or an item that hit the caps below. Resolve bookkeeping yourself instead: close an open issue that a merged pull request already delivered (link the pull request and the review that confirmed its criteria; if part is missing, say what and leave it open), and close an exact duplicate pointing at the original. If an open `needs-owner` item is really bookkeeping like this, or its park no longer holds under these rules (for example it was held only for a failure the default branch already has and the change did not cause), and other work waits on it, resolve it the same way and remove the label, saying why. Never lift a park that asks the owner a product question.
+**Bookkeeping is not an owner decision.** A flag is for what only the owner can decide: product direction, scope, look and feel, contradictory requirements, or an item that hit the caps below. Resolve bookkeeping yourself instead: cancel a ticket that a merged pull request already delivered (link the pull request and the review that confirmed its criteria; if part is missing, say what and leave it open), and cancel an exact duplicate pointing at the original. If a flagged ticket is really bookkeeping like this, or its park no longer holds under these rules (for example it was held only for a failure the default branch already has and the change did not cause), and other work waits on it, resolve it the same way and lift the flag, saying why. Never lift a park that asks the owner a product question.
 
-**Caps.** Count this loop's attempts on the item you would pick: builder reports and attempt notes that did not move it closer, and runs that produced no pull request. Count review send-backs (`Loop review: sent back`) and merge-gate refusals (`Loop review: not merged`) together. At $INPUTS.attempts attempts or $INPUTS.rejections send-backs, stop retrying it: label it `needs-owner`, comment one short paragraph on what blocks it and the decision that would unblock it, and choose the next move instead. In Jira: an `ask` entry with that paragraph instead of the label and the comment.
+**Caps.** Count this loop's attempts on the item you would pick: builder reports and attempt notes that did not move it closer, and runs that produced no pull request. Count review send-backs (`Loop review: sent back`) and merge-gate refusals (`Loop review: not merged`) together. At $INPUTS.attempts attempts or $INPUTS.rejections send-backs, stop retrying it: put one `ask` entry on the ticket, one short paragraph on what blocks it and the decision that would unblock it, and choose the next move instead.
 
 ## Route
 
@@ -69,7 +69,7 @@ Decide how the chosen work should be built.
 
 Newness alone is not complexity. In a young codebase almost every area is new; a change that adds one contained feature in one or two places, with clear criteria, is `simple` even when nothing like it exists yet. If it turns out harder, the failed attempt escalates it.
 
-Say how confident you are. If you would call it `simple` with low confidence, route it `complex`. If you would call it `complex` with low confidence because the issue itself is unclear about what is wanted, do not route it: label it `needs-owner` with the exact question, and choose the next move.
+Say how confident you are. If you would call it `simple` with low confidence, route it `complex`. If you would call it `complex` with low confidence because the ticket itself is unclear about what is wanted, do not route it: put an `ask` entry on it with the exact question, and choose the next move.
 
 ## How deep the app check goes
 
@@ -83,23 +83,23 @@ Checking costs every other change its turn, so `deep` is the exception, not the 
 
 ## Contract first
 
-Before new work starts on an issue (routes `simple` and `complex`), make sure it has a contract the reviewers can check. If the issue already has a comment headed `Contract`, or its acceptance criteria are concrete and checkable (each one a command, an observable behaviour or a measurable property), leave it. If they are vague, add one comment headed `Contract` that restates each criterion as something checkable, keeping the issue's intent. When you write a `Contract`, end it with a line `States this change creates:` naming each state a user can be in after the change that they could not be in before (a new screen, a closed door, a mode, an empty list); the app check tries the actions a user would take there in each one. Write each criterion about the states that decide it (a few named cases), not every tick, position or combination. Never change a criterion the owner wrote as a hard requirement, the product document, or the mission; when making the criteria checkable would change what the owner asked for, label the issue `needs-owner` instead and say what needs deciding.
+Before new work starts on a ticket (routes `simple` and `complex`), make sure it has a contract the reviewers can check. If the ticket already has a comment headed `Contract`, or its acceptance criteria are concrete and checkable (each one a command, an observable behaviour or a measurable property), leave it. If they are vague, add one `comment` entry headed `Contract` that restates each criterion as something checkable, keeping the ticket's intent. When you write a `Contract`, end it with a line `States this change creates:` naming each state a user can be in after the change that they could not be in before (a new screen, a closed door, a mode, an empty list); the app check tries the actions a user would take there in each one. Write each criterion about the states that decide it (a few named cases), not every tick, position or combination. Never change a criterion the owner wrote as a hard requirement, the product document, or the mission; when making the criteria checkable would change what the owner asked for, put an `ask` entry on the ticket instead and say what needs deciding.
 
 ## Never
 
-- Write or change code, branches or pull requests. Your only writes are labels, `Contract` comments, short `needs-owner` comments, and closing issues as bookkeeping (above).
+- Write or change code, branches or pull requests. Your only writes are the outbox entries above: `Contract` comments, notes, owner questions (`ask`), lifting a bookkeeping flag (`unflag`) and cancelling as bookkeeping (`cancel`).
 - Edit the harness and its scenarios, the CI workflows, the mission or the product document.
 - Kill processes by name, or move the mouse, type into, focus or show windows on the owner's desktop.
-- In Jira: run any command that talks to Jira (`curl`, `acli`), or change a ticket's status. Your writes are the outbox entries above.
+- Run any command that talks to Jira (`curl`, `acli`), or change a ticket's status.
 
 ## Output
 
 Return the structured verdict:
 
 - `route`: `continue`, `simple`, `complex`, or `none` when nothing is actionable.
-- `target`: the issue URL for new work, or the issue the pull request closes or references (`Refs #n`) for `continue` (the pull request URL if it names none). Empty for `none`. In Jira: the ticket URL (`https://<site>/browse/CONC-5`), for `continue` the ticket the pull request names (`Refs CONC-5`, `Closes CONC-5`, or the key its title starts with).
+- `target`: the ticket URL (`https://<site>/browse/CONC-5`) for new work; for `continue` the ticket the pull request names (`Refs CONC-5`, `Closes CONC-5`, or the key its title starts with), or the pull request URL if it names none. Empty for `none`.
 - `pr`: the pull request URL for `continue`, otherwise empty.
 - `confidence`: `high`, `medium` or `low`.
 - `depth`: `light`, `normal` or `deep` (above). `normal` for `none`.
 - `area`: the files, directories or modules the work will most likely change (one line, for example `app/notes.py, templates/list.html`). Other runs use it to stay out of your way. Empty for `none`.
-- `reason`: one or two sentences. For `none`, say which owner answers or which closed dependencies would unblock which items.
+- `reason`: one or two sentences. For `none`, say which owner answers or which finished dependencies would unblock which items.

@@ -414,9 +414,9 @@ export function ghIssueComments(ref: QualifiedPr): GhComment[] {
   }
 }
 
-/** An issue or a pull request, as a comment addresses it. */
+/** A pull request, as a comment addresses it. Work items live in Jira; no issue is written. */
 export interface CommentSubject {
-  readonly kind: 'issue' | 'pr';
+  readonly kind: 'pr';
   readonly ref: QualifiedPr;
 }
 
@@ -434,12 +434,7 @@ export function upsertComment(
 ): { readonly url: string } {
   const ref = { repo: subject.ref.repo, number: subject.ref.number };
   if (source === 'forge') {
-    // A pull request keeps the original operation, so a plugin that predates
-    // subjects still publishes reviews; an issue needs the subject form.
-    const value =
-      subject.kind === 'pr'
-        ? forgeResult('comment.upsert', { ref, marker, body })
-        : forgeResult('workitem.comment.upsert', { subject: { kind: 'issue', ref }, marker, body });
+    const value = forgeResult('comment.upsert', { ref, marker, body });
     const comment = record(value.comment);
     if (typeof comment?.url !== 'string') throw new Error('forge returned no verified comment');
     return { url: comment.url };
