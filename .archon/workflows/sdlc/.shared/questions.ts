@@ -24,11 +24,18 @@ export function questionText(kind: QuestionKind, text: string, fallback: string,
   return `Frage (technisch, Vorgabe ab ${due} UTC): ${text}\nVorgabe: ${fallback}`;
 }
 
-/** Openings only the pack's scripts or the owner may write; an agent's text with one is refused. */
+/**
+ * What only the pack's scripts or the owner may write; an agent's text with it is refused. A
+ * question is a comment of the pack's account that opens with a mention, and its kind and default
+ * are read from its `Frage (…)` head and `Vorgabe:` line: only `questionText` writes those.
+ */
 export function reservedText(text: string): boolean {
   const t = text.trimStart();
   return (
     /^Loop (claim|result|review):/.test(t) ||
+    t.startsWith('@') ||
+    /^Vorgabe: /m.test(text) ||
+    /Frage \((?:technisch|Produkt)/.test(text) ||
     t.startsWith('Julian:') ||
     t.startsWith('Vorgabe angewendet:') ||
     RUN_LINE.test(text)

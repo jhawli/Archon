@@ -6,7 +6,7 @@
  * that breaks a rule refuses the list.
  */
 import { rights, type Snapshot } from './board-all.ts';
-import { statusName } from './claims.ts';
+import { readCreated, statusName } from './claims.ts';
 import { adf, type Jira, type TrackerConfig } from './jira.ts';
 import { createTicket, outboxCursor, outboxProgress, type PrText } from './outbox.ts';
 import { defaultDue, lastQuestion, mayUnflag, type Question, type QuestionKind, questionText, reservedText } from './questions.ts';
@@ -322,6 +322,15 @@ export async function managerPass(
   const missing = owed.filter(key => !ops.some(op => 'key' in op && op.key === key && (op.op === 'unflag' || op.op === 'cancel')));
   if (missing.length > 0) {
     throw new Error(`manager outbox: AK18l, answered questions not acted on: ${missing.join(', ')} (rewrite to the answer and unflag, or cancel)`);
+  }
+  // A marker an earlier ticket carries would find that ticket again (`createTicket`) and rank or
+  // ask on it past the status rights: refused, unless this very run filed it on an earlier try.
+  const mine = readCreated(state);
+  const taken = new Map(Object.entries(known).flatMap(([key, s]) => (s.own === '' ? [] : [[s.own, key] as const])));
+  for (const op of ops) {
+    if (op.op !== 'create' || mine[op.marker] !== undefined) continue;
+    const earlier = taken.get(op.marker);
+    if (earlier !== undefined) throw new Error(`manager outbox: create ${op.marker} names ${earlier}, a ticket filed before; act on it by its key`);
   }
   const open = ops.slice(outboxProgress(state, 'manager', raw));
   const board = await liveTickets(jira, open, pulls, known);

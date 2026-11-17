@@ -184,6 +184,14 @@ describe('AK18i to AK18m: what the manager writes, and in which order', () => {
     const { error } = await pass([{ op: 'default', key: 'CONC-7', text: 'zu früh' }], { 'CONC-7': { status: S.todo, flagged: true, comments: [asked('2026-11-17T12:00:01.000Z')] } });
     expect(error ?? '').toContain('keine technische Frage mit fälliger Vorgabe');
   });
+  it('a create whose marker an earlier ticket carries refuses the list, before any call', async () => {
+    const known = { 'CONC-12': { status: S.staging, title: 'x', own: 'mgr-leere-liste' } };
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-12': { status: S.staging } } });
+    const raw = [{ op: 'create', marker: 'mgr-leere-liste', title: 'Leere Liste', text: 'x', top: true }];
+    const error = await managerPass(jira, raw, state(), [], known, NOW, LINE, BOARD).then(() => null, (e: unknown) => (e as Error).message);
+    expect(error ?? '').toContain('CONC-12');
+    expect(calls).toHaveLength(0);
+  });
   it('an answered question the list does not act on refuses it, before any call (AK18l)', async () => {
     const known = { 'CONC-5': { status: S.todo, title: 'x', own: '', answered: true as const } };
     const { jira, calls } = fakeJira({ tickets: { 'CONC-5': { status: S.todo, flagged: true } } });

@@ -85,4 +85,10 @@ describe('question form and reserved openings', () => {
     }
     expect(reservedText('Doppel von CONC-4')).toBe(false);
   });
+  it('agents may not write what reads as a question to the owner: only the scripts ask', () => {
+    for (const text of ['@Julian Hawlicek Welche Farbe?', '  @Julian x', 'Erledigt.\nVorgabe: Cache leeren', 'Frage (Produkt): A oder B?', 'x\nFrage (technisch, Vorgabe ab 2026-11-20 10:00 UTC): y']) {
+      expect(reservedText(text)).toBe(true);
+    }
+    expect(reservedText('Mail an julian@example.org, Vorgaben: keine')).toBe(false);
+  });
 });
