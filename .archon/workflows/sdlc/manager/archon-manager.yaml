@@ -1,11 +1,12 @@
 name: archon-manager
 description: |
   Step back from the ticket loop and steer it. One agent looks at the whole
-  system (issues, pull requests, what merged, CI, the product itself) and fixes
+  system (tickets, pull requests, what merged, CI, the product itself) and fixes
   what a single ticket cannot see: duplicates, impossible criteria, stuck or
   orphaned work, recurring causes that need one redesign instead of more
   patches, defects that got past review, and the order of work. Owner
-  questions go into one issue with a stated default; one metrics line per pass.
+  questions go to the ticket they concern, with a default for technical ones;
+  one metrics line per pass into a state file.
 
   Use when: on a slower schedule than archon-loop (every few hours), or when the
   loop stops making progress.
@@ -30,19 +31,27 @@ inputs:
       itself.
 
 nodes:
-  # Jira does not reach this workflow yet (S4b): in a repository whose .archon/tracker.json
-  # names Jira this refuses the run before any agent spends. Every other node waits for it.
-  - id: tracker-guard
-    script: tracker-guard
+  # First node (AK18e): without .archon/tracker.json the run ends here, before any agent.
+  # Then what the sandboxed agent cannot fetch itself: every ticket, the recent runs, the
+  # last metrics lines. It clears the manager's outbox for this run.
+  - id: tracker-read
+    script: manager-read
     runtime: bun
     mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        board: { type: string }
+        tickets: { type: string }
+        runs: { type: string }
+      required: [board, tickets, runs]
 
   # The holdout agents' instructions are command files in this pack; an inline agent cannot
   # reach the pack, so this copies them where the agents' prompts point.
   - id: briefs
     script: briefs
     runtime: bun
-    depends_on: [tracker-guard]
+    depends_on: [tracker-read]
 
   - id: manage
     command: manage
@@ -71,3 +80,19 @@ nodes:
     with:
       runtime: "$INPUTS.runtime"
       holdout: "$INPUTS.holdout"
+
+  # The manager's writes, the whole list checked against Jira now, then applied; its
+  # metrics lines go to $STATE_DIR. A failed agent leaves nothing applied.
+  - id: write
+    script: manager-write
+    runtime: bun
+    depends_on: [manage]
+    output_format:
+      type: object
+      properties:
+        applied: { type: string }
+        created: { type: string }
+        dropped: { type: string }
+        metrics: { type: string }
+        runs: { type: string }
+      required: [applied, created, dropped, metrics, runs]

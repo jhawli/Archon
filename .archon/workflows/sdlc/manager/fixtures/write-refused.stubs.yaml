@@ -1,0 +1,12 @@
+# Dry-run fixture (with --exec-code: write really runs). Every node before write is
+# stubbed; write runs in the scratch checkout of HEAD, which has no .archon/tracker.json,
+# and fails before it reads anything: without a tracker nothing is written. trackerCheck
+# is manager-write's first statement, before runState(); that it fails with the tracker
+# sentence is shown by tracker-check.test.ts.
+tracker-read: { board: stub/tracker/board-all.md, tickets: "36", runs: stub/manager/runs.json }
+briefs: ""
+manage: "Closed 2 duplicates; no owner questions."
+fixture:
+  expect: failed
+  fail-node: write
+exec-code: true

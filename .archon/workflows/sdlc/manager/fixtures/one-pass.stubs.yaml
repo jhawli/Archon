@@ -1,11 +1,13 @@
 # Dry-run fixture: one manager pass, with the runtime instructions in its prompt.
-tracker-guard: ""
+# tracker-read and write talk to Jira and Archon's CLI: stubbed here.
+tracker-read: { board: stub/tracker/board-all.md, tickets: "36", runs: stub/manager/runs.json }
 # The holdout briefs copy is a script with no decision in it.
 briefs: ""
 manage: "Closed 2 duplicates; no owner questions."
+write: { applied: "2", created: "{}", dropped: "[]", metrics: "stub", runs: '{"acted":[],"skipped":[]}' }
 fixture:
   expect: completed
-  reached: [manage]
+  reached: [manage, write]
   resolved-text-contains:
     manage: "/private/run-the-app.md"
   inputs:

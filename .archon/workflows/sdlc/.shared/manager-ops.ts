@@ -10,6 +10,7 @@ import { readCreated, statusName } from './claims.ts';
 import { adf, type Jira, type TrackerConfig } from './jira.ts';
 import { createTicket, outboxCursor, outboxProgress, type PrText } from './outbox.ts';
 import { defaultDue, lastQuestion, mayUnflag, type Question, type QuestionKind, questionText, reservedText } from './questions.ts';
+import { MAX_RESUMES, type RunOp } from './run-ops.ts';
 import { prKeys } from './tickets.ts';
 
 export const MANAGER_CAP = 5;
@@ -34,7 +35,8 @@ export type ManagerOp =
   | { readonly op: 'ask'; readonly key: string; readonly ask: AskSpec }
   | { readonly op: 'create'; readonly marker: string; readonly title: string; readonly text: string; readonly ask: AskSpec | null; readonly top: boolean }
   | { readonly op: 'rewrite'; readonly key: string; readonly text: string; readonly reason: string }
-  | { readonly op: 'rank'; readonly key: string; readonly before: string | null; readonly after: string | null; readonly top: boolean; readonly text: string };
+  | { readonly op: 'rank'; readonly key: string; readonly before: string | null; readonly after: string | null; readonly top: boolean; readonly text: string }
+  | RunOp;
 
 export interface Live {
   readonly status: string;
@@ -86,6 +88,7 @@ export function parseManagerOutbox(raw: unknown, project: string): { ops: Manage
   const dropped: string[] = [];
   let creates = 0;
   let rewrites = 0;
+  let resumes = 0;
   raw.forEach((entry, i) => {
     const where = `manager outbox entry ${i}`;
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error(`${where}: not an object`);
@@ -117,6 +120,14 @@ export function parseManagerOutbox(raw: unknown, project: string): { ops: Manage
         });
         return;
       }
+      case 'abandon':
+      case 'resume': {
+        if (typeof e.run !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(e.run)) throw new Error(`${where}: run must be a run id from runs.json`);
+        const op: RunOp = { op: e.op, run: e.run, text: words(e, 'text', where, 2000) };
+        if (op.op === 'resume' && (resumes += 1) > MAX_RESUMES) dropped.push(`resume ${op.run}`);
+        else ops.push(op);
+        return;
+      }
       case 'comment':
       case 'cancel':
       case 'todo':
@@ -133,7 +144,7 @@ export function parseManagerOutbox(raw: unknown, project: string): { ops: Manage
 
 /** Null when the manager may do this to a ticket in this state, else why not. */
 export function refusal(op: ManagerOp, l: Live, s: TrackerConfig['status'], now: number): string | null {
-  if (op.op === 'create' || op.op === 'comment' || op.op === 'ask') return null;
+  if (op.op === 'create' || op.op === 'comment' || op.op === 'ask' || op.op === 'abandon' || op.op === 'resume') return null;
   const r = rights(l.status, s);
   if (r === 'kommentar') return `${op.key} steht auf ${statusName(l.status, s)}: der Manager darf hier nur kommentieren und fragen (AK18i)`;
   switch (op.op) {
@@ -162,7 +173,7 @@ export function refusal(op: ManagerOp, l: Live, s: TrackerConfig['status'], now:
 export function checkManagerOps(ops: readonly ManagerOp[], board: ReadonlyMap<string, Live>, s: TrackerConfig['status'], now: number): void {
   const sim = new Map(board);
   ops.forEach((op, i) => {
-    if (op.op === 'create') return;
+    if (op.op === 'create' || op.op === 'abandon' || op.op === 'resume') return;
     const l = sim.get(op.key);
     if (l === undefined) throw new Error(`manager outbox entry ${i}: ${op.key} is not on the board`);
     if (op.op === 'rank') {
@@ -262,6 +273,8 @@ export async function applyManagerOps(
   const question = (a: AskSpec): string => signed(questionText(a.kind, askBody(a), a.fallback, now));
   const created: Record<string, string> = {};
   for (const [index, op] of ops.entries()) {
+    // Run actions are manager-write's, after the tickets.
+    if (op.op === 'abandon' || op.op === 'resume') continue;
     const changed = cursor.half && index === cursor.done;
     if (op.op === 'create') {
       const { key } = await createTicket(jira, { op: 'create', marker: op.marker, title: op.title, text: op.text }, boardUrl, state);

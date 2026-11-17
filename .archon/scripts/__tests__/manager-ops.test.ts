@@ -214,3 +214,33 @@ describe('AK18i to AK18m: what the manager writes, and in which order', () => {
     expect(calls.filter(c => c.method === 'PUT').map(c => Object.keys((c.body as { fields: object }).fields))).toEqual([['description'], [CFG.flagField]]);
   });
 });
+
+describe('Grill G2: run actions in the manager outbox', () => {
+  const id = (n: number): string => `a1b2c3d4-0000-4000-8000-00000000000${n}`;
+  it('abandon and resume are read, a third resume is dropped, not refused', () => {
+    const raw = [1, 2, 3].map(n => ({ op: 'resume', run: id(n), text: 'DB-Fehler' })).concat([{ op: 'abandon', run: id(4), text: 'nie gestartet' }]);
+    expect(() => parseManagerOutbox(raw, 'CONC')).not.toThrow();
+    const { ops, dropped } = parseManagerOutbox(raw, 'CONC');
+    expect(ops.map(o => o.op)).toEqual(['resume', 'resume', 'abandon']);
+    expect(dropped).toEqual([`resume ${id(3)}`]);
+  });
+  it('a run that is not an id, or no reason: the whole outbox is refused', () => {
+    expect(() => parseManagerOutbox([{ op: 'abandon', run: 'latest', text: 'x' }], 'CONC')).toThrow('run must be');
+    expect(() => parseManagerOutbox([{ op: 'resume', run: id(1), text: '' }], 'CONC')).toThrow('text is empty');
+  });
+  it('the ticket check passes run actions by', () => {
+    expect(() => parseManagerOutbox([{ op: 'abandon', run: id(1), text: 'x' }], 'CONC')).not.toThrow();
+    const { ops } = parseManagerOutbox([{ op: 'abandon', run: id(1), text: 'x' }], 'CONC');
+    expect(() => {
+      checkManagerOps(ops, new Map(), S, NOW);
+    }).not.toThrow();
+  });
+  it('run actions pass through managerPass untouched: only the ticket entry is written', async () => {
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-5': { status: S.todo } } });
+    const raw = [{ op: 'abandon', run: id(1), text: 'nie gestartet' }, { op: 'comment', key: 'CONC-5', text: 'y' }];
+    const error = await managerPass(jira, raw, state(), [], { 'CONC-5': { status: S.todo, title: 'x', own: '' } }, NOW, 'Lauf: archon archon-manager r1', 'https://example.atlassian.net/b')
+      .then(() => null, (e: unknown) => (e as Error).message);
+    expect(error).toBeNull();
+    expect(calls.filter(c => c.method === 'POST' && c.path !== '/rest/api/3/search/jql').map(c => c.path)).toEqual(['/rest/api/3/issue/CONC-5/comment']);
+  });
+});
