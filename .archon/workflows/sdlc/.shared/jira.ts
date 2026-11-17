@@ -401,7 +401,14 @@ export class Jira {
    * as the time limit. A POST that may have reached Jira is never sent twice: it files a
    * ticket or a comment each time.
    */
+  /** An object answer, or null for an empty one (`request` for any other shape). */
   async call(method: string, path: string, body?: unknown, ok = [200, 201, 204]): Promise<Json | null> {
+    const reply = await this.request(method, path, body, ok);
+    return reply === null ? null : obj(reply);
+  }
+
+  /** The parsed answer in whatever shape Jira sends it (a remote-link listing is a list), or null when empty. */
+  async request(method: string, path: string, body?: unknown, ok = [200, 201, 204]): Promise<unknown> {
     const repeatable = method === 'GET' || method === 'PUT';
     for (let attempt = 1; ; attempt += 1) {
       const last = attempt >= ATTEMPTS;
@@ -414,11 +421,30 @@ export class Jira {
         continue;
       }
       const { status, text } = reply;
-      if (ok.includes(status)) return text.trim() === '' ? null : obj(JSON.parse(text));
+      if (ok.includes(status)) return text.trim() === '' ? null : (JSON.parse(text) as unknown);
       const again = status === 429 || (repeatable && BUSY.includes(status));
       if (!again || last) throw new Error(`Jira ${method} ${path} -> ${status}: ${text.slice(0, 500)}`);
       await this.pause(Math.min(MAX_WAIT_MS, reply.retryAfter !== undefined ? reply.retryAfter * 1000 : 1000 * attempt));
     }
+  }
+
+  /** The marker of the `archon:<PROJECT>:<marker>` link this pack puts on tickets it files, or null. */
+  async ownMarker(key: string): Promise<string | null> {
+    const prefix = `archon:${this.config.project}:`;
+    for (const link of list(await this.request('GET', `${this.issue(key)}/remotelink`))) {
+      const id = str(obj(link).globalId);
+      if (id.startsWith(prefix)) return id.slice(prefix.length);
+    }
+    return null;
+  }
+
+  /** Move a ticket in the rank order (AK18m); exactly one of before and after. */
+  async rank(key: string, place: { before: string } | { after: string }): Promise<void> {
+    const other = 'before' in place ? place.before : place.after;
+    this.issue(key); // both keys are checked before they reach Jira
+    this.issue(other);
+    const body = 'before' in place ? { issues: [key], rankBeforeIssue: other } : { issues: [key], rankAfterIssue: other };
+    await this.call('PUT', '/rest/agile/1.0/issue/rank', body, [200, 204]);
   }
 
   toTicket(raw: Json, openSprint: boolean): Ticket {

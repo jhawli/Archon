@@ -342,6 +342,28 @@ describe('Jira client', () => {
     expect(calls[0]?.[2]).toEqual({ fields: { customfield_10021: [{ id: '10019' }] } });
     expect(JSON.stringify(calls[1]?.[2])).toContain('acc-julian');
   });
+  it('ownMarker reads the marker of this project’s archon link; a list answer, not an object', async () => {
+    const { send } = fake([
+      ['GET', '/rest/api/3/issue/CONC-40/remotelink', 200, [{ globalId: 'archon:CONC:disc-0123456789abcdef' }]],
+      ['GET', '/rest/api/3/issue/CONC-41/remotelink', 200, [{ globalId: 'archon:VAULT:x' }]],
+      ['GET', '/rest/api/3/issue/CONC-42/remotelink', 200, []],
+    ]);
+    const jira = new Jira(CFG, send);
+    expect(await jira.ownMarker('CONC-40')).toBe('disc-0123456789abcdef');
+    expect(await jira.ownMarker('CONC-41')).toBeNull();
+    expect(await jira.ownMarker('CONC-42')).toBeNull();
+  });
+  it('rank moves a ticket before or after another; a partial answer (207) is an error', async () => {
+    const { send, calls } = fake([['PUT', '/rest/agile/1.0/issue/rank', 204, undefined]]);
+    await new Jira(CFG, send).rank('CONC-5', { before: 'CONC-3' });
+    await new Jira(CFG, send).rank('CONC-5', { after: 'CONC-9' });
+    expect(calls).toEqual([
+      ['PUT', '/rest/agile/1.0/issue/rank', { issues: ['CONC-5'], rankBeforeIssue: 'CONC-3' }],
+      ['PUT', '/rest/agile/1.0/issue/rank', { issues: ['CONC-5'], rankAfterIssue: 'CONC-9' }],
+    ]);
+    const partial = fake([['PUT', '/rest/agile/1.0/issue/rank', 207, { entries: [] }]]);
+    expect(await failure(new Jira(CFG, partial.send).rank('CONC-5', { before: 'CONC-3' }))).toContain('207');
+  });
 });
 
 describe('a call that hits a passing hiccup', () => {
