@@ -318,6 +318,17 @@ export function confirmMerge(lap: LapResult, view: PrView | null, key: string, c
   return confirmed ? lap : { ...lap, landed: '' };
 }
 
+/**
+ * A question for the owner when the lap's pull request does not name its ticket, or null. The
+ * ticket goes to Review, and the board finds a ticket there only through a pull request that
+ * names it: without the key neither would come back to the loop. GitHub showing no pull
+ * request asks nothing here; `confirmMerge` already doubts a merge it cannot see.
+ */
+export function unnamedPrAsk(lap: LapResult, view: PrView | null, key: string, project: string): string | null {
+  if (lap.pr === '' || view === null || namesTicket(view, key, project)) return null;
+  return `Der PR ${lap.pr} nennt ${key} weder am Titelanfang noch als Refs oder Closes, so findet die Schleife weder PR noch Ticket wieder. Bitte den Schlüssel an den Anfang des PR-Titels setzen.`;
+}
+
 // --- The ticket as the agents read it ---
 
 const STATUS_NAMES: Record<keyof TrackerConfig['status'], string> = {

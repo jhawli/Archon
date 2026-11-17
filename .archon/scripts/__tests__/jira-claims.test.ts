@@ -7,6 +7,7 @@ import {
   type LapResult,
   type PrView,
   confirmMerge,
+  unnamedPrAsk,
   deadClaims,
   editComment,
   finalStatus,
@@ -356,6 +357,21 @@ describe('a merge counts only when GitHub confirms it', () => {
   it('a lap that did not claim a merge is left as it is', () => {
     const open = lap({ pr: 'https://github.com/o/r/pull/9', landed: 'refused' });
     expect(confirmMerge(open, null, 'CONC-5', claimedAt, 'CONC')).toEqual(open);
+  });
+});
+
+describe('a pull request that does not name its ticket is put to the owner', () => {
+  const open = (title: string, body = ''): PrView => ({ state: 'OPEN', mergedAt: null, title, body });
+  const built = lap({ pr: 'https://github.com/o/r/pull/9' });
+  it('a pull request without the key: nothing leads the loop back, so the owner is asked', () => {
+    expect(unnamedPrAsk(built, open('Tags für Notizen'), 'CONC-5', 'CONC')).toContain('CONC-5');
+    expect(unnamedPrAsk(built, open('CONC-50 Anderes', 'Refs CONC-50'), 'CONC-5', 'CONC')).toContain('CONC-5');
+  });
+  it('a pull request naming the ticket, no pull request, or one GitHub cannot show asks nothing', () => {
+    expect(unnamedPrAsk(built, open('CONC-5 Tags'), 'CONC-5', 'CONC')).toBeNull();
+    expect(unnamedPrAsk(built, open('Tags', 'Refs CONC-5'), 'CONC-5', 'CONC')).toBeNull();
+    expect(unnamedPrAsk(lap({ pr: '' }), null, 'CONC-5', 'CONC')).toBeNull();
+    expect(unnamedPrAsk(built, null, 'CONC-5', 'CONC')).toBeNull();
   });
 });
 

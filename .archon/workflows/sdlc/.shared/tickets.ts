@@ -51,23 +51,21 @@ export function referencedKeys(body: string, project: string): string[] {
   ];
 }
 
-/**
- * A pull request is the work for a ticket when its title starts with the key (AK6) or its body
- * closes or references it. A partial delivery says only `Refs`, so `closedKeys` alone misses it.
- * `key` comes from `ticketKeyOf`, so it is safe inside a regular expression.
- */
-export function namesTicket(pr: { readonly title: string; readonly body: string }, key: string, project: string): boolean {
-  return new RegExp(`^\\[?${key}\\b`).test(pr.title.trim()) || referencedKeys(pr.body, project).includes(key);
-}
 
 /**
- * The tickets a pull request names: the key its title opens with (AK6), and its `Refs`/`Closes`.
- * The one reading of "the ticket a pull request is the work for", used by the board, the launch
- * gate and claim alike.
+ * The tickets a pull request is the work for: the key its title opens with (AK6), and the ones
+ * its body closes or references (a partial delivery says only `Refs`, so `closedKeys` alone
+ * misses it). The one reading of it: the board, the launch gate, claim and release all go
+ * through here or through `namesTicket`.
  */
 export function prKeys(pr: { readonly title: string; readonly body: string }, project: string): string[] {
   const lead = new RegExp(`^\\[?(${project}-[1-9]\\d*)\\b`).exec(pr.title.trim())?.[1];
   return [...new Set([...(lead === undefined ? [] : [lead]), ...referencedKeys(pr.body, project)])];
+}
+
+/** Whether a pull request is the work for the ticket `key` (`prKeys`). */
+export function namesTicket(pr: { readonly title: string; readonly body: string }, key: string, project: string): boolean {
+  return prKeys(pr, project).includes(key);
 }
 
 export interface PrRow {

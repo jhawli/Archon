@@ -433,13 +433,12 @@ describe('a pull request pick wants the lap to continue', () => {
     const statuses = new Map([['CONC-9', CFG.status.progress]]);
     expect(prRefusal(pr('CONC-5 Sync', 'Refs CONC-5\nRefs CONC-9'), 'CONC-5', statuses, new Set(['CONC-5']), CFG)).toContain('CONC-9');
   });
-  it('a pull request alone, naming a ticket that is not the loop’s, is refused; one Jira does not report counts as open', () => {
-    expect(prRefusal(pr('CONC-9 Session', ''), null, none, new Set(['CONC-5']), CFG)).toContain('CONC-9');
+  it('a ticket Jira does not report counts as open, so naming it is refused', () => {
+    expect(prRefusal(pr('CONC-5 Sync', 'Refs CONC-9'), 'CONC-5', none, new Set(['CONC-5']), CFG)).toContain('CONC-9');
   });
-  it('a delivered or canceled ticket it names binds nobody, and a pull request naming no ticket is fine', () => {
+  it('a delivered or canceled ticket it names binds nobody', () => {
     const statuses = new Map([['CONC-3', CFG.status.staging], ['CONC-4', CFG.status.canceled]]);
     expect(prRefusal(pr('CONC-5 Sync', 'Refs CONC-3, CONC-4'), 'CONC-5', statuses, new Set(['CONC-5']), CFG)).toBeNull();
-    expect(prRefusal(pr('Bump deps'), null, none, new Set(), CFG)).toBeNull();
   });
 });
 

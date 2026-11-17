@@ -27,6 +27,7 @@ import {
   readLap,
   runState,
   statusName,
+  unnamedPrAsk,
   workItem,
 } from '../../.shared/claims.ts';
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
@@ -83,17 +84,23 @@ try {
   // knows it. Without either the time is NaN and no merge is confirmed: the safe side.
   const kept = readClaimedAt(state);
   const claimedAt = Number.isNaN(kept) && own.length > 0 ? Math.min(...own.map(comment => comment.createdAt)) : kept;
-  const lap = confirmMerge(recorded, prView(recorded.pr), item.key, claimedAt, config.project);
+  const view = prView(recorded.pr);
+  const lap = confirmMerge(recorded, view, item.key, claimedAt, config.project);
   const ticket = await jira.ticket(item.key);
   const doubt = recorded.landed === 'merged' && lap.landed !== 'merged';
   const decided = finalStatus(item.key, ticket.status, lap, config.status);
-  const result =
+  const doubted =
     doubt && decided.status !== null && decided.ask === null
       ? {
           ...decided,
           ask: `Der Merge-Schritt meldet ${lap.pr} als gemergt, GitHub bestätigt das für dieses Ticket nicht (gemergt nach dem Claim, Schlüssel im PR). Bitte PR und Status prüfen.`,
         }
       : decided;
+  // A pull request without the ticket's key leaves both out of the loop's sight: ask.
+  const result =
+    doubted.status !== null && doubted.ask === null
+      ? { ...doubted, ask: unnamedPrAsk(lap, view, item.key, config.project) }
+      : doubted;
   if (result.status !== null && result.status !== ticket.status) await jira.move(item.key, result.status);
   const name = statusName(result.status ?? ticket.status, config.status);
   // Once per run: pick counts these lines as attempts, and this node may run again.

@@ -37,7 +37,8 @@ if (writer === 'pick' && Array.isArray(raw) && raw.length > 0) {
   onBoard = await writableNow(jira, state);
 }
 const ops = checkOutbox(raw, writer, ticketKeyOf(target, config), config.project, onBoard, outboxProgress(state, writer, raw));
-// Where a filed ticket's remote link points: the lap's ticket or pull request, else the board.
+// Where a filed ticket's remote link points: the lap's target as pick named it (claim checks it
+// after this writer), else the board.
 const runUrl = target.startsWith('https://')
   ? target
   : `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;

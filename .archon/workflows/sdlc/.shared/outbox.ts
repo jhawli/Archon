@@ -206,20 +206,20 @@ export function prAddressRefusal(pull: string, repository: string, pr: PrText | 
 }
 
 /**
- * Why the loop must not work on the pull request pick named, or null when it may. On Jira a
- * pull request is someone's work on the tickets it names, so every open ticket it names has
- * to be the loop's to touch (`writable`), and it has to name the lap's ticket when there is
- * one. `statuses` are the named tickets' status ids; a ticket Jira does not report counts as
- * open, a delivered or canceled one binds nobody.
+ * Why the loop must not work on the pull request pick named, or null when it may. A pull
+ * request is someone's work on the tickets it names, so it has to name the lap's ticket, and
+ * every other open ticket it names has to be the loop's to touch (`writable`). `statuses` are
+ * the named tickets' status ids; a ticket Jira does not report counts as open, a delivered or
+ * canceled one binds nobody.
  */
 export function prRefusal(
   pr: PrText,
-  target: string | null,
+  target: string,
   statuses: ReadonlyMap<string, string>,
   writable: ReadonlySet<string>,
   config: TrackerConfig
 ): string | null {
-  if (target !== null && !namesTicket(pr, target, config.project)) {
+  if (!namesTicket(pr, target, config.project)) {
     return `the pull request does not name ${target}`;
   }
   const done = new Set([config.status.staging, config.status.live, config.status.canceled]);
