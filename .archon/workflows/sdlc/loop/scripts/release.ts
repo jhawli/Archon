@@ -31,6 +31,7 @@ import {
   workItem,
 } from '../../.shared/claims.ts';
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
+import { runLine } from '../../.shared/questions.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
@@ -43,6 +44,8 @@ const config = requireTracker();
 const item = workItem(target, config);
 const jira = new Jira(config);
 const prefix = `${CLAIM_PREFIX}${run}`;
+// Every comment and question this lap leaves on its ticket names the run (AK18i).
+const line = runLine('archon-loop', run);
 
 // Free the claim. A failure here is kept for the end: the status and the flag below are
 // still tried, so the ticket does not sit on In Progress with nothing said.
@@ -106,9 +109,9 @@ try {
   // Once per run: pick counts these lines as attempts, and this node may run again.
   const said = all.some(comment => comment.body.startsWith(`Loop result: run ${run}.`));
   if (!said) {
-    await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.`);
+    await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.\n\n${line}`);
   }
-  if (result.ask !== null) await jira.ask(item.key, result.ask);
+  if (result.ask !== null) await jira.ask(item.key, `${result.ask}\n\n${line}`);
   const unconfirmed = doubt ? ', merge not confirmed by GitHub' : '';
   lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}`);
   if (freeError !== undefined) throw freeError;
@@ -118,7 +121,7 @@ try {
   try {
     await jira.ask(
       item.key,
-      `Lauf ${run} ist nicht sauber zu Ende gekommen (${why.slice(0, 300)}). Bitte Status und Claim des Tickets prüfen.`
+      `Lauf ${run} ist nicht sauber zu Ende gekommen (${why.slice(0, 300)}). Bitte Status und Claim des Tickets prüfen.\n\n${line}`
     );
   } catch (flagError) {
     lines.push(`could not flag ${item.key} either: ${flagError instanceof Error ? flagError.message : String(flagError)}`);

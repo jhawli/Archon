@@ -18,6 +18,7 @@ import { runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { applyOutbox, checkOutbox, outboxFile, outboxProgress, readOutbox, writableNow } from '../../.shared/outbox.ts';
+import { runLine } from '../../.shared/questions.ts';
 import { ticketKeyOf } from '../../.shared/tickets.ts';
 
 const writer = trimmed(process.env.INPUTS_WRITER);
@@ -42,7 +43,10 @@ const ops = checkOutbox(raw, writer, ticketKeyOf(target, config), config.project
 const runUrl = target.startsWith('https://')
   ? target
   : `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;
-const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, state, { writer, raw });
+const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, runLine('archon-loop', process.env.WORKFLOW_ID ?? ''), state, {
+    writer,
+    raw,
+  });
 if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
 rmSync(file, { force: true });
 emit({ applied: String(ops.length), created: JSON.stringify(created) });

@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, statusName } from './claims.ts';
 import { note } from './io.ts';
 import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
+import { reservedText } from './questions.ts';
 import { namesTicket, prKeys } from './tickets.ts';
 
 export type Op =
@@ -51,8 +52,10 @@ const MAX_OPS = 20;
  */
 function reserved(text: string, writer: Writer): boolean {
   const shown = plain(adf(text));
-  if (/^Loop (claim|result):/.test(shown)) return true;
-  return shown.startsWith('Loop review:') && writer !== 'review';
+  // The reviewer files its `Loop review:` verdict through the outbox; the rest of its text is held
+  // to the same rule as everyone's (`reservedText`: no Julian, no run line, no applied default).
+  const review = writer === 'review' && shown.startsWith('Loop review:');
+  return reservedText(review ? shown.slice('Loop review:'.length) : shown);
 }
 
 /** The outbox file's list, or undefined when the agent left none (no file, or a blank one). */
@@ -240,6 +243,7 @@ export async function applyOutbox(
   jira: Jira,
   ops: readonly Op[],
   runUrl: string,
+  line: string,
   state: string,
   resume?: { readonly writer: Writer; readonly raw: unknown }
 ): Promise<Record<string, string>> {
@@ -256,8 +260,8 @@ export async function applyOutbox(
       // Always asked, also behind the progress mark: it finds its own ticket and returns its key.
       created[op.marker] = await createTicket(jira, op, runUrl, state);
     } else if (index >= done) {
-      if (op.op === 'comment') await jira.comment(op.key, op.text);
-      else if (op.op === 'ask') await jira.ask(op.key, op.text);
+      if (op.op === 'comment') await jira.comment(op.key, `${op.text}\n\n${line}`);
+      else if (op.op === 'ask') await jira.ask(op.key, `${op.text}\n\n${line}`);
       else {
         // The change first: a comment saying "canceled" on a ticket that is not would be worse
         // than the reverse. It is noted before the comment, so a rerun only adds the comment.
@@ -266,7 +270,8 @@ export async function applyOutbox(
           else await jira.call('PUT', jira.issue(op.key), { fields: { [c.flagField]: null } });
           keep(index, true);
         }
-        await jira.comment(op.key, op.op === 'cancel' ? `${op.text}\n\nAbgebrochen vom Loop: ${runUrl}` : op.text);
+        const why = op.op === 'cancel' ? `${op.text}\n\nAbgebrochen vom Loop: ${runUrl}` : op.text;
+        await jira.comment(op.key, `${why}\n\n${line}`);
       }
     }
     keep(Math.max(done, index + 1), false);

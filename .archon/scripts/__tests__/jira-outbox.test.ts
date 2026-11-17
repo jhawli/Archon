@@ -20,6 +20,7 @@ import {
   writableNow,
   type Op,
 } from '../../workflows/sdlc/.shared/outbox';
+import { runLine } from '../../workflows/sdlc/.shared/questions';
 import { prKeys } from '../../workflows/sdlc/.shared/tickets';
 
 const CFG: TrackerConfig = {
@@ -44,6 +45,7 @@ const CFG: TrackerConfig = {
 };
 const BOARD = new Set(['CONC-5', 'CONC-6']);
 const RUN = 'https://example.atlassian.net/browse/CONC-5';
+const LINE = runLine('archon-loop', 'run-1');
 
 function failure(run: () => unknown): string {
   try {
@@ -148,6 +150,15 @@ describe('outbox check', () => {
     ).toHaveLength(1);
     expect(checkOutbox([{ op: 'comment', key: 'CONC-5', text: '```\nLoop claim: run x\n```' }], 'pick', null, 'CONC', BOARD)).toHaveLength(1);
   });
+  it('an agent may not write what reads as Julian, as a run or as an applied default', () => {
+    for (const text of ['Julian: ja, so machen', 'Erledigt.\nLauf: archon archon-loop abc', 'Vorgabe angewendet: Cache leeren']) {
+      for (const writer of ['pick', 'build', 'review'] as const) {
+        expect(failure(() => checkOutbox([{ op: 'comment', key: 'CONC-5', text }], writer, 'CONC-5', 'CONC', BOARD))).toContain(
+          'reserved'
+        );
+      }
+    }
+  });
 });
 
 const ticket = (key: string, over: Partial<Ticket> = {}): Ticket => ({
@@ -230,15 +241,28 @@ const steps = (calls: Call[]): string[] => calls.map(call => `${call.method} ${c
 const state = (): string => runState(mkdtempSync(join(tmpdir(), 'state-')), 'run-1');
 
 describe('outbox apply', () => {
+  it('every comment, question, cancel and lift a lap writes ends with its run line', async () => {
+    const { jira, calls } = fakeJira();
+    const ops: Op[] = [
+      { op: 'comment', key: 'CONC-5', text: 'Contract' },
+      { op: 'ask', key: 'CONC-5', text: 'Welche Farbe?' },
+      { op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' },
+      { op: 'cancel', key: 'CONC-6', text: 'Doppelt zu CONC-5' },
+    ];
+    await applyOutbox(jira, ops, RUN, LINE, state());
+    const comments = calls.filter(call => call.method === 'POST' && call.path.endsWith('/comment'));
+    expect(comments).toHaveLength(4);
+    for (const call of comments) expect(JSON.stringify(call.body)).toContain('Lauf: archon archon-loop run-1');
+  });
   it('unflag: the flag off first, then the reason', async () => {
     const { jira, calls } = fakeJira();
-    await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, state());
+    await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, LINE, state());
     expect(steps(calls)).toEqual(['PUT /rest/api/3/issue/CONC-6', 'POST /rest/api/3/issue/CONC-6/comment']);
     expect(calls[0]?.body).toEqual({ fields: { customfield_10021: null } });
   });
   it('cancel: Canceled first, then a comment that says why and from where', async () => {
     const { jira, calls } = fakeJira();
-    await applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt zu CONC-5' }], RUN, state());
+    await applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt zu CONC-5' }], RUN, LINE, state());
     expect(steps(calls)).toEqual([
       'GET /rest/api/3/issue/CONC-6/transitions',
       'POST /rest/api/3/issue/CONC-6/transitions',
@@ -250,7 +274,7 @@ describe('outbox apply', () => {
   });
   it('cancel that cannot move the ticket leaves no comment saying it was canceled', async () => {
     const { jira, calls } = fakeJira({ failOnce: 'POST /rest/api/3/issue/CONC-6/transitions' });
-    const run = applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt' }], RUN, state(), { writer: 'pick', raw: 'cancel' });
+    const run = applyOutbox(jira, [{ op: 'cancel', key: 'CONC-6', text: 'Doppelt' }], RUN, LINE, state(), { writer: 'pick', raw: 'cancel' });
     expect(run).rejects.toThrow('400');
     await run.catch(() => undefined);
     expect(steps(calls)).not.toContain('POST /rest/api/3/issue/CONC-6/comment');
@@ -262,10 +286,10 @@ describe('outbox apply', () => {
       { op: 'comment', key: 'CONC-5', text: 'Erster' },
       { op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' },
     ];
-    await applyOutbox(jira, ops, RUN, dir, { writer: 'pick', raw: ops }).catch(() => undefined);
+    await applyOutbox(jira, ops, RUN, LINE, dir, { writer: 'pick', raw: ops }).catch(() => undefined);
     expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-5/comment', 'PUT /rest/api/3/issue/CONC-6']);
     calls.length = 0;
-    await applyOutbox(jira, ops, RUN, dir, { writer: 'pick', raw: ops });
+    await applyOutbox(jira, ops, RUN, LINE, dir, { writer: 'pick', raw: ops });
     expect(steps(calls)).toEqual(['PUT /rest/api/3/issue/CONC-6', 'POST /rest/api/3/issue/CONC-6/comment']);
     expect(existsSync(join(dir, 'progress-pick.json'))).toBe(false);
   });
@@ -273,12 +297,12 @@ describe('outbox apply', () => {
     const { jira, calls } = fakeJira({ failOnce: 'PUT /rest/api/3/issue/CONC-6' });
     const dir = state();
     const first: Op[] = [{ op: 'comment', key: 'CONC-5', text: 'Erster' }, { op: 'unflag', key: 'CONC-6', text: 'x' }];
-    await applyOutbox(jira, first, RUN, dir, { writer: 'pick', raw: first }).catch(() => undefined);
+    await applyOutbox(jira, first, RUN, LINE, dir, { writer: 'pick', raw: first }).catch(() => undefined);
     expect(outboxProgress(dir, 'pick', first)).toBe(1);
     const other: Op[] = [{ op: 'comment', key: 'CONC-5', text: 'Anderer' }];
     expect(outboxProgress(dir, 'pick', other)).toBe(0);
     calls.length = 0;
-    await applyOutbox(jira, other, RUN, dir, { writer: 'pick', raw: other });
+    await applyOutbox(jira, other, RUN, LINE, dir, { writer: 'pick', raw: other });
     expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-5/comment']);
   });
   it('a cancel whose comment failed: the rerun passes the board check and only adds the comment', async () => {
@@ -288,12 +312,12 @@ describe('outbox apply', () => {
       { op: 'cancel', key: 'CONC-9', text: 'Doppelt' },
       { op: 'comment', key: 'CONC-5', text: 'Weiter' },
     ];
-    await applyOutbox(jira, list, RUN, dir, { writer: 'pick', raw: list }).catch(() => undefined);
+    await applyOutbox(jira, list, RUN, LINE, dir, { writer: 'pick', raw: list }).catch(() => undefined);
     // CONC-9 is Canceled now and off the board; entry 0 still counts as acted on.
     expect(outboxProgress(dir, 'pick', list)).toBe(1);
     expect(checkOutbox(list, 'pick', null, 'CONC', new Set(['CONC-5']), outboxProgress(dir, 'pick', list))).toHaveLength(2);
     calls.length = 0;
-    await applyOutbox(jira, list, RUN, dir, { writer: 'pick', raw: list });
+    await applyOutbox(jira, list, RUN, LINE, dir, { writer: 'pick', raw: list });
     expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-9/comment', 'POST /rest/api/3/issue/CONC-5/comment']);
   });
   it('a rerun does not ask the board again about entries it already wrote: a cancel took its ticket off it', () => {
@@ -310,7 +334,7 @@ describe('outbox apply', () => {
     const { jira, calls } = fakeJira({ sprint: 7 });
     const dir = state();
     const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest von CONC-5', text: 'Was fehlt' };
-    expect(await applyOutbox(jira, [op], RUN, dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(await applyOutbox(jira, [op], RUN, LINE, dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
     expect(steps(calls)).toEqual([
       'POST /rest/api/3/search/jql',
       'GET /rest/api/3/project/CONC',
@@ -336,11 +360,11 @@ describe('outbox apply', () => {
     const { jira, calls } = fakeJira({ sprint: 7, failOnce: 'POST /rest/api/3/issue/CONC-51/remotelink' });
     const dir = state();
     const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest von CONC-5', text: 'Was fehlt' };
-    await applyOutbox(jira, [op], RUN, dir, { writer: 'review', raw: [op] }).catch(() => undefined);
+    await applyOutbox(jira, [op], RUN, LINE, dir, { writer: 'review', raw: [op] }).catch(() => undefined);
     expect(readCreated(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
     expect(readFinished(dir)).toEqual({});
     calls.length = 0;
-    expect(await applyOutbox(jira, [op], RUN, dir, { writer: 'review', raw: [op] })).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(await applyOutbox(jira, [op], RUN, LINE, dir, { writer: 'review', raw: [op] })).toEqual({ 'rest-conc-5': 'CONC-51' });
     expect(steps(calls)).toEqual([
       'POST /rest/api/3/issue/CONC-51/remotelink',
       'GET /rest/api/3/issue/CONC-51',
@@ -354,7 +378,7 @@ describe('outbox apply', () => {
   it('create: a ticket Jira already links to the marker is reused, not doubled', async () => {
     const { jira, calls } = fakeJira({ found: ['CONC-44'] });
     const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest', text: 'x' };
-    expect(await applyOutbox(jira, [op], RUN, state())).toEqual({ 'rest-conc-5': 'CONC-44' });
+    expect(await applyOutbox(jira, [op], RUN, LINE, state())).toEqual({ 'rest-conc-5': 'CONC-44' });
     expect(steps(calls)).toEqual(['POST /rest/api/3/search/jql']);
   });
   it('create: a ticket this run already filed is reused before Jira’s lagging search is asked', async () => {
@@ -363,12 +387,12 @@ describe('outbox apply', () => {
     recordCreated(dir, 'rest-conc-5', 'CONC-51');
     recordFinished(dir, 'rest-conc-5', 'CONC-51');
     const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest', text: 'x' };
-    expect(await applyOutbox(jira, [op], RUN, dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(await applyOutbox(jira, [op], RUN, LINE, dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
     expect(calls).toEqual([]);
   });
   it('create without an open sprint files the ticket outside a sprint', async () => {
     const { jira, calls } = fakeJira({ sprint: null });
-    await applyOutbox(jira, [{ op: 'create', marker: 'finding-a', title: 'T', text: 'x' }], RUN, state());
+    await applyOutbox(jira, [{ op: 'create', marker: 'finding-a', title: 'T', text: 'x' }], RUN, LINE, state());
     expect(steps(calls).at(-1)).toBe('GET /rest/agile/1.0/board/5/sprint');
   });
 });
