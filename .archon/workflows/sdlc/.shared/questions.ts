@@ -21,13 +21,15 @@ const RUN_LINE = /^Lauf: archon [a-z-]+ [A-Za-z0-9_-]+$/m;
 export function questionText(kind: QuestionKind, text: string, fallback: string, askedAt: number): string {
   if (kind === 'produkt') return `Frage (Produkt): ${text}`;
   const due = new Date(askedAt + DEFAULT_AFTER_MS).toISOString().slice(0, 16).replace('T', ' ');
-  return `Frage (technisch, Vorgabe ab ${due} UTC): ${text}\nVorgabe: ${fallback}`;
+  // One line: `lastQuestion` reads the default back from the `Vorgabe:` line alone.
+  return `Frage (technisch, Vorgabe ab ${due} UTC): ${text}\nVorgabe: ${fallback.replace(/\s+/g, ' ').trim()}`;
 }
 
 /**
  * What only the pack's scripts or the owner may write; an agent's text with it is refused: a loop
- * record, the owner's word, an applied default, a run line in any line (decision 3), and a
- * mention first, which makes a comment a question.
+ * record, the owner's word, an applied default, a run line in any line (decision 3), a mention
+ * first, which makes a comment a question, and Jira's flag note, which `lastQuestion` reads as a
+ * new hold.
  */
 export function reservedText(text: string): boolean {
   const t = text.trimStart();
@@ -36,6 +38,7 @@ export function reservedText(text: string): boolean {
     t.startsWith('@') ||
     t.startsWith('Julian:') ||
     t.startsWith('Vorgabe angewendet:') ||
+    /^:flag_(on|off):/.test(t) ||
     RUN_LINE.test(text)
   );
 }
@@ -55,6 +58,13 @@ export interface Question {
   readonly byRun: boolean;
   readonly fallback: string;
   readonly answer: TicketComment | null;
+  /** The pack applied the default after the question (`Vorgabe angewendet:`): nothing is due any more. */
+  readonly applied: boolean;
+  /**
+   * Flagged again after the question or its answer (Jira's `:flag_on:` note) without a new
+   * question: that flag is someone else's hold, which neither the answer nor the default lifts.
+   */
+  readonly reflagged: boolean;
 }
 
 export function ownerWord(comment: TicketComment, config: TrackerConfig): boolean {
@@ -75,18 +85,36 @@ export function lastQuestion(comments: readonly TicketComment[], config: Tracker
   const comment = sorted[at];
   if (comment === undefined) return null;
   const head = /Frage \((technisch|Produkt)[^)]*\):/.exec(comment.body);
+  const after = sorted.slice(at + 1);
+  const answer = after.find(c => ownerWord(c, config)) ?? null;
+  const since = answer?.id ?? comment.id;
   return {
     comment,
     kind: head === null ? 'ohne' : head[1] === 'technisch' ? 'technisch' : 'produkt',
     byRun: RUN_LINE.test(comment.body),
     fallback: /^Vorgabe: (.+)$/m.exec(comment.body)?.[1]?.trim() ?? '',
-    answer: sorted.slice(at + 1).find(c => ownerWord(c, config)) ?? null,
+    answer,
+    applied: after.some(c => c.author === config.assignee && c.body.trimStart().startsWith('Vorgabe angewendet:')),
+    reflagged: after.some(c => c.id > since && c.body.trimStart().startsWith(':flag_on:')),
   };
+}
+
+/** True when the ticket already carries this question of this run (`line`): a rerun asks once. */
+export function askedBefore(comments: readonly TicketComment[], text: string, line: string, config: TrackerConfig): boolean {
+  const first = text.split('\n')[0]?.trim() ?? '';
+  return comments.some(c => isQuestion(c, config) && c.body.includes(first) && c.body.includes(line));
 }
 
 /** AK18k: an unanswered technical question with a default, 24 hours after it was asked. */
 export function defaultDue(q: Question, now: number): boolean {
-  return q.kind === 'technisch' && q.fallback !== '' && q.answer === null && now >= q.comment.createdAt + DEFAULT_AFTER_MS;
+  return (
+    q.kind === 'technisch' &&
+    q.fallback !== '' &&
+    q.answer === null &&
+    !q.applied &&
+    !q.reflagged &&
+    now >= q.comment.createdAt + DEFAULT_AFTER_MS
+  );
 }
 
 /**
@@ -94,7 +122,7 @@ export function defaultDue(q: Question, now: number): boolean {
  * that is neither about the product (waits for the owner) nor technical (waits for its default).
  */
 export function mayUnflag(q: Question | null): boolean {
-  if (q === null) return false;
+  if (q === null || q.reflagged) return false;
   if (q.answer !== null) return true;
   return q.byRun && q.kind === 'ohne';
 }

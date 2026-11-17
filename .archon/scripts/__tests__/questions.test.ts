@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { TicketComment } from '../../workflows/sdlc/.shared/jira';
 import {
+  askedBefore,
   defaultDue,
   lastQuestion,
   mayUnflag,
@@ -74,6 +75,26 @@ describe('AK18i: lifting a flag', () => {
   it('a ticket Julian flagged without a question stays flagged', () => {
     expect(mayUnflag(lastQuestion([c(1, JULIAN, ':flag_on: Flag added')], CFG))).toBe(false);
   });
+  it('flagged again after the answer: that hold is someone else’s, not the answer’s', () => {
+    const q = asked([c(11, ARCHON, PRODUCT), c(12, JULIAN, 'Hinweis zeigen'), c(13, JULIAN, ':flag_on: Flag added')]);
+    expect(q.reflagged).toBe(true);
+    expect(mayUnflag(q)).toBe(false);
+  });
+});
+
+describe('a question the default or a new flag settled', () => {
+  it('an applied default closes the question: no second default', () => {
+    const q = asked([c(10, ARCHON, TECH), c(14, ARCHON, `Vorgabe angewendet: Cache beim Start leeren\n\nkeine Antwort\n\n${runLine('archon-manager', 'run2')}`, MON_10 + 25 * H)]);
+    expect(q.applied).toBe(true);
+    expect(defaultDue(q, MON_10 + 48 * H)).toBe(false);
+  });
+  it('a technical question flagged again by hand waits for Julian, not for its default', () => {
+    expect(defaultDue(asked([c(10, ARCHON, TECH), c(15, JULIAN, ':flag_on: Flag added', MON_10 + H)]), MON_10 + 48 * H)).toBe(false);
+  });
+  it('a default over several lines is read whole', () => {
+    const body = `@Julian Hawlicek ${questionText('technisch', 'Cache?', 'Cache leeren\nund den Test anpassen', MON_10)}\n${runLine('archon-manager', 'run1')}`;
+    expect(asked([c(10, ARCHON, body)]).fallback).toBe('Cache leeren und den Test anpassen');
+  });
 });
 
 describe('question form and reserved openings', () => {
@@ -92,11 +113,27 @@ describe('question form and reserved openings', () => {
     }
     expect(reservedQuestion('Mail an julian@example.org, Vorgaben: keine')).toBe(false);
   });
+  it('agents may not write what reads as Jira’s flag note: it would hide an answer from the manager', () => {
+    for (const text of [':flag_on: noch offen', '  :flag_off: erledigt']) expect(reservedText(text)).toBe(true);
+    expect(reservedText('Markierung :flag_on: bleibt')).toBe(false);
+  });
   it('a plain comment may quote a question: only a comment opening with a mention is one', () => {
     const quote = 'Die Frage (Produkt) auf CONC-4 ist noch offen.\nVorgabe: siehe dort';
     expect(reservedText(quote)).toBe(false);
     expect(reservedQuestion(quote)).toBe(true);
     // A run line stays reserved in every text (decision 3), quoted or not.
     expect(reservedText('Wie im letzten Ergebnis:\nLauf: archon archon-loop abc')).toBe(true);
+  });
+});
+
+describe('a rerun asks once', () => {
+  const ask = 'Gemergt, aber der Staging-Rollout ist nicht bestätigt.';
+  const asked1 = c(5, ARCHON, `@Julian Hawlicek ${ask}\n\n${runLine('archon-merge-queue', 'r1')}`);
+  it('the same question of the same run is already on the ticket', () => {
+    expect(askedBefore([asked1], ask, runLine('archon-merge-queue', 'r1'), CFG)).toBe(true);
+  });
+  it('another run, or another question, asks again', () => {
+    expect(askedBefore([asked1], ask, runLine('archon-merge-queue', 'r2'), CFG)).toBe(false);
+    expect(askedBefore([asked1], 'Was fehlt noch?', runLine('archon-merge-queue', 'r1'), CFG)).toBe(false);
   });
 });

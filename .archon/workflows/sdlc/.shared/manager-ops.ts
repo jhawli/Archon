@@ -115,10 +115,13 @@ export function parseManagerOutbox(raw: unknown, project: string): { ops: Manage
       case 'rank': {
         const places = [e.before !== undefined, e.after !== undefined, e.top === true].filter(Boolean).length;
         if (places !== 1) throw new Error(`${where}: rank needs exactly one of before, after, top`);
-        ops.push({
+        const rank: Extract<ManagerOp, { op: 'rank' }> = {
           op: 'rank', key: key(e, 'key', where), text: words(e, 'text', where), top: e.top === true,
           before: e.before === undefined ? null : key(e, 'before', where), after: e.after === undefined ? null : key(e, 'after', where),
-        });
+        };
+        // Jira refuses it only at the write, after the entries before it: refused here instead.
+        if (rank.before === rank.key || rank.after === rank.key) throw new Error(`${where}: ${rank.key} cannot be ranked before or after itself`);
+        ops.push(rank);
         return;
       }
       case 'abandon':
@@ -160,6 +163,7 @@ export function refusal(op: ManagerOp, l: Live, s: TrackerConfig['status'], now:
       if (!l.flagged) return `${op.key} ist nicht markiert`;
       return mayUnflag(l.question) ? null : `${op.key}: die Markierung bleibt bis zu Julians Antwort oder zur fälligen Vorgabe (AK18i, AK18k)`;
     case 'default':
+      if (!l.flagged) return `${op.key} ist nicht markiert`;
       return l.question !== null && defaultDue(l.question, now) ? null : `${op.key}: keine technische Frage mit fälliger Vorgabe (AK18k)`;
     case 'rewrite': {
       const lost = conceptLinks(l.body).find(link => !op.text.includes(link));

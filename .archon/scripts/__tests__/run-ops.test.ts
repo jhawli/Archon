@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { runRefusal, type RunRow } from '../../workflows/sdlc/.shared/run-ops';
+import { dashboardWorkflowRunSchema } from '../../../packages/workflows/src/schemas/workflow-run-listing';
+import { checkRunOps, RUN_ROW_FIELDS, runRefusal, type RunRow } from '../../workflows/sdlc/.shared/run-ops';
 
 const NOW = Date.parse('2026-11-20T12:00:00Z');
 const MIN = 60_000;
@@ -27,5 +28,28 @@ describe('Grill G2: the manager abandons stuck runs and resumes infrastructure f
     expect(runRefusal(op('resume'), row({ status: 'failed', workflow_name: 'archon-holdouts' }), NOW, 'self', new Set())).toContain('loop');
     expect(runRefusal(op('abandon'), row(), NOW, row().id, new Set())).toContain('own');
     expect(runRefusal(op('abandon'), undefined, NOW, 'self', new Set())).toContain('run list');
+  });
+});
+
+describe('Grill G2: the run actions of one pass, against the run list', () => {
+  const failed = row({ status: 'failed' });
+  const there = (): boolean => true;
+  it('a run named twice counts once: never two resumes in one pass', () => {
+    const { allowed, skipped } = checkRunOps([op('resume'), op('resume')], [failed], NOW, 'self', new Set(), there);
+    expect(allowed).toHaveLength(1);
+    expect(skipped[0]).toContain('twice');
+  });
+  it('a resume whose working path is gone is skipped', () => {
+    expect(checkRunOps([op('resume')], [failed], NOW, 'self', new Set(), () => false).skipped[0]).toContain('working path');
+  });
+  it('a row the engine changed (a field missing) is skipped with the reason, not thrown', () => {
+    const broken = Object.fromEntries(Object.entries(row({ status: 'running' })).filter(([field]) => field !== 'active_nodes'));
+    const { allowed, skipped } = checkRunOps([op('abandon')], [broken], NOW, 'self', new Set(), there);
+    expect(allowed).toHaveLength(0);
+    expect(skipped[0]).toContain('active_nodes');
+  });
+  it('the fields read are the engine’s: every one is in the run listing schema', () => {
+    expect([...RUN_ROW_FIELDS].sort() as string[]).toEqual(Object.keys(row()).sort());
+    expect(RUN_ROW_FIELDS.filter(field => !(field in dashboardWorkflowRunSchema.shape))).toEqual([]);
   });
 });

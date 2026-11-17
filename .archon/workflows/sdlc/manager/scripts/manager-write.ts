@@ -17,7 +17,7 @@ import { managerPass, parseManagerOutbox } from '../../.shared/manager-ops.ts';
 import { appendMetrics, checkMetrics } from '../../.shared/metrics.ts';
 import { outboxFile, readOutbox } from '../../.shared/outbox.ts';
 import { runLine } from '../../.shared/questions.ts';
-import { type RunOp, type RunRow, runRefusal } from '../../.shared/run-ops.ts';
+import { checkRunOps, type RunOp } from '../../.shared/run-ops.ts';
 import { trackerCheck } from '../../.shared/tracker-check.ts';
 import { openPulls } from '../../.shared/tracker-board.ts';
 
@@ -44,34 +44,25 @@ function cli(args: string[]): { exitCode: number; stdout: Buffer; stderr: Buffer
   return { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr };
 }
 const resumedPath = join(stateDir, 'manager-resumed.json');
-const resumed = new Set<string>(existsSync(resumedPath) ? (JSON.parse(readFileSync(resumedPath, 'utf8')) as string[]) : []);
-const allowed: RunOp[] = [];
+let resumed = new Set<string>();
+let allowed: RunOp[] = [];
 const skipped: string[] = [];
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 300);
 // Never at the cost of the ticket writes: whatever goes wrong with the run list (no CLI command
-// published, a missing binary, output that is not JSON) skips the run actions and is logged.
+// published, a missing binary, output that is not JSON, a broken record of resumes) skips the
+// run actions and is logged.
 if (runOps.length > 0) {
   try {
+    resumed = new Set<string>(existsSync(resumedPath) ? (JSON.parse(readFileSync(resumedPath, 'utf8')) as string[]) : []);
     const listed = cli(['workflow', 'runs', '--limit', '100', '--json']);
     if (listed.exitCode !== 0) throw new Error(`archon workflow runs failed (exit ${listed.exitCode})`);
-    const rows = (JSON.parse(listed.stdout.toString()) as { runs?: RunRow[] }).runs ?? [];
-    const now = Date.now();
-    // One action per run and pass: a second entry for the same run would pass this check too
-    // (the resume is recorded only when it runs) and resume it twice.
-    const named = new Set<string>();
-    for (const op of runOps) {
-      const row = rows.find(r => r.id === op.run);
-      const twice = named.has(op.run);
-      named.add(op.run);
-      const why =
-        (twice ? 'named twice in this outbox; only its first entry counts' : null) ??
-        runRefusal(op, row, now, run, resumed) ??
-        (op.op === 'resume' && (row?.working_path == null || !existsSync(row.working_path)) ? `run ${op.run}: its working path is gone` : null);
-      if (why === null) allowed.push(op);
-      else skipped.push(`${op.op} ${op.run}: ${why}`);
-    }
+    const rows = (JSON.parse(listed.stdout.toString()) as { runs?: unknown }).runs;
+    if (!Array.isArray(rows)) throw new Error('archon workflow runs printed no list of runs');
+    const checked = checkRunOps(runOps, rows, Date.now(), run, resumed, existsSync);
+    allowed = checked.allowed;
+    skipped.push(...checked.skipped);
   } catch (error) {
-    allowed.length = 0;
+    allowed = [];
     skipped.length = 0;
     skipped.push(...runOps.map(op => `${op.op} ${op.run}: the run list could not be read (${reason(error)})`));
   }
@@ -80,7 +71,6 @@ if (runOps.length > 0) {
 const jira = new Jira(config);
 const boardUrl = `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;
 const { ops, dropped, created } = await managerPass(jira, raw, state, openPulls(), snapshotAll(state), Date.now(), runLine('archon-manager', run), boardUrl);
-rmSync(file, { force: true });
 
 const once = join(state, 'metrics-appended');
 if (!existsSync(once)) {
@@ -106,6 +96,9 @@ for (const op of allowed) {
     skipped.push(`${op.op} ${op.run}: failed: ${reason(error)}`);
   }
 }
+// Only now: a rerun after a crash above still finds the run actions (the ticket entries are
+// marked done by their progress, a second resume by `manager-resumed.json`).
+rmSync(file, { force: true });
 for (const line of skipped) note(`manager run action skipped: ${line}`);
 const tickets = ops.filter(op => op.op !== 'abandon' && op.op !== 'resume').length;
 emit({ applied: String(tickets), created: JSON.stringify(created), dropped: JSON.stringify(dropped), metrics: metrics.line, runs: JSON.stringify({ acted, skipped }) });

@@ -54,13 +54,22 @@ describe('AK18m: rank', () => {
   it('a rank change without a comment is refused', () => {
     expect(() => parseManagerOutbox([{ op: 'rank', key: 'CONC-41', top: true, text: '' }], 'CONC')).toThrow('text is empty');
   });
+  it('a ticket ranked before or after itself is refused before any write', () => {
+    for (const place of ['before', 'after']) {
+      expect(() => parseManagerOutbox([{ op: 'rank', key: 'CONC-41', [place]: 'CONC-41', text: 'x' }], 'CONC')).toThrow('itself');
+    }
+  });
 });
 
 describe('AK18k: the default', () => {
   const asked = Date.parse('2026-11-17T12:00:01Z');
-  const q = { comment: { id: 1, author: CFG.assignee, body: '', createdAt: asked, created: '', url: '' }, kind: 'technisch' as const, byRun: true, fallback: 'Cache leeren', answer: null };
+  const q = { comment: { id: 1, author: CFG.assignee, body: '', createdAt: asked, created: '', url: '' }, kind: 'technisch' as const, byRun: true, fallback: 'Cache leeren', answer: null, applied: false, reflagged: false };
   it('one second before 24 hours: refused', () => {
     expect(fails([{ op: 'default', key: 'CONC-7', text: 'keine Antwort' }], { 'CONC-7': live(S.todo, { flagged: true, question: q }) })).toContain('fällig');
+  });
+  it('a ticket no longer flagged gets no default, however old its question', () => {
+    const due = { ...q, comment: { ...q.comment, createdAt: asked - 3_600_000 } };
+    expect(fails([{ op: 'default', key: 'CONC-7', text: 'keine Antwort' }], { 'CONC-7': live(S.todo, { flagged: false, question: due }) })).toContain('nicht markiert');
   });
 });
 

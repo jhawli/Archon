@@ -62,19 +62,25 @@ function status(id: string, config: TrackerConfig): string {
 
 function questionLine(q: Question | null, now: number): string {
   if (q === null) return 'keine';
-  const state = q.answer !== null ? `beantwortet (Kommentar ${q.answer.id})` : defaultDue(q, now) ? 'offen, Vorgabe fällig' : 'offen';
+  const state = q.reflagged
+    ? 'danach erneut markiert, ohne neue Frage'
+    : q.answer !== null
+      ? `beantwortet (Kommentar ${q.answer.id})`
+      : q.applied
+        ? 'Vorgabe angewendet'
+        : defaultDue(q, now)
+          ? 'offen, Vorgabe fällig'
+          : 'offen';
   return `Kommentar ${q.comment.id}, ${q.kind === 'ohne' ? 'ohne Art' : q.kind}, von ${q.byRun ? 'einem Lauf' : 'einer Session'}, ${state}`;
 }
 
 /** AK18l: a flagged ticket on To Do or Review whose latest question the owner answered. */
 function owed(t: Ticket, all: BoardAll, config: TrackerConfig): boolean {
   if (!t.flagged || (t.status !== config.status.todo && t.status !== config.status.review)) return false;
-  const rows = all.comments.get(t.key) ?? [];
-  const answer = lastQuestion(rows, config)?.answer ?? null;
-  if (answer === null) return false;
-  // Flagged again after the answer (Jira's ":flag_on:" note) without a new question: that flag
-  // is someone else's hold, not this answer's, so nothing is owed.
-  return !rows.some(c => c.id > answer.id && c.body.trimStart().startsWith(':flag_on:'));
+  const q = lastQuestion(all.comments.get(t.key) ?? [], config);
+  // Flagged again after the answer without a new question: that flag is someone else's hold.
+  if (q === null) return false;
+  return q.answer !== null && !q.reflagged;
 }
 
 export function boardAllMarkdown(all: BoardAll, now: number, config: TrackerConfig): string {

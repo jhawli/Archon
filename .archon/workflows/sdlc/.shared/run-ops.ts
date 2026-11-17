@@ -38,3 +38,54 @@ export function runRefusal(op: RunOp, row: RunRow | undefined, now: number, self
   if (resumed.has(op.run)) return `run ${op.run} was resumed before`;
   return null;
 }
+
+/** The fields `runRow` reads; run-ops.test.ts holds them against the engine's run listing schema. */
+export const RUN_ROW_FIELDS: readonly (keyof RunRow)[] = [
+  'id', 'workflow_name', 'status', 'started_at', 'last_activity_at', 'working_path', 'active_nodes',
+];
+
+/** A row of `archon workflow runs --json`, field by field; the name of the first field that is not as expected otherwise. */
+function runRow(raw: unknown): RunRow | string {
+  if (typeof raw !== 'object' || raw === null) return 'the row';
+  const r = raw as Record<string, unknown>;
+  const text = (key: string): boolean => typeof r[key] === 'string';
+  const maybe = (key: string): boolean => r[key] === null || typeof r[key] === 'string';
+  for (const key of ['id', 'workflow_name', 'status'] as const) if (!text(key)) return key;
+  for (const key of ['started_at', 'last_activity_at', 'working_path'] as const) if (!maybe(key)) return key;
+  if (!Array.isArray(r.active_nodes)) return 'active_nodes';
+  return r as unknown as RunRow;
+}
+
+/**
+ * The run actions of one pass (G2), each against the fresh run list: one action per run (a
+ * second entry would pass the check too and resume it twice), `runRefusal`, a resume only into
+ * a working path that is still there, and a row whose fields the engine changed is skipped with
+ * the field's name, never thrown.
+ */
+export function checkRunOps(
+  ops: readonly RunOp[],
+  rows: readonly unknown[],
+  now: number,
+  self: string,
+  resumed: ReadonlySet<string>,
+  exists: (path: string) => boolean
+): { allowed: RunOp[]; skipped: string[] } {
+  const refusalFor = (op: RunOp, row: RunRow | string | undefined): string | null => {
+    if (typeof row === 'string') return `run ${op.run}: the run list shows no usable ${row}`;
+    const refused = runRefusal(op, row, now, self, resumed);
+    if (refused !== null || row === undefined || op.op !== 'resume') return refused;
+    return row.working_path !== null && exists(row.working_path) ? null : `run ${op.run}: its working path is gone`;
+  };
+  const allowed: RunOp[] = [];
+  const skipped: string[] = [];
+  const named = new Set<string>();
+  for (const op of ops) {
+    const twice = named.has(op.run);
+    named.add(op.run);
+    const raw = rows.find(r => typeof r === 'object' && r !== null && (r as { id?: unknown }).id === op.run);
+    const why = twice ? 'named twice in this outbox; only its first entry counts' : refusalFor(op, raw === undefined ? undefined : runRow(raw));
+    if (why === null) allowed.push(op);
+    else skipped.push(`${op.op} ${op.run}: ${why}`);
+  }
+  return { allowed, skipped };
+}

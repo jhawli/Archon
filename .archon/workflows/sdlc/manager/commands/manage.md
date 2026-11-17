@@ -78,8 +78,8 @@ Every action here gets one line in your report with the run id and why.
 You change Jira only through your outbox: a JSON list in `$ARTIFACTS_DIR/tracker/outbox/manager.json`, applied after you finish. Every entry must be well formed (a malformed one, run actions included, fails the whole list), and ticket entries are all or nothing: one the rules refuse fails the whole list, so follow these rules exactly. A well-formed run action that no longer fits is only skipped (see keeping the loop healthy). Every entry carries a `text` (or `reason`) saying why; it becomes the comment on the ticket. Per pass at most 5 `create` and 5 `rewrite`; more are dropped, so do the most important first and name the rest in your report.
 
 - `{"op":"comment","key":"CONC-5","text":"…"}`: any ticket.
-- `{"op":"ask","key":"CONC-5","text":"…","kind":"technisch","fallback":"…","options":["…","…"],"recommendation":"…"}` or `"kind":"produkt"` (no fallback): a question to the owner on the ticket it concerns (see Owner decisions). Two to six `options`; `recommendation` is one of them, word for word.
-- `{"op":"create","marker":"mgr-<slug>","title":"…","text":"…"}`, optionally `"ask":{"text":"…","kind":"…","fallback":"…","options":["…","…"],"recommendation":"…"}` (a question that has no ticket yet) and `"top":true` (rank 1). The ticket lands in the active sprint on To Do for the loop. The same marker never files twice.
+- `{"op":"ask","key":"CONC-5","text":"…","kind":"technisch","fallback":"…","options":["…","…"],"recommendation":"…"}` or `"kind":"produkt"` (no fallback): a question to the owner on the ticket it concerns (see Owner decisions). Two to six `options`; `recommendation` is one of them, word for word. Never ask again on a ticket whose latest question the board shows as `offen`: name it in your report instead.
+- `{"op":"create","marker":"mgr-<slug>","title":"…","text":"…"}`, optionally `"ask":{"text":"…","kind":"…","fallback":"…","options":["…","…"],"recommendation":"…"}` (a question that has no ticket yet) and `"top":true` (rank 1). The ticket lands in the active sprint on To Do for the loop. A marker the board already shows (`Herkunft: eigen (…)`, in any status) fails the whole list: act on that ticket by its key, or choose a new marker.
 - `{"op":"rewrite","key":"CONC-5","text":"<the whole new text>","reason":"…"}`: To Do, or Review to sharpen criteria. Keep every concept link, and on a ticket of this pack its first line `Loop finding: …`. Never rewrite a criterion the owner wrote as a hard requirement, the product direction, the mission or the product document: ask instead.
 - `{"op":"cancel","key":"CONC-9","text":"Doppel von CONC-4"}`: To Do only (duplicate, already delivered, no longer needed), with the reference.
 - `{"op":"todo","key":"CONC-20","text":"…"}`: a ticket on Review whose pull request is beyond saving. Close the pull request first (`gh pr close <n> --comment "<why>"`), then send it back; cancel it afterwards only if it is no longer needed.
@@ -88,7 +88,7 @@ You change Jira only through your outbox: a JSON list in `$ARTIFACTS_DIR/tracker
 - `{"op":"default","key":"CONC-7","text":"<what you changed>"}`: a technical question whose default the board shows as due (`offen, Vorgabe fällig`); apply the default (rewrite in the same list if the text changes), this lifts the flag.
 - `{"op":"abandon","run":"<id>","text":"…"}` and `{"op":"resume","run":"<id>","text":"…"}`: see keeping the loop healthy.
 
-Tickets on New, In Progress, Staging, Live and Canceled: comment and ask only. A defect you find in delivered work becomes a new ticket that names the old one (`Related: CONC-n`). Write nothing that opens like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), like the owner (`Julian:`), like a run (`Lauf: archon …`) or like an applied default (`Vorgabe angewendet:`).
+Tickets on New, In Progress, Staging, Live and Canceled: comment and ask only. A defect you find in delivered work becomes a new ticket that names the old one (`Related: CONC-n`). No text may open like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), with `@` (only the scripts mention the owner), like the owner (`Julian:`) or like an applied default (`Vorgabe angewendet:`), nor carry a line `Lauf: archon …` anywhere (quote an earlier comment by its id instead of copying it). A question's `text`, `options`, `fallback` and `recommendation` also carry no `Frage (…)` head and no `Vorgabe:` line; the script writes those. Any of these fails the whole list.
 
 - Cancel duplicates and tickets the product no longer needs.
 - Rewrite acceptance criteria that are unclear or impossible to satisfy, keeping their intent. Never change a criterion the owner wrote as a hard requirement, the product document or the mission; those go to the owner.
@@ -112,7 +112,7 @@ When the board shows a question as answered (by the owner's account, or a commen
 
 ## Metrics
 
-Every pass, write `$ARTIFACTS_DIR/manager/metrics.json`: `{"line": "…", "holdouts": "…"}`. `line`, one line:
+Every pass, write `$ARTIFACTS_DIR/manager/metrics.json`: `{"line": "…", "holdouts": "…"}`. Without it, or with a line the script cannot read, nothing of this pass is written: write it before you finish. `line`, one line:
 
 `<YYYY-MM-DDTHH:MMZ> | merged since last pass: N (simple S, complex C, continue K) | open PRs: N | loop send-backs since last pass: N | merge-gate refusals: N | ship correction rounds: N | flagged open: N | owner questions open: N | default branch checks: green|red (CI|local gate) | laps since last pass: N (empty E, failed F) | health actions: N`
 
