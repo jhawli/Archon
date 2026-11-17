@@ -2,8 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readCreated, readFinished, recordCreated, recordFinished, runState } from '../../workflows/sdlc/.shared/claims';
-import { Jira, type Ticket, type TicketComment, type TrackerConfig, type Transport } from '../../workflows/sdlc/.shared/jira';
+import { readCreated, readFinished, recordCreated, recordFinished } from '../../workflows/sdlc/.shared/claims';
+import type { Ticket, TicketComment, TrackerConfig } from '../../workflows/sdlc/.shared/jira';
 import {
   applyOutbox,
   boardMarkdown,
@@ -22,6 +22,7 @@ import {
 } from '../../workflows/sdlc/.shared/outbox';
 import { runLine } from '../../workflows/sdlc/.shared/questions';
 import { prKeys } from '../../workflows/sdlc/.shared/tickets';
+import { type Call, fakeJira, state } from './jira-fixtures';
 
 const CFG: TrackerConfig = {
   kind: 'jira',
@@ -201,44 +202,8 @@ describe('the write-time check of pick’s keys', () => {
   });
 });
 
-interface Call { method: string; path: string; body: unknown }
-
-/** A Jira that knows CONC-5 and CONC-6, moves anything anywhere, and files new tickets as CONC-50 up. */
-function fakeJira(
-  opts: { found?: string[]; sprint?: number | null; failOnce?: string } = {}
-): { jira: Jira; calls: Call[] } {
-  const calls: Call[] = [];
-  let next = 50;
-  let failed = false;
-  const ok = (value: unknown, status = 200): { status: number; text: string } => ({
-    status,
-    text: value === undefined ? '' : JSON.stringify(value),
-  });
-  const send: Transport = async (method, path, body) => {
-    calls.push({ method, path, body });
-    if (!failed && `${method} ${path.split('?')[0]}` === opts.failOnce) {
-      failed = true;
-      return ok({ errorMessages: ['boom'] }, 400);
-    }
-    if (method === 'POST' && path === '/rest/api/3/search/jql') {
-      return ok({ issues: (opts.found ?? []).map(key => ({ key, fields: {} })), isLast: true });
-    }
-    if (method === 'GET' && path.endsWith('/transitions')) {
-      return ok({ transitions: Object.values(CFG.status).map(id => ({ id: `t${id}`, to: { id } })) });
-    }
-    if (method === 'GET' && path === '/rest/api/3/project/CONC') return ok({ id: '10002' });
-    if (method === 'POST' && path === '/rest/api/3/issue') return ok({ key: `CONC-${(next += 1)}` }, 201);
-    if (method === 'POST' && path.endsWith('/comment')) return ok({ id: '10100' }, 201);
-    if (method === 'GET' && path.startsWith('/rest/agile/1.0/board/5/sprint')) {
-      return ok({ values: opts.sprint === null || opts.sprint === undefined ? [] : [{ id: opts.sprint }] });
-    }
-    return ok(undefined, 204);
-  };
-  return { jira: new Jira(CFG, send), calls };
-}
 
 const steps = (calls: Call[]): string[] => calls.map(call => `${call.method} ${call.path.split('?')[0]}`);
-const state = (): string => runState(mkdtempSync(join(tmpdir(), 'state-')), 'run-1');
 
 describe('outbox apply', () => {
   it('every comment, question, cancel and lift a lap writes ends with its run line', async () => {

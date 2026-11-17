@@ -24,9 +24,11 @@ export type Op =
   | { readonly op: 'unflag'; readonly key: string; readonly text: string }
   | { readonly op: 'create'; readonly marker: string; readonly title: string; readonly text: string };
 
-export type Writer = 'pick' | 'build' | 'review';
+/** The loop's agents, whose lists `checkOutbox` reads; the manager's list has its own reader (`manager-ops.ts`). */
+export type LoopWriter = 'pick' | 'build' | 'review';
+export type Writer = LoopWriter | 'manager';
 
-export const WRITERS: readonly Writer[] = ['pick', 'build', 'review'];
+export const WRITERS: readonly LoopWriter[] = ['pick', 'build', 'review'];
 
 export const outboxFile = (artifacts: string, writer: Writer): string =>
   join(artifacts, 'tracker', 'outbox', `${writer}.json`);
@@ -50,7 +52,7 @@ const MAX_OPS = 20;
  * account, so an agent's comment starting like one would read as the real thing. `Loop review:`
  * is the reviewer's own record and comes only from the review outbox.
  */
-function reserved(text: string, writer: Writer): boolean {
+function reserved(text: string, writer: LoopWriter): boolean {
   const shown = plain(adf(text));
   // The reviewer files its `Loop review:` verdict through the outbox; the rest of its text is held
   // to the same rule as everyone's (`reservedText`: no Julian, no run line, no applied default).
@@ -74,7 +76,7 @@ export function readOutbox(path: string): unknown {
  */
 export function checkOutbox(
   raw: unknown,
-  writer: Writer,
+  writer: LoopWriter,
   target: string | null,
   project: string,
   onBoard: ReadonlySet<string>,
@@ -187,6 +189,27 @@ export function outboxProgress(state: string, writer: Writer, raw: unknown): num
   return done + (half ? 1 : 0);
 }
 
+/** Where an earlier try of this very list stopped, and how to note the next step (see `applyOutbox`). */
+export function outboxCursor(
+  state: string,
+  writer: Writer,
+  raw: unknown
+): { done: number; half: boolean; keep: (count: number, changed: boolean) => void; clear: () => void } {
+  const digest = listDigest(raw);
+  const path = progressFile(state, writer);
+  const { done, half } = readProgress(state, writer, raw);
+  return {
+    done,
+    half,
+    keep: (count: number, changed: boolean): void => {
+      writeFileSync(path, `${JSON.stringify({ digest, done: count, half: changed })}\n`);
+    },
+    clear: (): void => {
+      rmSync(path, { force: true });
+    },
+  };
+}
+
 /** A pull request as `gh pr view --json title,body,url,isCrossRepository` reports it. */
 export interface PrText {
   readonly title: string;
@@ -245,7 +268,7 @@ export async function applyOutbox(
   runUrl: string,
   line: string,
   state: string,
-  resume?: { readonly writer: Writer; readonly raw: unknown }
+  resume?: { readonly writer: LoopWriter; readonly raw: unknown }
 ): Promise<Record<string, string>> {
   const c = jira.config;
   const created: Record<string, string> = {};
@@ -258,7 +281,7 @@ export async function applyOutbox(
   for (const [index, op] of ops.entries()) {
     if (op.op === 'create') {
       // Always asked, also behind the progress mark: it finds its own ticket and returns its key.
-      created[op.marker] = await createTicket(jira, op, runUrl, state);
+      created[op.marker] = (await createTicket(jira, op, runUrl, state)).key;
     } else if (index >= done) {
       if (op.op === 'comment') await jira.comment(op.key, `${op.text}\n\n${line}`);
       else if (op.op === 'ask') await jira.ask(op.key, `${op.text}\n\n${line}`);
@@ -285,16 +308,18 @@ export async function applyOutbox(
  * search index lags a ticket filed moments ago), then the remote link Jira keeps for the marker.
  * A ticket this run filed but did not finish setting up (link, To Do, sprint) is finished here.
  */
-async function createTicket(
+export async function createTicket(
   jira: Jira,
   op: Extract<Op, { op: 'create' }>,
   runUrl: string,
   state: string
-): Promise<string> {
+): Promise<{ key: string; existed: boolean }> {
   const c = jira.config;
   const globalId = `archon:${c.project}:${op.marker}`;
   let key = readCreated(state)[op.marker];
-  if (key !== undefined && readFinished(state)[op.marker] === key) return key;
+  // Found in this run's records or by its remote link: filed before, not by this call.
+  const existed = key !== undefined;
+  if (key !== undefined && readFinished(state)[op.marker] === key) return { key, existed };
   if (key === undefined) {
     const found = await jira.search(`issue in issuesWithRemoteLinksByGlobalId("${globalId}")`, ['status']);
     if (found.length > 1) throw new Error(`more than one ticket carries ${globalId}`);
@@ -303,7 +328,7 @@ async function createTicket(
       key = String(found[0]?.key);
       recordCreated(state, op.marker, key);
       recordFinished(state, op.marker, key);
-      return key;
+      return { key, existed: true };
     }
     const project = await jira.call('GET', `/rest/api/3/project/${c.project}`);
     const issue = await jira.call('POST', '/rest/api/3/issue', {
@@ -335,7 +360,7 @@ async function createTicket(
     note(`${key} (${op.marker}) is filed on To Do outside a sprint: board ${c.board} has no active sprint, so no lap will start it until it is planned into one.`);
   }
   recordFinished(state, op.marker, key);
-  return key;
+  return { key, existed };
 }
 
 /** `$ARTIFACTS_DIR/tracker/board.md`: the lap's board for pick, in sprint rank order. */
