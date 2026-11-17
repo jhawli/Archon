@@ -6,6 +6,7 @@ import {
   mayUnflag,
   type Question,
   questionText,
+  reservedQuestion,
   reservedText,
   runLine,
 } from '../../workflows/sdlc/.shared/questions';
@@ -87,8 +88,15 @@ describe('question form and reserved openings', () => {
   });
   it('agents may not write what reads as a question to the owner: only the scripts ask', () => {
     for (const text of ['@Julian Hawlicek Welche Farbe?', '  @Julian x', 'Erledigt.\nVorgabe: Cache leeren', 'Frage (Produkt): A oder B?', 'x\nFrage (technisch, Vorgabe ab 2026-11-20 10:00 UTC): y']) {
-      expect(reservedText(text)).toBe(true);
+      expect(reservedQuestion(text)).toBe(true);
     }
-    expect(reservedText('Mail an julian@example.org, Vorgaben: keine')).toBe(false);
+    expect(reservedQuestion('Mail an julian@example.org, Vorgaben: keine')).toBe(false);
+  });
+  it('a plain comment may quote a question: only a comment opening with a mention is one', () => {
+    const quote = 'Die Frage (Produkt) auf CONC-4 ist noch offen.\nVorgabe: siehe dort';
+    expect(reservedText(quote)).toBe(false);
+    expect(reservedQuestion(quote)).toBe(true);
+    // A run line stays reserved in every text (decision 3), quoted or not.
+    expect(reservedText('Wie im letzten Ergebnis:\nLauf: archon archon-loop abc')).toBe(true);
   });
 });

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, statusName } from './claims.ts';
 import { note } from './io.ts';
 import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
-import { reservedText } from './questions.ts';
+import { reservedQuestion, reservedText } from './questions.ts';
 import { namesTicket, prKeys } from './tickets.ts';
 
 export type Op =
@@ -52,12 +52,14 @@ const MAX_OPS = 20;
  * account, so an agent's comment starting like one would read as the real thing. `Loop review:`
  * is the reviewer's own record and comes only from the review outbox.
  */
-function reserved(text: string, writer: LoopWriter): boolean {
+function reserved(text: string, writer: LoopWriter, ask: boolean): boolean {
   const shown = plain(adf(text));
   // The reviewer files its `Loop review:` verdict through the outbox; the rest of its text is held
   // to the same rule as everyone's (`reservedText`: no Julian, no run line, no applied default).
   const review = writer === 'review' && shown.startsWith('Loop review:');
-  return reservedText(review ? shown.slice('Loop review:'.length) : shown);
+  const rest = review ? shown.slice('Loop review:'.length) : shown;
+  // A question's text also carries no head or default of its own (`reservedQuestion`).
+  return ask ? reservedQuestion(rest) : reservedText(rest);
 }
 
 /** The outbox file's list, or undefined when the agent left none (no file, or a blank one). */
@@ -111,7 +113,7 @@ export function checkOutbox(
     if ((e.op === 'cancel' || e.op === 'unflag') && writer !== 'pick') throw new Error(`${where}: ${writer} may not ${e.op}`);
     if (writer !== 'pick' && e.key !== target) throw new Error(`${where}: ${writer} writes only to ${target ?? 'its target'}`);
     if (writer === 'pick' && i >= done && !onBoard.has(e.key)) throw new Error(`${where}: ${e.key} is not on this lap's board`);
-    if (reserved(text, writer)) throw new Error(`${where}: the text opens like a loop record, which is reserved`);
+    if (reserved(text, writer, e.op === 'ask')) throw new Error(`${where}: the text opens like a loop record, which is reserved`);
     return { op: e.op, key: e.key, text };
   });
 }

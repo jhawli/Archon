@@ -68,6 +68,12 @@ describe('agent text that reads as someone else', () => {
   it('is refused before anything is written', () => {
     expect(() => parseManagerOutbox([{ op: 'comment', key: 'CONC-5', text: 'Julian: passt' }], 'CONC')).toThrow('reserved');
   });
+  it('a comment may name a question; the question itself may not carry a head or a default line', () => {
+    const quote = 'Die Frage (Produkt) auf CONC-4 wartet auf Julian.\nVorgabe: keine';
+    expect(() => parseManagerOutbox([{ op: 'comment', key: 'CONC-5', text: quote }], 'CONC')).not.toThrow();
+    const ask = { op: 'ask', key: 'CONC-5', text: quote, kind: 'produkt', options: ['A', 'B'], recommendation: 'A' };
+    expect(() => parseManagerOutbox([ask], 'CONC')).toThrow('reserved');
+  });
 });
 
 describe('questions and caps in the outbox', () => {

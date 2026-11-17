@@ -25,21 +25,28 @@ export function questionText(kind: QuestionKind, text: string, fallback: string,
 }
 
 /**
- * What only the pack's scripts or the owner may write; an agent's text with it is refused. A
- * question is a comment of the pack's account that opens with a mention, and its kind and default
- * are read from its `Frage (…)` head and `Vorgabe:` line: only `questionText` writes those.
+ * What only the pack's scripts or the owner may write; an agent's text with it is refused: a loop
+ * record, the owner's word, an applied default, a run line in any line (decision 3), and a
+ * mention first, which makes a comment a question.
  */
 export function reservedText(text: string): boolean {
   const t = text.trimStart();
   return (
     /^Loop (claim|result|review):/.test(t) ||
     t.startsWith('@') ||
-    /^Vorgabe: /m.test(text) ||
-    /Frage \((?:technisch|Produkt)/.test(text) ||
     t.startsWith('Julian:') ||
     t.startsWith('Vorgabe angewendet:') ||
     RUN_LINE.test(text)
   );
+}
+
+/**
+ * The text of a question (an `ask`): also no `Frage (…)` head and no `Vorgabe:` line, since a
+ * question's kind and default are read from those and only `questionText` writes them. A plain
+ * comment may quote them: it is never read as a question.
+ */
+export function reservedQuestion(text: string): boolean {
+  return reservedText(text) || /^Vorgabe: /m.test(text) || /Frage \((?:technisch|Produkt)/.test(text);
 }
 
 export interface Question {

@@ -25,7 +25,7 @@ The move:
   - `{"op": "comment", "key": "<the ticket>", "text": "..."}` for a note on the ticket;
   - `{"op": "ask", "key": "<the ticket>", "text": "..."}` for a decision only the owner can make: it mentions the owner and flags the ticket, and the text is the question;
   - `{"op": "create", "marker": "<short-slug>", "title": "...", "text": "..."}` for a new ticket, for example for a design problem in your way. A marker (3 to 60 of `a-z`, `0-9`, `-`) names one finding; the same marker never files a second ticket. Markers starting `rest-` are the reviewer's.
-- Write only to the ticket of this lap. An entry for another ticket, or a text that starts like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), makes the loop refuse the whole list.
+- Write only to the ticket of this lap. An entry for another ticket, or a text that starts like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), makes the loop refuse the whole list. Nor may any text open with `@` or `Julian:` (the owner's word), or carry a line `Lauf: archon …` (only the loop's scripts sign with it; quote an earlier comment by its id instead of copying it); an `ask` text also carries no `Frage (…)` head and no `Vorgabe:` line, which the loop writes itself.
 - The status of the ticket is the loop's to set; leave it.
 
 Ask before you build. When the only way to meet the work item would let an in-repository check stop catching something a player would see (a new skip, excuse or exception over real cases, a looser threshold or tolerance) without the owner's approval, or needs a look the work item leaves open, that is a decision only the owner can make: treat it as below the moment you see it, before building, not after.

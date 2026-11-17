@@ -9,7 +9,7 @@ import { rights, type Snapshot } from './board-all.ts';
 import { readCreated, statusName } from './claims.ts';
 import { adf, type Jira, type TrackerConfig } from './jira.ts';
 import { createTicket, outboxCursor, outboxProgress, type PrText } from './outbox.ts';
-import { defaultDue, lastQuestion, mayUnflag, type Question, type QuestionKind, questionText, reservedText } from './questions.ts';
+import { defaultDue, lastQuestion, mayUnflag, type Question, type QuestionKind, questionText, reservedQuestion, reservedText } from './questions.ts';
 import { MAX_RESUMES, type RunOp } from './run-ops.ts';
 import { prKeys } from './tickets.ts';
 
@@ -54,11 +54,11 @@ export function conceptLinks(text: string): string[] {
   return [...new Set(text.match(/https?:\/\/\S+?\/(?:Ideas|konzepte)\/[^\s)\]]+/g) ?? [])];
 }
 
-function words(e: Record<string, unknown>, field: string, where: string, max = MAX_TEXT): string {
+function words(e: Record<string, unknown>, field: string, where: string, max = MAX_TEXT, check = reservedText): string {
   const raw = e[field];
   const value = typeof raw === 'string' ? raw.trim() : '';
   if (value === '' || value.length > max) throw new Error(`${where}: ${field} is empty or longer than ${max}`);
-  if (reservedText(value)) throw new Error(`${where}: ${field} opens like a record of the loop or of the owner, which is reserved`);
+  if (check(value)) throw new Error(`${where}: ${field} opens like a record of the loop or of the owner, which is reserved`);
   return value;
 }
 
@@ -66,12 +66,13 @@ function askSpec(raw: unknown, where: string): AskSpec {
   if (typeof raw !== 'object' || raw === null) throw new Error(`${where}: ask must be an object`);
   const e = raw as Record<string, unknown>;
   if (e.kind !== 'technisch' && e.kind !== 'produkt') throw new Error(`${where}: kind must be technisch or produkt`);
-  const fallback = e.kind === 'technisch' ? words(e, 'fallback', where, 2000) : '';
-  const options = Array.isArray(e.options) ? e.options.map((o, i) => words({ option: o }, 'option', `${where} option ${i}`, 300)) : [];
+  // Every part ends up in the question's text: none may carry a head or a default line of its own.
+  const fallback = e.kind === 'technisch' ? words(e, 'fallback', where, 2000, reservedQuestion) : '';
+  const options = Array.isArray(e.options) ? e.options.map((o, i) => words({ option: o }, 'option', `${where} option ${i}`, 300, reservedQuestion)) : [];
   if (options.length < 2 || options.length > 6) throw new Error(`${where}: a question names 2 to 6 options (AK18j)`);
-  const recommendation = words(e, 'recommendation', where, 300);
+  const recommendation = words(e, 'recommendation', where, 300, reservedQuestion);
   if (!options.includes(recommendation)) throw new Error(`${where}: the recommendation must be one of the options (AK18j)`);
-  return { text: words(e, 'text', where), kind: e.kind, fallback, options, recommendation };
+  return { text: words(e, 'text', where, MAX_TEXT, reservedQuestion), kind: e.kind, fallback, options, recommendation };
 }
 
 export function parseManagerOutbox(raw: unknown, project: string): { ops: ManagerOp[]; dropped: string[] } {
