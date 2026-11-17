@@ -4,13 +4,14 @@
  * A scheduler calls this before it starts a lap. A lap that finds nothing to do still
  * costs a pick, a worktree and a database run, and a backlog that is one long chain of
  * dependencies leaves most parallel laps with nothing. This mirrors the pick rules that
- * are facts rather than judgement: an item with a live claim is taken, a flagged ticket (or
- * one labelled `needs-owner`) waits for the owner, and a ticket waits for its `Depends on:`
- * tickets. Anything it is unsure of counts as workable, so the gate can only skip laps that
+ * are facts rather than judgement: a ticket with a live claim is taken, a flagged ticket (or
+ * one labelled `needs-owner`) waits for the owner, a ticket waits for its `Depends on:`
+ * tickets, and a pull request that names no ticket is not the loop's work. Anything it is unsure of counts as workable, so the gate can only skip laps that
  * would have picked nothing.
  *
- * Work items are Jira tickets (`CONC-5`); pull requests stay on GitHub (`#5`). The result
- * names them as `{kind: 'ticket', key}` or `{kind: 'pull', number}`.
+ * Work items are Jira tickets (`CONC-5`), and only tickets carry claims; pull requests stay on
+ * GitHub (`#5`) and are the work for the tickets they name. The result names them as
+ * `{kind: 'ticket', key}` or `{kind: 'pull', number}`.
  */
 
 import { CLAIM_PREFIX } from './claims.ts';
@@ -18,7 +19,7 @@ import { CLAIM_PREFIX } from './claims.ts';
 export interface BoardComment {
   readonly body: string;
   readonly createdAt: string;
-  /** The comment's web URL; its `#issuecomment-<id>` names the comment to edit. */
+  /** The comment's web URL; on a ticket its `focusedCommentId=<id>` names the comment to edit. */
   readonly url?: string;
 }
 
@@ -45,7 +46,8 @@ export interface Board {
 
 /** How the board's text names tickets (`CONC-n`, `tracker-board.ts` `jiraLinks`). */
 export interface Links {
-  readonly references: (body: string) => string[];
+  /** The tickets a pull request is the work for (`prKeys`: its title's lead key, `Refs`, `Closes`). */
+  readonly pullKeys: (pull: { readonly title: string; readonly body: string }) => string[];
   readonly dependencies: (body: string) => string[];
 }
 
@@ -54,7 +56,10 @@ export type ItemRef =
   | { readonly kind: 'ticket'; readonly key: string }
   | { readonly kind: 'pull'; readonly number: number };
 
-export type LiveClaim = ItemRef & { readonly run: string };
+/** A Jira ticket by key: the only item a claim is ever on. */
+export type TicketRef = Extract<ItemRef, { readonly kind: 'ticket' }>;
+
+export type LiveClaim = TicketRef & { readonly run: string };
 
 export type EndedClaim = LiveClaim & { readonly url: string };
 
@@ -85,7 +90,7 @@ export function liveClaimComments(
   return found;
 }
 
-function ticketRef(id: string): ItemRef {
+function ticketRef(id: string): TicketRef {
   return { kind: 'ticket', key: id };
 }
 
@@ -108,42 +113,39 @@ export function workability(
 ): Workability {
   const claims: LiveClaim[] = [];
   const ended: EndedClaim[] = [];
+  // Claims live on tickets only: a claim comment on a pull request holds nothing.
   const claimed = new Map<string, string>();
-  for (const [kind, items, ref] of [
-    ['ticket', board.issues, ticketRef],
-    ['pull', board.pulls, pullRef],
-  ] as const) {
-    for (const item of items) {
-      for (const { run, comment } of liveClaimComments(item.comments, expiryHours, now)) {
-        if (endedRuns.has(run)) {
-          if (comment.url) ended.push({ ...ref(item.id), run, url: comment.url });
-          continue;
-        }
-        if (claimed.has(`${kind}:${item.id}`)) continue;
-        claims.push({ ...ref(item.id), run });
-        claimed.set(`${kind}:${item.id}`, run);
+  for (const ticket of board.issues) {
+    for (const { run, comment } of liveClaimComments(ticket.comments, expiryHours, now)) {
+      if (endedRuns.has(run)) {
+        if (comment.url) ended.push({ ...ticketRef(ticket.id), run, url: comment.url });
+        continue;
       }
+      if (claimed.has(ticket.id)) continue;
+      claims.push({ ...ticketRef(ticket.id), run });
+      claimed.set(ticket.id, run);
     }
   }
-  // An open pull request is the work for the items it closes or references: pick continues the
-  // pull request instead of starting the item, and claims the item for it.
+  // An open pull request is the work for the tickets it names: pick continues the pull request
+  // instead of starting the ticket, and claims the ticket for it.
   const byId = new Map(board.issues.map(item => [item.id, item]));
   const deliveredBy = new Map<string, string>();
-  for (const pull of board.pulls) for (const id of links.references(pull.body)) deliveredBy.set(id, pull.id);
+  for (const pull of board.pulls) for (const id of links.pullKeys(pull)) deliveredBy.set(id, pull.id);
 
   const workable: ItemRef[] = [];
   const waiting: Workability['waiting'] = [];
   for (const pull of board.pulls) {
-    const linked = links.references(pull.body).filter(id => byId.has(id));
+    const linked = links.pullKeys(pull).filter(id => byId.has(id));
     const owner = pull.owner || linked.some(id => byId.get(id)?.owner === true);
-    const holder = claimed.get(`pull:${pull.id}`) ?? linked.map(id => claimed.get(`ticket:${id}`)).find(Boolean);
-    if (owner) waiting.push({ ...pullRef(pull.id), why: OWNER_LABEL });
+    const holder = linked.map(id => claimed.get(id)).find(Boolean);
+    if (linked.length === 0) waiting.push({ ...pullRef(pull.id), why: 'names no ticket' });
+    else if (owner) waiting.push({ ...pullRef(pull.id), why: OWNER_LABEL });
     else if (holder) waiting.push({ ...pullRef(pull.id), why: `claimed by run ${holder}` });
     else workable.push(pullRef(pull.id));
   }
   for (const ticket of board.issues) {
     const blockers = links.dependencies(ticket.body).filter(id => board.open.has(id));
-    const holder = claimed.get(`ticket:${ticket.id}`);
+    const holder = claimed.get(ticket.id);
     let why: string | null = null;
     if (ticket.owner) why = OWNER_LABEL;
     else if (deliveredBy.has(ticket.id)) why = `delivered by pull request ${deliveredBy.get(ticket.id)}`;

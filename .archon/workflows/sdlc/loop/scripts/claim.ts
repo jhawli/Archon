@@ -1,20 +1,21 @@
 /**
- * Claim the work item pick chose, so a parallel run of this loop never works it too.
+ * Claim the ticket pick chose, so a parallel run of this loop never works it too.
  *
- * Posts this run's claim, reads the item back, and holds it only when this run's claim
+ * Posts this run's claim, reads the ticket back, and holds it only when this run's claim
  * is the oldest live one. A run that lost the race withdraws its claim and does no work
- * this lap; the next lap picks again. Pick already skips claimed items, so a lost race
- * means two picks chose the same item within moments of each other.
+ * this lap; the next lap picks again. Pick already skips claimed tickets, so a lost race
+ * means two picks chose the same ticket within moments of each other.
  *
- * A claim already on the item for this same run (a resumed run) is reused, not doubled.
+ * A claim already on the ticket for this same run (a resumed run) is reused, not doubled.
  *
- * On a Jira ticket the run that holds it moves it from To Do to In Progress and writes it
+ * The run that holds the ticket moves it from To Do to In Progress and writes it
  * to `$ARTIFACTS_DIR/tracker/item.md`, where the agents read it: they hold no token. A
  * failure anywhere after the claim was posted withdraws it before the node fails, because
  * release only runs for a held claim and the ticket would stay blocked until the claim expired.
  *
  * Pick is an agent, and the ticket it names is checked like its outbox writes (decision 11):
- * it must be on this lap's snapshot, still the loop's in Jira (`writableNow`) and not flagged,
+ * it must be a ticket at all (`targetRefusal`; a pull request is continued through the ticket
+ * it names), on this lap's snapshot, still the loop's in Jira (`writableNow`) and not flagged,
  * and a pull request it names must not belong to a ticket that is someone else's (`prRefusal`).
  * Anything else, the owner's or a session's, is not claimed and the lap does no work.
  */
@@ -30,11 +31,14 @@ import {
   postComment,
   recordClaim,
   runState,
+  targetRefusal,
+  type WorkItem,
   workItem,
 } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
-import { clearOutbox, type PrText, prAddressRefusal, prKeys, prRefusal, writableNow } from '../../.shared/outbox.ts';
+import { clearOutbox, type PrText, prAddressRefusal, prRefusal, writableNow } from '../../.shared/outbox.ts';
+import { prKeys } from '../../.shared/tickets.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
@@ -45,38 +49,18 @@ const run = trimmed(process.env.WORKFLOW_ID);
 if (run === '') throw new Error('claim: WORKFLOW_ID is not set; the engine supplies it to every exec node.');
 
 const config = requireTracker();
-const item = workItem(target !== '' ? target : pr, config);
-const jira = item.kind === 'ticket' ? new Jira(config) : undefined;
-// The pull request the lap continues: named beside the ticket, or itself the target.
-const pull = pr !== '' ? pr : item.kind === 'pull' ? target : '';
-
-/** Take this run's claim back; a failure to do so must not hide the error that led here. */
-async function withdraw(id: number, why: string): Promise<void> {
-  try {
-    await editComment(item, id, `Loop claim withdrawn: run ${run} ${why}`, jira);
-  } catch (error) {
-    console.error(`claim: could not withdraw claim ${id}: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
+const jira = new Jira(config);
 const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error)).slice(0, 300);
 
-let claims = await liveClaims(item, hours, Date.now(), jira);
-let mine = claims.find(claim => claim.run === run);
-
-/** Why pick's choice is not the loop's to work on, or null. */
-async function refusal(): Promise<string | null> {
-  const client = jira ?? new Jira(config);
+/** Why pick's ticket is not the loop's to work on, or null. */
+async function refusal(key: string): Promise<string | null> {
   const state = runState();
-  const key = item.kind === 'ticket' ? item.key : null;
-  if (key !== null) {
-    if (!(await writableNow(client, state, key)).has(key)) {
-      return `${key} is not on this lap's board, or no longer assigned to the loop on To Do or Review`;
-    }
-    // The launch rule leaves a flagged ticket alone; a flag pick lifted this lap is already off.
-    if ((await client.ticket(key)).flagged) return `${key} is flagged: a question to the owner is open`;
+  if (!(await writableNow(jira, state, key)).has(key)) {
+    return `${key} is not on this lap's board, or no longer assigned to the loop on To Do or Review`;
   }
-  if (pull === '') return null;
+  // The launch rule leaves a flagged ticket alone; a flag pick lifted this lap is already off.
+  if ((await jira.ticket(key)).flagged) return `${key} is flagged: a question to the owner is open`;
+  if (pr === '') return null;
   const gh = (args: string[]): string => {
     const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
     if (result.exitCode !== 0) throw new Error(`claim: gh ${args.slice(0, 2).join(' ')} failed: ${result.stderr.toString().trim()}`);
@@ -84,26 +68,40 @@ async function refusal(): Promise<string | null> {
   };
   // The address is an agent's: it is this repository's pull request URL before gh sees it.
   const repository = (JSON.parse(gh(['repo', 'view', '--json', 'url'])) as { url: string }).url;
-  const address = prAddressRefusal(pull, repository, null);
+  const address = prAddressRefusal(pr, repository, null);
   if (address !== null) return address;
-  const text = JSON.parse(gh(['pr', 'view', pull, '--json', 'title,body,isCrossRepository'])) as PrText;
-  const fork = prAddressRefusal(pull, repository, text);
+  const text = JSON.parse(gh(['pr', 'view', pr, '--json', 'title,body,isCrossRepository'])) as PrText;
+  const fork = prAddressRefusal(pr, repository, text);
   if (fork !== null) return fork;
   const others = prKeys(text, config.project).filter(named => named !== key);
   const statuses = new Map<string, string>();
   if (others.length > 0) {
-    for (const row of await client.search(`key in (${others.join(',')})`, ['status'])) {
-      statuses.set(client.toTicket(row, false).key, client.toTicket(row, false).status);
+    for (const row of await jira.search(`key in (${others.join(',')})`, ['status'])) {
+      statuses.set(jira.toTicket(row, false).key, jira.toTicket(row, false).status);
     }
   }
-  return prRefusal(text, key, statuses, await writableNow(client, state), config);
+  return prRefusal(text, key, statuses, await writableNow(jira, state), config);
 }
 
-// A claim of this run already on the item passed this check when it was posted.
-const refused = mine === undefined ? await refusal() : null;
-if (refused !== null) {
-  emit({ held: 'false', holder: '', reason: `${refused}; this run does no work this lap` });
-} else {
+/** Claim the ticket, and hold it when this run's claim is the oldest live one. */
+async function claimTicket(item: WorkItem): Promise<void> {
+  /** Take this run's claim back; a failure to do so must not hide the error that led here. */
+  async function withdraw(id: number, why: string): Promise<void> {
+    try {
+      await editComment(item, id, `Loop claim withdrawn: run ${run} ${why}`, jira);
+    } catch (error) {
+      console.error(`claim: could not withdraw claim ${id}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  let claims = await liveClaims(item, hours, Date.now(), jira);
+  let mine = claims.find(claim => claim.run === run);
+  // A claim of this run already on the ticket passed this check when it was posted.
+  const refused = mine === undefined ? await refusal(item.key) : null;
+  if (refused !== null) {
+    emit({ held: 'false', holder: '', reason: `${refused}; this run does no work this lap` });
+    return;
+  }
   if (mine === undefined) {
     const body = [
       `${CLAIM_PREFIX}${run}`,
@@ -128,36 +126,36 @@ if (refused !== null) {
   }
 
   const holder = claims[0];
-  if (holder.id === mine.id) {
-    // The builder runs next: an outbox left in its name or the reviewer's by pick is not theirs.
-    clearOutbox(artifactsDir(), ['build', 'review']);
-    if (jira !== undefined && item.kind === 'ticket') {
-      try {
-        // For release: a merge counts only when it came after this claim.
-        recordClaim(runState(), mine.createdAt);
-        const ticket = await jira.ticket(item.key);
-        const start = ticket.status === config.status.todo;
-        const status = start ? config.status.progress : ticket.status;
-        const dir = join(artifactsDir(), 'tracker');
-        mkdirSync(dir, { recursive: true });
-        writeFileSync(
-          join(dir, 'item.md'),
-          itemMarkdown({ ...ticket, status }, await jira.comments(item.key), config)
-        );
-        // Last, so a failure above leaves the ticket on To Do, where pick finds it again.
-        if (start) await jira.move(item.key, config.status.progress);
-      } catch (error) {
-        await withdraw(mine.id, `could not set up the ticket (${reason(error)}).`);
-        throw error;
-      }
-    }
-    emit({ held: 'true', holder: run, reason: `run ${run} holds ${target || pr}` });
-  } else {
+  if (holder.id !== mine.id) {
     await withdraw(mine.id, `(run ${holder.run} claimed this item first).`);
     emit({
       held: 'false',
       holder: holder.run,
-      reason: `run ${holder.run} claimed ${target || pr} first; this run does no work this lap`,
+      reason: `run ${holder.run} claimed ${target} first; this run does no work this lap`,
     });
+    return;
   }
+  // The builder runs next: an outbox left in its name or the reviewer's by pick is not theirs.
+  clearOutbox(artifactsDir(), ['build', 'review']);
+  try {
+    // For release: a merge counts only when it came after this claim.
+    recordClaim(runState(), mine.createdAt);
+    const ticket = await jira.ticket(item.key);
+    const start = ticket.status === config.status.todo;
+    const status = start ? config.status.progress : ticket.status;
+    const dir = join(artifactsDir(), 'tracker');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'item.md'), itemMarkdown({ ...ticket, status }, await jira.comments(item.key), config));
+    // Last, so a failure above leaves the ticket on To Do, where pick finds it again.
+    if (start) await jira.move(item.key, config.status.progress);
+  } catch (error) {
+    await withdraw(mine.id, `could not set up the ticket (${reason(error)}).`);
+    throw error;
+  }
+  emit({ held: 'true', holder: run, reason: `run ${run} holds ${target}` });
 }
+
+// Pick is an agent: a target that is not a ticket is refused before anything is posted.
+const notTicket = targetRefusal(target, pr, config);
+if (notTicket !== null) emit({ held: 'false', holder: '', reason: `${notTicket}; this run does no work this lap` });
+else await claimTicket(workItem(target, config));

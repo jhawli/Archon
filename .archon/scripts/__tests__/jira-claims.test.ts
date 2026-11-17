@@ -23,6 +23,7 @@ import {
   recordLap,
   runState,
   restMarker,
+  targetRefusal,
   workItem,
 } from '../../workflows/sdlc/.shared/claims';
 import type { Ticket, TicketComment, TrackerConfig } from '../../workflows/sdlc/.shared/jira';
@@ -88,12 +89,15 @@ describe('work items', () => {
   it('a Jira ticket URL is a ticket', () => {
     expect(workItem('https://example.atlassian.net/browse/CONC-5', CFG)).toEqual(TICKET);
   });
-  it('a pull request stays on GitHub', () => {
-    expect(workItem('https://github.com/o/r/pull/9', CFG)).toEqual({
-      kind: 'pull',
-      repository: 'o/r',
-      number: 9,
-    });
+  it('a pull request is not a work item: the loop continues it through the ticket it names', () => {
+    expect(() => workItem('https://github.com/o/r/pull/9', CFG)).toThrow('not a work item URL');
+  });
+  it('claim refuses a target that is not a ticket, before it posts anything', () => {
+    expect(targetRefusal('https://example.atlassian.net/browse/CONC-5', '', CFG)).toBeNull();
+    expect(targetRefusal('https://example.atlassian.net/browse/CONC-5', 'https://github.com/o/r/pull/9', CFG)).toBeNull();
+    expect(targetRefusal('https://github.com/o/r/pull/9', 'https://github.com/o/r/pull/9', CFG)).toContain('not a CONC ticket');
+    expect(targetRefusal('', 'https://github.com/o/r/pull/9', CFG)).toContain('not a CONC ticket');
+    expect(targetRefusal('https://github.com/o/r/issues/9', '', CFG)).toContain('not a CONC ticket');
   });
   it('eine GitHub-Issue-Adresse ist kein Arbeitsstück', () => {
     expect(() => workItem('https://github.com/o/r/issues/9', CFG)).toThrow('not a work item URL');
@@ -135,15 +139,6 @@ describe('claims on a ticket', () => {
     await editComment(TICKET, id, 'Loop claim withdrawn: run x', jira);
     expect(jira.edits).toEqual([[id, 'Loop claim withdrawn: run x']]);
     expect(await liveClaims(TICKET, 6, NOW, jira)).toEqual([]);
-  });
-  it('a ticket without a Jira client is a programming error, not a silent GitHub call', async () => {
-    let message = '';
-    try {
-      await liveClaims(TICKET, 6, NOW);
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
-    expect(message).toContain('Jira client');
   });
 });
 

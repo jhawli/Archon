@@ -60,6 +60,16 @@ export function namesTicket(pr: { readonly title: string; readonly body: string 
   return new RegExp(`^\\[?${key}\\b`).test(pr.title.trim()) || referencedKeys(pr.body, project).includes(key);
 }
 
+/**
+ * The tickets a pull request names: the key its title opens with (AK6), and its `Refs`/`Closes`.
+ * The one reading of "the ticket a pull request is the work for", used by the board, the launch
+ * gate and claim alike.
+ */
+export function prKeys(pr: { readonly title: string; readonly body: string }, project: string): string[] {
+  const lead = new RegExp(`^\\[?(${project}-[1-9]\\d*)\\b`).exec(pr.title.trim())?.[1];
+  return [...new Set([...(lead === undefined ? [] : [lead]), ...referencedKeys(pr.body, project)])];
+}
+
 export interface PrRow {
   readonly url: string;
   readonly title: string;

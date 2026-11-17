@@ -2,10 +2,10 @@
  * Work-item claims: how several runs of one loop share a backlog without two of them
  * working the same item.
  *
- * A claim is a comment on the work item (a Jira ticket, or a GitHub pull request when no
- * ticket is involved) whose body starts with `Loop claim: run <id>`. Among the live
- * claims on one item the lowest comment id holds it. GitHub numbers comments in the order it
- * stores them; Jira's ids are unique but not always in `created` order under concurrent
+ * A claim is a comment on the work item, a Jira ticket, whose body starts with
+ * `Loop claim: run <id>`. A pull request is never claimed itself: the loop continues it
+ * through the ticket it names. Among the live claims on one ticket the lowest comment id
+ * holds it. Jira's ids are unique but not always in `created` order under concurrent
  * writes, which does not matter: every run orders by the same number. That is the whole
  * protocol: no lock service, no scheduler, and a race between two runs that claimed in the
  * same second still has exactly one winner, because each reads the item back after its own
@@ -24,14 +24,15 @@ type JsonObject = Record<string, unknown>;
 
 export const CLAIM_PREFIX = 'Loop claim: run ';
 
-export type WorkItem =
-  | { readonly kind: 'ticket'; readonly key: string }
-  | { readonly kind: 'pull'; readonly repository: string; readonly number: number };
+export interface WorkItem {
+  readonly kind: 'ticket';
+  readonly key: string;
+}
 
 /** The part of the Jira client the claim protocol uses; tests pass a fake. */
 export type ClaimClient = Pick<Jira, 'comments' | 'comment' | 'editComment'>;
 
-/** A comment on a ticket or a pull request, as the claim protocol reads it. */
+/** A comment on a ticket, as the claim protocol reads it. */
 export interface ItemComment {
   readonly id: number;
   readonly body: string;
@@ -44,69 +45,36 @@ export interface Claim {
   readonly createdAt: number;
 }
 
-/**
- * A ticket URL of this tracker, or a GitHub pull request URL (a pull request that names no
- * ticket). Work items live in Jira only: a GitHub issue URL is not one.
- */
+/** A ticket URL of this tracker. Work items live in Jira only: no GitHub URL is one. */
 export function workItem(url: string, config: TrackerConfig = requireTracker()): WorkItem {
   const key = ticketKeyOf(url, config);
-  if (key !== null) return { kind: 'ticket', key };
-  const match = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d+)\/?$/.exec(url.trim());
-  if (match === null) throw new Error(`not a work item URL: '${url}' (work items are ${config.project} tickets)`);
-  return { kind: 'pull', repository: match[1], number: Number(match[2]) };
+  if (key === null) throw new Error(`not a work item URL: '${url}' (work items are ${config.project} tickets)`);
+  return { kind: 'ticket', key };
 }
 
 /**
- * `gh api` for a pull request's conversation comments. GitHub keeps them under
- * `repos/<r>/issues/<n>/comments`, a pull request being an issue there; no issue is read.
+ * Why claim must not take this lap's target, or null: pick names a ticket as the target, also
+ * for `continue` (the ticket the pull request names). Anything else is not claimed, and a pull
+ * request that names no ticket is not the loop's work.
  */
-export function runGh(args: string[]): unknown {
-  const result = Bun.spawnSync(['gh', 'api', '--hostname', 'github.com', ...args], {
-    stdout: 'pipe',
-    stderr: 'pipe',
-  });
-  if (result.exitCode !== 0) {
-    throw new Error(`gh api ${args[0] ?? ''} failed (exit ${result.exitCode}): ${result.stderr.toString().trim()}`);
-  }
-  const output = result.stdout.toString().trim();
-  return output === '' ? null : (JSON.parse(output) as unknown);
+export function targetRefusal(target: string, pr: string, config: TrackerConfig): string | null {
+  if (ticketKeyOf(target, config) !== null) return null;
+  const what = target !== '' ? `'${target}'` : pr !== '' ? `the pull request ${pr} alone` : 'an empty target';
+  return `${what} is not a ${config.project} ticket: the loop claims tickets only and continues a pull request through the ticket it names`;
 }
 
-function clientFor(key: string, jira: ClaimClient | undefined): ClaimClient {
-  if (jira === undefined) throw new Error(`${key}: a ticket needs a Jira client`);
-  return jira;
-}
-
-/** Every comment on the item, lowest id first. A pull request's are its conversation comments. */
-export async function comments(item: WorkItem, jira?: ClaimClient): Promise<ItemComment[]> {
-  if (item.kind === 'ticket') {
-    const rows: TicketComment[] = await clientFor(item.key, jira).comments(item.key);
-    return rows.map(({ id, body, createdAt }) => ({ id, body, createdAt }));
-  }
-  const pages = runGh([
-    `repos/${item.repository}/issues/${item.number}/comments?per_page=100`,
-    '--paginate',
-    '--slurp',
-  ]);
-  if (!Array.isArray(pages)) throw new Error('comment listing is malformed');
-  return (pages as unknown[])
-    .flatMap((page): unknown[] => (Array.isArray(page) ? (page as unknown[]) : [page]))
-    .filter((value): value is JsonObject => value !== null && typeof value === 'object')
-    .filter(row => typeof row.id === 'number')
-    .map(row => ({
-      id: row.id as number,
-      body: typeof row.body === 'string' ? row.body : '',
-      createdAt: Date.parse(String(row.created_at)),
-    }))
-    .sort((left, right) => left.id - right.id);
+/** Every comment on the ticket, lowest id first. */
+export async function comments(item: WorkItem, jira: ClaimClient): Promise<ItemComment[]> {
+  const rows: TicketComment[] = await jira.comments(item.key);
+  return rows.map(({ id, body, createdAt }) => ({ id, body, createdAt }));
 }
 
 /** Live claims on the item, oldest (lowest id) first. */
 export async function liveClaims(
   item: WorkItem,
   expiryHours: number,
-  now = Date.now(),
-  jira?: ClaimClient
+  now: number,
+  jira: ClaimClient
 ): Promise<Claim[]> {
   const claims: Claim[] = [];
   for (const comment of await comments(item, jira)) {
@@ -154,25 +122,12 @@ export function deadClaims(
   return lead >= -5000 && lead <= CLAIM_TO_START_MS ? newest : [];
 }
 
-export async function postComment(item: WorkItem, body: string, jira?: ClaimClient): Promise<number> {
-  if (item.kind === 'ticket') return clientFor(item.key, jira).comment(item.key, body);
-  const created = runGh([
-    `repos/${item.repository}/issues/${item.number}/comments`,
-    '--method',
-    'POST',
-    '-f',
-    `body=${body}`,
-  ]) as JsonObject | null;
-  if (created === null || typeof created.id !== 'number') throw new Error('the claim comment was not created');
-  return created.id;
+export async function postComment(item: WorkItem, body: string, jira: ClaimClient): Promise<number> {
+  return jira.comment(item.key, body);
 }
 
-export async function editComment(item: WorkItem, id: number, body: string, jira?: ClaimClient): Promise<void> {
-  if (item.kind === 'ticket') {
-    await clientFor(item.key, jira).editComment(item.key, id, body);
-    return;
-  }
-  runGh([`repos/${item.repository}/issues/comments/${id}`, '--method', 'PATCH', '-f', `body=${body}`]);
+export async function editComment(item: WorkItem, id: number, body: string, jira: ClaimClient): Promise<void> {
+  await jira.editComment(item.key, id, body);
 }
 
 export function expiryHours(value: string): number {

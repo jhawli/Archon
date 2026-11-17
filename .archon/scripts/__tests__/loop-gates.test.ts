@@ -353,7 +353,9 @@ describe('loop wiring', () => {
     expect(pick).not.toContain('gh issue');
     expect(pick).not.toContain('labeled `priority`');
     expect(pick).toContain('asked for no code change (only the record, the evidence, or merging the default branch) is `light`');
-    expect(pick).not.toContain('lowest number first unless');
+    // Ticket-only: a continue targets the ticket its pull request names; a ticketless one is not work.
+    expect(pick).toContain("A pull request that names no ticket is not this loop's work");
+    expect(pick).not.toContain('or the pull request itself when it names no ticket');
   });
 
   it('the merge goes through the gate: review decides, land merges, deploy follows land', () => {

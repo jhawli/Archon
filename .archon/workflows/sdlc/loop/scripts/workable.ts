@@ -11,9 +11,9 @@
  * have, because a run killed before that step never frees its item. It also puts a ticket
  * such a run left on In Progress back where a lap can take it (`recoverOrphans`).
  *
- * Output: `{ "workable": [ref], "claims": [ref + run], "ended": [...], "waiting": [...],
+ * Output: `{ "workable": [ref], "claims": [ticket + run], "ended": [...], "waiting": [...],
  * "updated" }`. A ref is `{kind: 'ticket', key}` for a Jira ticket and
- * `{kind: 'pull', number}` for a pull request; `updated` is the newest change to any item
+ * `{kind: 'pull', number}` for a pull request (claims are on tickets only); `updated` is the newest change to any item
  * on the board.
  */
 
@@ -105,14 +105,7 @@ const loaded = await loadJiraBoard(jira, pulls);
 const updated = new Date(loaded.updated).toISOString();
 const result = workability(loaded.board, hours, Date.now(), endedRuns, loaded.links);
 for (const claim of result.ended) {
-  if (claim.kind === 'ticket') {
-    const id = /[?&]focusedCommentId=(\d+)$/.exec(claim.url)?.[1];
-    if (id !== undefined) await jira.editComment(claim.key, Number(id), released(claim.run));
-    continue;
-  }
-  // A pull request's claim: GitHub keeps its conversation comments under `issues/comments`.
-  const id = /#issuecomment-(\d+)$/.exec(claim.url)?.[1];
-  if (id === undefined) continue;
-  gh(['api', `repos/{owner}/{repo}/issues/comments/${id}`, '--method', 'PATCH', '-f', `body=${released(claim.run)}`]);
+  const id = /[?&]focusedCommentId=(\d+)$/.exec(claim.url)?.[1];
+  if (id !== undefined) await jira.editComment(claim.key, Number(id), released(claim.run));
 }
 process.stdout.write(`${JSON.stringify({ ...result, updated })}\n`);

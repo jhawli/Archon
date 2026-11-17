@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, statusName } from './claims.ts';
 import { note } from './io.ts';
 import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
-import { namesTicket, referencedKeys } from './tickets.ts';
+import { namesTicket, prKeys } from './tickets.ts';
 
 export type Op =
   | { readonly op: 'comment'; readonly key: string; readonly text: string }
@@ -227,12 +227,6 @@ export function prRefusal(
     key => key !== target && !writable.has(key) && !done.has(statuses.get(key) ?? '')
   );
   return foreign.length > 0 ? `the pull request names ${foreign.join(', ')}, which is not the loop's to work on` : null;
-}
-
-/** The tickets a pull request names: the key its title opens with, and its `Refs`/`Closes`. */
-export function prKeys(pr: PrText, project: string): string[] {
-  const lead = new RegExp(`^\\[?(${project}-[1-9]\\d*)\\b`).exec(pr.title.trim())?.[1];
-  return [...new Set([...(lead === undefined ? [] : [lead]), ...referencedKeys(pr.body, project)])];
 }
 
 /**

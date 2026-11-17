@@ -28,7 +28,7 @@ function ticket(n: number, extra: Partial<BoardItem> = {}): BoardItem {
 
 /** A pull request `#n` on the board. */
 function pull(n: number, extra: Partial<BoardItem> = {}): BoardItem {
-  return { ...ticket(n, extra), id: `#${n}`, title: `pull ${n}` };
+  return { ...ticket(n, extra), id: `#${n}`, title: extra.title ?? `pull ${n}` };
 }
 
 /** Every item on the board still blocks a `Depends on`, as an open sprint would. */
@@ -162,5 +162,27 @@ describe('loop launch gate', () => {
     expect(held.workable).toEqual([]);
     const free = workability({ issues: [ticket(1)], pulls: [pull(28, { body: 'Refs CONC-1' })] }, 6, now);
     expect(free.workable).toEqual([{ kind: 'pull', number: 28 }]);
+  });
+
+  it('a pull request that names no ticket waits: the loop works tickets only', () => {
+    const result = workability({ issues: [ticket(1)], pulls: [pull(30, { body: 'Bump a dependency' })] }, 6, now);
+    expect(result.workable).toEqual([{ kind: 'ticket', key: 'CONC-1' }]);
+    expect(result.waiting).toEqual([{ kind: 'pull', number: 30, why: 'names no ticket' }]);
+  });
+
+  it('a pull request whose title alone names the ticket is its work too', () => {
+    const result = workability({ issues: [ticket(1)], pulls: [pull(20, { title: 'CONC-1 Barcode erkennen' })] }, 6, now);
+    expect(result.workable).toEqual([{ kind: 'pull', number: 20 }]);
+    expect(result.waiting).toEqual([{ kind: 'ticket', key: 'CONC-1', why: 'delivered by pull request #20' }]);
+  });
+
+  it('a claim comment on a pull request holds nothing: claims live on tickets', () => {
+    const result = workability(
+      { issues: [ticket(1)], pulls: [pull(20, { body: 'Refs CONC-1', comments: [claim('run-a')] })] },
+      6,
+      now
+    );
+    expect(result.claims).toEqual([]);
+    expect(result.workable).toEqual([{ kind: 'pull', number: 20 }]);
   });
 });

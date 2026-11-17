@@ -4,7 +4,7 @@
  * so both see the same facts. Pull requests stay on GitHub and come in as `gh pr list` rows.
  */
 import type { Jira, Ticket, TicketComment } from './jira.ts';
-import { dependencyKeys, referencedKeys } from './tickets.ts';
+import { dependencyKeys, prKeys } from './tickets.ts';
 import { OWNER_LABEL, type Board, type BoardItem, type Links } from './workable.ts';
 
 /** A GitHub pull request as a board item (`#n`), with gh's `updatedAt`. */
@@ -25,7 +25,7 @@ export interface JiraBoard {
 
 export function jiraLinks(project: string): Links {
   return {
-    references: body => referencedKeys(body, project),
+    pullKeys: pull => prKeys(pull, project),
     dependencies: body => dependencyKeys(body, project),
   };
 }
@@ -84,7 +84,7 @@ export async function loadJiraBoard(jira: Jira, pulls: readonly GithubItem[]): P
     )
   ).map(raw => jira.toTicket(raw, true));
   const have = new Set(startable.map(ticket => ticket.key));
-  const named = [...new Set(pulls.flatMap(pull => links.references(pull.body)))].filter(key => !have.has(key));
+  const named = [...new Set(pulls.flatMap(pull => links.pullKeys(pull)))].filter(key => !have.has(key));
   // `key in (...)` returns no row for a key Jira does not know, rather than failing the search.
   const linked =
     named.length === 0

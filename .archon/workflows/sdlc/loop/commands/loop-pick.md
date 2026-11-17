@@ -24,7 +24,7 @@ How the board reads:
   - `{"op": "comment", "key": "CONC-5", "text": "Contract\n\n..."}` for a `Contract` comment or a note;
   - `{"op": "ask", "key": "CONC-5", "text": "..."}` for a question only the owner can answer: it mentions the owner and flags the ticket, and the text is the question;
   - `{"op": "cancel", "key": "CONC-9", "text": "Doppel von CONC-4"}` for a duplicate or an already delivered ticket, with the reference in the text.
-- For new work, pick as the lap's target only a ticket marked `Schreibbar: ja`. For `continue`, the target is the ticket the pull request names (marked `Schreibbar: ja` too), or the pull request itself when it names no ticket. The loop checks the target against this board and against Jira before it claims it; any other ticket is not claimed, and this lap does nothing.
+- Pick as the lap's target only a ticket marked `Schreibbar: ja`; for `continue`, the ticket the pull request names. A pull request that names no ticket is not this loop's work. The loop checks the target against this board and against Jira before it claims it; any other target is not claimed, and this lap does nothing.
 - Write only to tickets marked `Schreibbar: ja`. One entry for any other ticket, or one that starts like a loop record (`Loop claim:`, `Loop result:`, `Loop review:`), makes the loop refuse the whole list, and this lap does nothing.
 - A `Contract` you write this lap is on the ticket before the builder starts, and in its copy of the ticket.
 - Every run of this loop that held a ticket ends with exactly one comment `Loop result: run <id>. PR: <url or kein PR>. Status: <status>.` on it. Under Caps, count runs by these: one with `PR: kein PR` is a run that produced no pull request. The same run's `Loop review:` comment on the ticket is not a second attempt; send-backs and merge-gate refusals still count by their `Loop review:` lines, as below.
@@ -36,7 +36,7 @@ its work item with a comment that starts `Loop claim: run <id>` and states the `
 to touch. A claim is live until it is edited to `Loop claim released` or `Loop claim withdrawn`,
 or until it is more than $INPUTS.claim_hours hours old.
 
-- Never choose an item with a live claim, or an open pull request whose ticket (the one it closes or references) has one.
+- Never choose a ticket with a live claim, or an open pull request whose ticket (the key its title starts with, or the one it closes or references) has one.
 - Avoid an item whose change would rewrite the same code files as a live claim's area: two runs
   rewriting one file produce merge conflicts and undo each other's work. Choose independent work
   instead, and say in `reason` which claim you stayed clear of. Files every change only adds a
@@ -51,7 +51,7 @@ yourself.
 
 ## Choose (finish before you start)
 
-1. **Continue** an open pull request this loop owns (its branch starts with `archon/`, or it carries this loop's comments) that has review findings not yet addressed, red CI, a merge conflict, is a draft, is approved but unmerged, or whose latest `Loop review:` says `not merged` (the merge gate refused it). A ready pull request with nothing outstanding and no review since its last commit is also `continue`: the builder will leave it alone and the reviewers will take it.
+1. **Continue** an open pull request this loop owns (its branch starts with `archon/`, or it carries this loop's comments) and that names a ticket, when it has review findings not yet addressed, red CI, a merge conflict, is a draft, is approved but unmerged, or whose latest `Loop review:` says `not merged` (the merge gate refused it). A ready pull request with nothing outstanding and no review since its last commit is also `continue`: the builder will leave it alone and the reviewers will take it.
 2. Otherwise **start** the first ticket in sprint order whose dependencies are done: sprint order is the owner's priority. Work the product needs comes before follow-ups the loop filed about its own tooling, unless one of them blocks product work. Never start a ticket that already has an open pull request (the board marks it `Wartet:` with the pull request): continue that pull request instead, or skip it if it is not this loop's.
 3. Skip anything flagged or labelled `needs-owner`.
 
@@ -97,7 +97,7 @@ Before new work starts on a ticket (routes `simple` and `complex`), make sure it
 Return the structured verdict:
 
 - `route`: `continue`, `simple`, `complex`, or `none` when nothing is actionable.
-- `target`: the ticket URL (`https://<site>/browse/CONC-5`) for new work; for `continue` the ticket the pull request names (`Refs CONC-5`, `Closes CONC-5`, or the key its title starts with), or the pull request URL if it names none. Empty for `none`.
+- `target`: the ticket URL (`https://<site>/browse/CONC-5`); for `continue` the ticket the pull request names (`Refs CONC-5`, `Closes CONC-5`, or the key its title starts with). Empty for `none`.
 - `pr`: the pull request URL for `continue`, otherwise empty.
 - `confidence`: `high`, `medium` or `low`.
 - `depth`: `light`, `normal` or `deep` (above). `normal` for `none`.

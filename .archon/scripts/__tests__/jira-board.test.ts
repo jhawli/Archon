@@ -252,6 +252,12 @@ describe('loading the board from Jira', () => {
     ]);
   });
 
+  it('loads a ticket a pull request names only in its title', async () => {
+    const { send, jql } = fakeJira();
+    await loadJiraBoard(new Jira(CFG, send), [{ ...pull, title: 'CONC-9 x', body: 'no reference here' }]);
+    expect(jql.slice(1)).toEqual(['key in (CONC-9)', 'key in (CONC-3,CONC-77)']);
+  });
+
   it('asks Jira nothing more when the sprint is empty and no pull request names a ticket', async () => {
     const { send, jql, comments } = fakeJira();
     const empty: Transport = async (method, path, body) =>

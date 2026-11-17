@@ -89,7 +89,7 @@ function unqualifiedLink(
   if (closure !== null && !isQualifiedUrl(closure.url)) return 'closure.url must be a fully qualified http(s) URL';
   // The empty original is for a Jira ticket only; any other duplicate names its original so the close links back.
   if (closure?.kind === 'duplicate' && closure.original.number === 0 && !JIRA_TICKET_URL.test(closure.url)) {
-    return 'only a duplicate of a Jira ticket may leave original empty; name the original issue';
+    return 'only a duplicate of a Jira ticket may leave original empty: closure.url names the duplicate ticket';
   }
   return null;
 }

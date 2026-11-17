@@ -12,7 +12,6 @@ import {
   outboxFile,
   outboxProgress,
   prAddressRefusal,
-  prKeys,
   prRefusal,
   readOutbox,
   snapshotKeys,
@@ -21,6 +20,7 @@ import {
   writableNow,
   type Op,
 } from '../../workflows/sdlc/.shared/outbox';
+import { prKeys } from '../../workflows/sdlc/.shared/tickets';
 
 const CFG: TrackerConfig = {
   kind: 'jira',
