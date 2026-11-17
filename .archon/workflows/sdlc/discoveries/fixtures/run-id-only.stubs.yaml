@@ -1,5 +1,5 @@
 # Unknown run: the real resolver must refuse lookup failure. No agents execute.
-tracker-guard: ""
+tracker-read: { checked: "true", board: stub, project: CONC, site: "https://example.atlassian.net" }
 fixture:
   expect: failed
   fail-node: resolve-input

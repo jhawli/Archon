@@ -1,0 +1,34 @@
+# Dry-run fixture: publication auto, the path upstream never ran. The caller's auto
+# authorizes this run, the approval node is skipped by its condition, and the publish
+# script runs (stubbed here; what it writes is shown by discoveries-publish.test.ts).
+tracker-read: { checked: "true", board: stub, project: CONC, site: "https://example.atlassian.net" }
+resolve-input: { count: 1, forge_available: false, forge_host: "", forge_path: "" }
+revalidate:
+  entries:
+    - item_index: 0
+      verdict: supported
+      evidence_refs: [{ path: "AGENTS.md", line: 1 }]
+      note: "stub: still applies"
+check-evidence: { count: 1, unverified_count: 0 }
+search-existing:
+  entries:
+    - item_index: 0
+      tracker_checked: true
+      matches: []
+classify:
+  entries:
+    - item_index: 0
+      classification: new
+      target_item: null
+      public_title: "Example source finding"
+      public_summary: "A fixture proposal for reviewer inspection."
+      disclosure_safe: true
+      rationale: "stub: no existing coverage found"
+render: { count: 1, stale_count: 0, duplicate_count: 0, update_existing_count: 0, new_count: 1 }
+publish: { published: true, urls: ["https://example.atlassian.net/browse/CONC-51"], summary: "stub: 1 angelegt (CONC-51)" }
+fixture:
+  expect: completed
+  reached: [publish]
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/single.json"
+    publication: "auto"

@@ -1,6 +1,6 @@
 # Classify discovery proposals
 
-Read only. Never write to a tracker. Read
+Read only. Never write to Jira or to a pull request. Read
 $ARTIFACTS_DIR/discoveries/normalized.json and evidence-check.json.
 Search results: $search-existing.output.entries
 
@@ -15,9 +15,10 @@ An inconclusive verdict, unverified citations, or incomplete search means a
 tentative local proposal, never proved new work. Retain that uncertainty in
 the rationale. Missing evidence does not make a finding stale.
 
-Each entry contains classification, target_item (number and exact URL from
-matches for duplicate/update-existing, null otherwise), public_title,
-public_summary, rationale, and disclosure_safe.
+Each entry contains classification, target_item (key and exact URL from
+matches for duplicate/update-existing, null otherwise; new evidence goes to a
+ticket, so prefer a ticket over a pull request as the target of update-existing),
+public_title, public_summary, rationale, and disclosure_safe.
 
 Draft public_title, public_summary, and rationale from source evidence.
 Explain the problem, its impact, and remaining verification in reviewer-facing
@@ -27,6 +28,6 @@ Use repository-relative source citations only. If a useful public explanation
 cannot be separated from private facts, set disclosure_safe: false and stop
 short of rendering. Otherwise set it true after reviewing all three fields.
 
-The renderer checks structure, repository identity, revision stability, and
-obvious absolute paths. It cannot certify arbitrary prose or model judgments.
+The renderer checks structure, ticket and repository identity, revision stability,
+and obvious absolute paths. It cannot certify arbitrary prose or model judgments.
 All proposals remain unauthorized for publication; no publish flag is a gate.

@@ -38,16 +38,21 @@ def public_text(value):
     return value.strip()
 
 
-def target_identity(target, forge):
-    if not isinstance(target, dict) or type(target.get("number")) is not int or target["number"] < 1:
-        fail("render: invalid target item number.")
-    if not isinstance(target.get("url"), str):
-        fail("render: target URL is missing.")
+def target_identity(target, forge, tracker):
+    """A ticket of this Jira project (`key` and its /browse/ URL) or a pull request of this repository (empty `key`)."""
+    if not isinstance(target, dict) or not isinstance(target.get("key"), str) or not isinstance(target.get("url"), str):
+        fail("render: a target item needs a key and a URL.")
     url = urlsplit(target["url"])
-    paths = [f"/{forge['path']}/{kind}/{target['number']}" for kind in ("issues", "pull")]
-    if (url.scheme != "https" or url.netloc != forge["host"] or url.path not in paths
-            or url.query or url.fragment or not forge["host"]):
-        fail("render: target URL does not match the configured repository and item number.")
+    if url.scheme != "https" or url.query or url.fragment:
+        fail("render: target URL must be a plain https address.")
+    key = target["key"]
+    if key:
+        if (not re.fullmatch(re.escape(tracker["project"]) + r"-[1-9][0-9]*", key)
+                or url.netloc != urlsplit(tracker["site"]).netloc or url.path != f"/browse/{key}"):
+            fail("render: target URL does not match the Jira site and ticket key.")
+    elif (not forge["available"] or url.netloc != forge["host"]
+            or not re.fullmatch("/" + re.escape(forge["path"]) + r"/pull/[1-9][0-9]*", url.path)):
+        fail("render: a target without a ticket key must be a pull request of this repository.")
 
 
 def main():
@@ -65,10 +70,13 @@ def main():
         classifications = indexed(json.loads(os.environ["INPUTS_CLASSIFICATION"]), len(normalized), "classification")
     except (KeyError, ValueError):
         fail("render: missing or malformed agent output.")
+    # tracker-read's verdict: the board was read, so a search of it can be complete.
+    board_read = os.environ.get("INPUTS_TRACKER_CHECKED", "").strip() == "true"
     head = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True)
     if head.returncode != 0 or head.stdout.strip() != context["revision"]:
         fail("render: source revision moved after revalidation; restart discovery proposals.")
     forge = context["forge"]
+    tracker = context["tracker"]
     rows = []
     counts = dict.fromkeys(CLASSIFICATIONS, 0)
     for item in normalized:
@@ -82,24 +90,24 @@ def main():
         if (cls == "stale") != (checked["verdict"] == "disproved"):
             fail("render: stale classification requires a disproved model verdict.")
         matches = search.get("matches")
-        if type(search.get("forge_checked")) is not bool or not isinstance(matches, list):
+        if type(search.get("tracker_checked")) is not bool or not isinstance(matches, list):
             fail("render: invalid search result.")
-        if search["forge_checked"] and not forge["available"]:
-            fail("render: search claims a forge check while the configured forge is unavailable.")
-        if matches and not search["forge_checked"]:
-            fail("render: matches require a completed forge search.")
+        if search["tracker_checked"] and not board_read:
+            fail("render: search claims a ticket check while the board was not read.")
+        if matches and not search["tracker_checked"]:
+            fail("render: matches require a completed ticket search.")
         for match in matches:
-            target_identity(match, forge)
+            target_identity(match, forge, tracker)
         if cls in ("duplicate", "update-existing"):
-            target_identity(target, forge)
-            if not any(m["number"] == target["number"] and m["url"] == target["url"] for m in matches):
-                fail("render: target item was not found by the forge search.")
+            target_identity(target, forge, tracker)
+            if not any(m["key"] == target["key"] and m["url"] == target["url"] for m in matches):
+                fail("render: target item was not found by the ticket search.")
         elif target is not None:
             fail("render: new and stale proposals must not name a target item.")
         # A new proposal may sit beside related work the search found without covering
         # the same problem. It is never silently detached from that work: the matches
         # travel with it as related items, in the record and in any published text.
-        related = ([{"number": m["number"], "url": m["url"]} for m in matches]
+        related = ([{"key": m["key"], "url": m["url"]} for m in matches]
                    if cls == "new" else [])
         if classified.get("disclosure_safe") is not True:
             fail("render: model has not cleared the proposed text for public disclosure.")
@@ -108,26 +116,28 @@ def main():
         rationale = public_text(classified.get("rationale"))
         actionable = (cls in ("new", "update-existing") and checked["verdict"] == "supported"
                       and checked["evidence_status"] == "source-bound"
-                      and forge["available"] and search["forge_checked"])
+                      and board_read and search["tracker_checked"])
         rows.append({
             "item_index": index, "title": title, "summary": summary, "rationale": rationale,
             "classification": cls, "model_verdict": checked["verdict"],
             "evidence_status": checked["evidence_status"], "revision": context["revision"],
             "evidence_refs": checked["evidence_refs"] if checked["evidence_status"] == "source-bound" else [],
             "target_item": target, "related_items": related, "marker": item["marker"] if cls != "stale" else None,
-            "forge_checked": search["forge_checked"], "actionable": actionable,
+            "tracker_checked": search["tracker_checked"], "actionable": actionable,
             "publication_authorized": False,
         })
         counts[cls] += 1
     document = {
-        "revision": context["revision"], "forge": forge,
+        "revision": context["revision"], "forge": forge, "tracker": tracker,
         "publication_authorized": False, "proposals": rows,
     }
     lines = ["# Discovery proposals", "",
              "Local review artifact. Publication is not authorized by this workflow.", "",
              "Source-bound citations check locations, not claim truth. Model judgments and public text need human review.", ""]
-    if not forge["available"]:
-        lines.extend(["Publication unavailable: " + forge["reason"] + ".", ""])
+    if not board_read:
+        lines.extend(["Publication unavailable: nicht geprüft (the Jira board could not be read).", ""])
+    elif not forge["available"]:
+        lines.extend(["Pull requests not searched: " + forge["reason"] + ".", ""])
     for row in rows:
         lines.extend([f"## {row['title']}", "", row["summary"], "", row["rationale"], "",
                       f"Classification: {row['classification']}; model: {row['model_verdict']}; evidence: {row['evidence_status']}.",
@@ -138,7 +148,7 @@ def main():
             lines.append("Related: " + row["target_item"]["url"])
         lines.extend("Related: " + item["url"] for item in row["related_items"])
         if row["marker"]:
-            lines.append("Proposed marker: <!-- archon-discovery:" + row["marker"] + " -->")
+            lines.append("Proposed marker: " + row["marker"])
         lines.append("")
     with open(os.path.join(artifacts, "discovery-proposals.json"), "w", encoding="utf-8") as f:
         json.dump(document, f, indent=2)

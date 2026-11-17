@@ -1,9 +1,10 @@
 name: archon-discoveries
 description: |
   Revalidate a discovery artifact against this checkout's pinned HEAD, find
-  existing work when GitHub is reachable, and render local action proposals.
-  Use after review or implementation records adjacent discoveries.
-  Optional publication uses a command agent and gh after explicit authorization.
+  existing work among the Jira tickets (and pull requests when GitHub is
+  reachable), and render local action proposals. Use after review or
+  implementation records adjacent discoveries. Optional publication files new
+  tickets and comments in Jira by script, after explicit authorization.
 
 model: medium
 interactive: true
@@ -23,18 +24,27 @@ inputs:
 returns: render
 
 nodes:
-  # Jira does not reach this workflow yet (S4b): in a repository whose .archon/tracker.json
-  # names Jira this refuses the run before any agent spends. Every other node waits for it.
-  - id: tracker-guard
-    script: tracker-guard
+  # First node (AK18e): without .archon/tracker.json the run ends here, before any agent.
+  # Then every ticket for the search; when Jira does not answer, checked is "false" and
+  # nothing is published.
+  - id: tracker-read
+    script: discoveries-read
     runtime: bun
     mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        checked: { type: string }
+        board: { type: string }
+        project: { type: string }
+        site: { type: string }
+      required: [checked, board, project, site]
 
   - id: resolve-input
     script: resolve-input
     runtime: uv
     mutates_checkout: false
-    depends_on: [tracker-guard]
+    depends_on: [tracker-read]
     output_format:
       type: object
       properties:
@@ -46,6 +56,8 @@ nodes:
     with:
       discovery_artifact: "$INPUTS.discovery_artifact"
       run_id: "$INPUTS.run_id"
+      project: "$tracker-read.output.project"
+      site: "$tracker-read.output.site"
 
   - id: revalidate
     command: revalidate
@@ -107,20 +119,20 @@ nodes:
             type: object
             properties:
               item_index: { type: integer }
-              forge_checked: { type: boolean }
+              tracker_checked: { type: boolean }
               matches:
                 type: array
                 items:
                   type: object
                   properties:
-                    number: { type: integer }
+                    key: { type: string }
                     url: { type: string }
                     title: { type: string }
                     similarity_note: { type: string }
-                  required: [number, url, title, similarity_note]
-            required: [item_index, forge_checked, matches]
+                  required: [key, url, title, similarity_note]
+            required: [item_index, tracker_checked, matches]
       required: [entries]
-    depends_on: [check-evidence]
+    depends_on: [check-evidence, tracker-read]
 
   - id: classify
     command: classify
@@ -143,9 +155,9 @@ nodes:
               target_item:
                 type: [object, "null"]
                 properties:
-                  number: { type: integer }
+                  key: { type: string }
                   url: { type: string }
-                required: [number, url]
+                required: [key, url]
               public_title: { type: string }
               public_summary: { type: string }
               disclosure_safe: { type: boolean }
@@ -168,10 +180,11 @@ nodes:
         new_count: { type: integer }
       required:
         [count, stale_count, duplicate_count, update_existing_count, new_count]
-    depends_on: [classify, resolve-input, search-existing]
+    depends_on: [classify, resolve-input, search-existing, tracker-read]
     with:
       search_results: "$search-existing.output.entries"
       classification: "$classify.output.entries"
+      tracker_checked: "$tracker-read.output.checked"
 
   - id: authorize-publication
     depends_on: [render]
@@ -184,16 +197,19 @@ nodes:
         - id: hold
           label: Keep local
 
+  # A script, not an agent (AK18g): it writes only on auto or an approval, new findings as
+  # tickets, new evidence for an open ticket as one comment there.
   - id: publish
-    command: publish-discoveries
-    context: fresh
+    script: publish-discoveries
+    runtime: bun
     mutates_checkout: false
-    depends_on: [render, authorize-publication]
+    depends_on: [render, authorize-publication, tracker-read]
     trigger_rule: none_failed_min_one_success
     when: "$INPUTS.publication == 'approve' || $INPUTS.publication == 'auto'"
     with:
       mode: "$INPUTS.publication"
       approval: { from: "$authorize-publication.output", if_skipped: null }
+      checked: "$tracker-read.output.checked"
     output_format:
       type: object
       properties:

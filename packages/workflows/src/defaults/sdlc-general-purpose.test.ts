@@ -173,7 +173,15 @@ describe('discovery proposals keep related work instead of failing the run', () 
   // Seen live: a lap whose PR passed runtime and holdout verification never merged,
   // because its one review note was classified new while the search had found
   // related (not identical) work, and the renderer failed the whole discoveries run.
-  const url = (n: number, kind = 'issues'): string => `https://github.com/owner/repo/${kind}/${n}`;
+  // Work items are Jira tickets (key and /browse/ URL); a pull request has no key.
+  const ticket = (n: number): { key: string; url: string } => ({
+    key: `CONC-${n}`,
+    url: `https://example.atlassian.net/browse/CONC-${n}`,
+  });
+  const pull = (n: number): { key: string; url: string } => ({
+    key: '',
+    url: `https://github.com/owner/repo/pull/${n}`,
+  });
   let repo: string;
   let head: string;
 
@@ -194,7 +202,7 @@ describe('discovery proposals keep related work instead of failing the run', () 
 
   async function render(
     classification: string,
-    matches: { number: number; url: string }[],
+    matches: { key: string; url: string }[],
     target: unknown = null
   ) {
     const artifacts = await mkdtemp(join(root, 'render-'));
@@ -210,6 +218,7 @@ describe('discovery proposals keep related work instead of failing the run', () 
       JSON.stringify({
         revision: head,
         forge: { available: true, host: 'github.com', path: 'owner/repo', reason: '' },
+        tracker: { project: 'CONC', site: 'https://example.atlassian.net' },
       })
     );
     await writeFile(
@@ -227,10 +236,11 @@ describe('discovery proposals keep related work instead of failing the run', () 
       renderProposalsScript,
       {
         ARTIFACTS_DIR: artifacts,
+        INPUTS_TRACKER_CHECKED: 'true',
         INPUTS_SEARCH_RESULTS: JSON.stringify([
           {
             item_index: 0,
-            forge_checked: true,
+            tracker_checked: true,
             matches: matches.map(m => ({ ...m, title: 'x', similarity_note: 'related' })),
           },
         ]),
@@ -241,7 +251,7 @@ describe('discovery proposals keep related work instead of failing the run', () 
             target_item: target,
             public_title: 'Bind the wire sentinel',
             public_summary: 'Writer and reader declare the same literal.',
-            rationale: 'Related to #94 and #206, not the same problem.',
+            rationale: 'Related to CONC-94 and pull request 206, not the same problem.',
             disclosure_safe: true,
           },
         ]),
@@ -258,18 +268,15 @@ describe('discovery proposals keep related work instead of failing the run', () 
   }
 
   test('a new proposal with related matches renders, links each match and stays actionable', async () => {
-    const matches = [
-      { number: 206, url: url(206, 'pull') },
-      { number: 94, url: url(94) },
-    ];
+    const matches = [pull(206), ticket(94)];
     const { result, document, markdown } = await render('new', matches);
     expect(result.exitCode, result.stderr?.toString()).toBe(0);
     const row = JSON.parse(document).proposals[0];
     expect(row.classification).toBe('new');
     expect(row.related_items).toEqual(matches);
     expect(row.actionable).toBe(true);
-    expect(markdown).toContain(`Related: ${url(206, 'pull')}`);
-    expect(markdown).toContain(`Related: ${url(94)}`);
+    expect(markdown).toContain(`Related: ${pull(206).url}`);
+    expect(markdown).toContain(`Related: ${ticket(94).url}`);
   });
 
   test('a new proposal with no matches has no related items', async () => {
@@ -279,12 +286,9 @@ describe('discovery proposals keep related work instead of failing the run', () 
   });
 
   test('a duplicate still has to name a target the search found', async () => {
-    const { result } = await render('duplicate', [{ number: 94, url: url(94) }], {
-      number: 95,
-      url: url(95),
-    });
+    const { result } = await render('duplicate', [ticket(94)], ticket(95));
     expect(result.exitCode).toBe(1);
-    expect(result.stderr?.toString()).toContain('target item was not found by the forge search');
+    expect(result.stderr?.toString()).toContain('target item was not found by the ticket search');
   });
 });
 

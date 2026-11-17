@@ -1,4 +1,4 @@
-"""Normalize discovery sidecars and pin the source and optional GitHub identity."""
+"""Normalize discovery sidecars, pin the source, the Jira project and the optional GitHub identity."""
 
 import hashlib
 import json
@@ -152,6 +152,7 @@ def run_artifacts(run_id):
 
 
 def probe_forge():
+    # Only for the pull request search: findings are filed as Jira tickets.
     # Only GitHub.com is identified automatically. Other forges need their owning
     # adapter; an arbitrary host is not evidence that the gh CLI applies to it.
     result = subprocess.run(["git", "remote", "get-url", "origin"], capture_output=True, text=True)
@@ -206,19 +207,20 @@ def main():
     head = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], capture_output=True, text=True)
     if head.returncode != 0:
         fail("resolve-input: current repository has no readable HEAD.")
+    project = os.environ.get("INPUTS_PROJECT", "").strip()
+    site = os.environ.get("INPUTS_SITE", "").strip()
+    if not project.isalnum() or not project.isupper() or not site.startswith("https://"):
+        fail("resolve-input: the Jira project and site from tracker-read are required.")
     forge = probe_forge()
-    identity = f"{forge['host']}/{forge['path']}".casefold() if forge["host"] else None
+    # One marker per finding and project: a rerun finds the ticket it filed (AK18c).
     for entry in entries:
-        entry["marker"] = (
-            hashlib.sha256(f"{identity}:{entry.pop('key')}".encode()).hexdigest()
-            if identity else None
-        )
-        entry.pop("key", None)
+        entry["marker"] = "disc-" + hashlib.sha256(f"{project}:{entry.pop('key')}".encode()).hexdigest()[:16]
     out = os.path.join(os.environ["ARTIFACTS_DIR"], "discoveries")
     os.makedirs(out, exist_ok=True)
     with open(os.path.join(out, "normalized.json"), "w", encoding="utf-8") as f:
         json.dump(entries, f, indent=2)
-    context = {"revision": head.stdout.strip(), "forge": forge, "input": provenance}
+    context = {"revision": head.stdout.strip(), "forge": forge, "tracker": {"project": project, "site": site},
+               "input": provenance}
     with open(os.path.join(out, "context.json"), "w", encoding="utf-8") as f:
         json.dump(context, f, indent=2)
     print(json.dumps({"count": len(entries), "forge_available": forge["available"],

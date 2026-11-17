@@ -1,5 +1,5 @@
 # Agent outputs are simulated; script nodes execute through the fixture runner.
-tracker-guard: ""
+tracker-read: { checked: "true", board: stub, project: CONC, site: "https://example.atlassian.net" }
 revalidate:
   entries:
     - item_index: 0
@@ -9,7 +9,7 @@ revalidate:
 search-existing:
   entries:
     - item_index: 0
-      forge_checked: false
+      tracker_checked: false
       matches: []
 classify:
   entries:

@@ -1,5 +1,5 @@
 # Package-test scenario: agents and gh reads are simulated; scripts and git execute for real.
-tracker-guard: ""
+tracker-read: { checked: "true", board: stub, project: CONC, site: "https://example.atlassian.net" }
 revalidate:
   entries:
     - item_index: 0
@@ -9,21 +9,21 @@ revalidate:
 search-existing:
   entries:
     - item_index: 0
-      forge_checked: true
+      tracker_checked: true
       matches:
-        - number: 55
-          url: "https://github.com/example/repo/issues/55"
+        - key: CONC-55
+          url: "https://example.atlassian.net/browse/CONC-55"
           title: "Existing tracked item, same defect"
           similarity_note: "stub: same underlying problem"
 classify:
   entries:
     - item_index: 0
       classification: duplicate
-      target_item: { number: 55, url: "https://github.com/example/repo/issues/55" }
+      target_item: { key: CONC-55, url: "https://example.atlassian.net/browse/CONC-55" }
       public_title: "Example source finding"
       public_summary: "A fixture proposal for reviewer inspection."
       disclosure_safe: true
-      rationale: "stub: same defect as #55"
+      rationale: "stub: same defect as CONC-55"
 fixture:
   expect: completed
   reached: [resolve-input, revalidate, check-evidence, search-existing, classify, render]

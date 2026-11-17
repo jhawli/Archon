@@ -1,5 +1,5 @@
 # Agent outputs are simulated; script nodes execute through the fixture runner.
-tracker-guard: ""
+tracker-read: { checked: "true", board: stub, project: CONC, site: "https://example.atlassian.net" }
 fixture:
   expect: failed
   fail-node: resolve-input

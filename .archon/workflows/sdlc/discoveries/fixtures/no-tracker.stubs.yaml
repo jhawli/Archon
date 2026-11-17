@@ -1,0 +1,11 @@
+# Dry-run fixture (with --exec-code: tracker-read really runs). AK18e, Grill G3: the
+# scratch checkout of HEAD has no .archon/tracker.json, so the first node refuses the
+# run and no agent starts: revalidate has no stub and never runs. That it fails with the
+# tracker sentence is shown by tracker-check.test.ts; here it is the node and the place
+# in the run.
+fixture:
+  expect: failed
+  fail-node: tracker-read
+  inputs:
+    discovery_artifact: ".archon/workflows/sdlc/discoveries/fixtures/data/single.json"
+exec-code: true
