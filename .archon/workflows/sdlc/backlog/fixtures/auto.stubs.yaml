@@ -1,6 +1,6 @@
 # Dry-run fixture: auto publication. The approval node is skipped by its
 # condition and the publisher runs on the caller's explicit authorization.
-tracker-guard: ""
+tracker-read: { board: stub/tracker/board-all.md }
 read-prd:
   path: "PRD.md"
   characters: 2400
@@ -13,7 +13,7 @@ check:
   keys: ["skeleton", "create"]
 publish:
   published: true
-  created: ["https://github.com/example/app/issues/1", "https://github.com/example/app/issues/2"]
+  created: ["CONC-51", "CONC-52"]
   existing: []
   summary: "stub: both created"
 fixture:

@@ -1,0 +1,24 @@
+# Dry-run fixture: the same document a second time. The publisher finds both tickets by
+# their markers and files nothing new; the run completes with both under existing.
+tracker-read: { board: stub/tracker/board-all.md }
+read-prd:
+  path: "PRD.md"
+  characters: 2400
+  max_issues: 12
+slice:
+  count: 2
+  summary: "stub: two tickets"
+check:
+  count: 2
+  keys: ["skeleton", "create"]
+publish:
+  published: true
+  created: []
+  existing: ["CONC-51", "CONC-52"]
+  summary: "stub: 0 angelegt (keins), 2 schon da (CONC-51, CONC-52)"
+fixture:
+  expect: completed
+  reached: [publish]
+  inputs:
+    prd: "PRD.md"
+    publication: "auto"

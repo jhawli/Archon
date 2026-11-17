@@ -1,6 +1,6 @@
 # Backlog
 
-`archon-backlog` turns a product document into an ordered GitHub backlog. It works
+`archon-backlog` turns a product document into an ordered Jira backlog. It works
 for new and existing libraries, CLIs, desktop applications, services, and other
 projects without imposing a runtime shape.
 
@@ -16,14 +16,16 @@ check. The first ticket is the smallest runnable, testable increment appropriate
 the project and its native guidance; the pack does not invent service endpoints or
 mandatory project documents. `check-backlog` refuses a slice with duplicate keys,
 forward dependencies, a first ticket that depends on anything, or more tickets than
-the bound. The publisher uses `gh` with a marker line per ticket
-(`<!-- archon-backlog: <key> -->`), lists every open and closed issue once before
-any write and matches the exact marker line in their bodies (never a search query
-with comment syntax, which shells turn into a `gh` flag), creates nothing if that
-listing fails, and records existing issues instead of posting twice, so re-running
-on the same document never duplicates the backlog.
+the bound. The publisher is a script (`publish-backlog.ts`), not an agent: it
+writes only on `auto` or an approval, and files each ticket through the pack's Jira
+client with the marker `backlog-<document>-<key>` as its remote link, on To Do in
+the active sprint, the phase as a `Phase:` line and dependencies as
+`Depends on: CONC-n`. A ticket whose marker Jira already knows, or one of the same
+document with the same title, counts as existing, so re-running on the same
+document never duplicates the backlog. Without `.archon/tracker.json` the first
+node (`tracker-read`) refuses the run before any agent.
 
-After publication, a caller may feed issues to `archon-triage`, `archon-ship`, or
+After publication, a caller may feed tickets to `archon-triage`, `archon-ship`, or
 the optional `archon-lifecycle` composition. Automatic lifecycle intake requires
 an explicit state-label mapping so the caller, rather than this pack, owns what
 counts as previously touched.

@@ -1,11 +1,11 @@
 name: archon-backlog
 description: >-
-  Turn a product document into an ordered GitHub backlog. A large-tier planner
+  Turn a product document into an ordered Jira backlog. A large-tier planner
   slices the PRD into tickets that each pass triage's contract test, with the
   first ticket making the product runnable end to end; a deterministic check
-  validates the slice; publication uses gh with a dedup marker so re-running
-  never creates a duplicate issue. The product document and project guidance
-  supply the requirements.
+  validates the slice; a script files the tickets with a marker each, so
+  re-running never files a ticket twice. The product document and project
+  guidance supply the requirements.
 model: large
 interactive: true
 mutates_checkout: false
@@ -22,17 +22,22 @@ inputs:
 returns: publish
 
 nodes:
-  # Jira does not reach this workflow yet (S4b): in a repository whose .archon/tracker.json
-  # names Jira this refuses the run before any agent spends. Every other node waits for it.
-  - id: tracker-guard
-    script: tracker-guard
+  # First node (AK18e): without .archon/tracker.json the run ends here, before any agent.
+  # Then every ticket for the slicer: what is already there is not sliced again.
+  - id: tracker-read
+    script: backlog-read
     runtime: bun
     mutates_checkout: false
+    output_format:
+      type: object
+      properties:
+        board: { type: string }
+      required: [board]
 
   - id: read-prd
     script: read-prd
     runtime: uv
-    depends_on: [tracker-guard]
+    depends_on: [tracker-read]
     with:
       prd: "$INPUTS.prd"
       max_issues: "$INPUTS.max_issues"
@@ -79,24 +84,26 @@ nodes:
     depends_on: [check]
     when: "$INPUTS.publication == 'approve' && $check.output.count > 0"
     approval:
-      message: "Publish the $check.output.count tickets in $ARTIFACTS_DIR/backlog.md as GitHub issues?"
+      message: "Publish the $check.output.count tickets in $ARTIFACTS_DIR/backlog.md as Jira tickets?"
       decisions:
         - id: approve
           label: Publish the backlog
         - id: hold
           label: Keep it local
 
+  # A script, not an agent: it writes only on auto or an approval, and files each ticket
+  # once (AK18f, AK18c).
   - id: publish
-    command: publish-backlog
-    context: fresh
+    script: publish-backlog
+    runtime: bun
     mutates_checkout: false
-    model: medium
     depends_on: [check, authorize]
     trigger_rule: none_failed_min_one_success
     when: "$check.output.count > 0"
     with:
       mode: "$INPUTS.publication"
       approval: { from: "$authorize.output", if_skipped: null }
+      prd: "$INPUTS.prd"
     output_format:
       type: object
       properties:

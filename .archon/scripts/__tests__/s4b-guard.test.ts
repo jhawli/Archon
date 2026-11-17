@@ -26,9 +26,8 @@ const CFG: TrackerConfig = {
   sprintField: 'customfield_10020',
 };
 
-/** The workflows that still work on GitHub issues, by folder and workflow name (the manager reads Jira since S4b Task 7). */
+/** The workflows that still work on GitHub issues, by folder and workflow name (the manager and the backlog read Jira since S4b Task 7 and 8). */
 const S4B: readonly (readonly [string, string])[] = [
-  ['backlog', 'archon-backlog'],
   ['discoveries', 'archon-discoveries'],
   ['merge-queue', 'archon-merge-queue'],
 ];
@@ -70,7 +69,7 @@ test('a broken tracker.json refuses the run too, it never reads as no tracker', 
   const root = checkout(false);
   mkdirSync(join(root, '.archon'));
   writeFileSync(join(root, '.archon', 'tracker.json'), JSON.stringify({ kind: 'jira' }));
-  const run = runPackScript('backlog/scripts/tracker-guard', { cwd: root });
+  const run = runPackScript('discoveries/scripts/tracker-guard', { cwd: root });
   expect(run.code).toBe(1);
   expect(run.stderr).toContain('tracker-guard: .archon/tracker.json');
 });

@@ -1,6 +1,6 @@
 # Dry-run fixture: preview mode. The planner and the check are stubbed; no
 # approval node fires and the publisher declines to write.
-tracker-guard: ""
+tracker-read: { board: stub/tracker/board-all.md }
 read-prd:
   path: "PRD.md"
   characters: 2400
