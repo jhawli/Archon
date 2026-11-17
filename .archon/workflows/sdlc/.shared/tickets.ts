@@ -51,7 +51,6 @@ export function referencedKeys(body: string, project: string): string[] {
   ];
 }
 
-
 /**
  * The tickets a pull request is the work for: the key its title opens with (AK6), and the ones
  * its body closes or references (a partial delivery says only `Refs`, so `closedKeys` alone
