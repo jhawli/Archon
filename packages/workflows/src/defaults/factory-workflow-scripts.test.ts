@@ -78,7 +78,7 @@ function run(
   args: string[] = []
 ): ReturnType<typeof Bun.spawnSync> {
   // The engine gives every script node a state directory and its run id; merge-action records confirmed merges there.
-  const childEnv = {
+  const childEnv: Record<string, string | undefined> = {
     ...process.env,
     STATE_DIR: join(fakeBin, 'state'),
     WORKFLOW_ID: 'fixture-run',
