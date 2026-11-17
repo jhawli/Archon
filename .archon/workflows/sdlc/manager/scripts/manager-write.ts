@@ -54,9 +54,15 @@ if (runOps.length > 0) {
   } else {
     const rows = (JSON.parse(listed.stdout.toString()) as { runs?: RunRow[] }).runs ?? [];
     const now = Date.now();
+    // One action per run and pass: a second entry for the same run would pass this check too
+    // (the resume is recorded only when it runs) and resume it twice.
+    const named = new Set<string>();
     for (const op of runOps) {
       const row = rows.find(r => r.id === op.run);
+      const twice = named.has(op.run);
+      named.add(op.run);
       const why =
+        (twice ? 'named twice in this outbox; only its first entry counts' : null) ??
         runRefusal(op, row, now, run, resumed) ??
         (op.op === 'resume' && (row?.working_path == null || !existsSync(row.working_path)) ? `run ${op.run}: its working path is gone` : null);
       if (why === null) allowed.push(op);
@@ -79,6 +85,10 @@ if (!existsSync(once)) {
 const acted: string[] = [];
 for (const op of allowed) {
   if (op.op === 'resume') {
+    if (resumed.has(op.run)) {
+      skipped.push(`resume ${op.run}: resumed before`);
+      continue;
+    }
     resumed.add(op.run);
     writeFileSync(resumedPath, `${JSON.stringify([...resumed])}\n`); // before the resume: a crash never resumes twice
   }
