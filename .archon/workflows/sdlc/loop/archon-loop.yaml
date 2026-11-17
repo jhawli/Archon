@@ -12,7 +12,7 @@ description: |
 
   Use when: a scheduler should keep a backlog moving with nobody at the
   keyboard — "keep building", "run the loop".
-  NOT for: slicing a product document into issues (archon-backlog).
+  NOT for: slicing a product document into tickets (archon-backlog).
 model: large
 
 inputs:
