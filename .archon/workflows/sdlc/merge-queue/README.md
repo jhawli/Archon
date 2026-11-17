@@ -44,6 +44,18 @@ not reported as queued without structured read-back. No admin bypass is used.
 After a confirmed merge, the result records `prior_base_sha` so the next iteration
 can detect movement of the live base branch.
 
+The first node (`tracker-check`) needs `.archon/tracker.json` and refuses the run
+without it, before any agent; it records the run's start. `merge-action` records each
+merge GitHub confirms in the run's state (a pull request only queued is not merged).
+After the merge group, `merged-any` counts them, and with a `deploy` command one
+rollout follows the whole batch (`archon-deploy`, as the loop does after its merge).
+`ticket-status` then moves every Jira ticket a merged pull request names (the key its
+title starts with, `Refs`, `Closes`) the way the loop's release moves its own: from
+Review or In Progress to Staging when the rollout is confirmed, otherwise to Review
+with a question; a merge GitHub does not confirm as merged after the run started
+leaves the ticket on Review with a question. A ticket on any other status is only
+commented. Each ticket gets one `Merge-Queue: Lauf …` comment per run and pull request.
+
 A hold a PR's own next commit can fix may be published on that PR as one comment
 beginning `<!-- archon-merge-hold -->` (edited in place, cleared when the PR
 becomes eligible); the shared review reads it as a claim to settle when a delivery

@@ -77,7 +77,13 @@ function run(
   env: Record<string, string>,
   args: string[] = []
 ): ReturnType<typeof Bun.spawnSync> {
-  const childEnv = { ...process.env, ...env };
+  // The engine gives every script node a state directory and its run id; merge-action records confirmed merges there.
+  const childEnv = {
+    ...process.env,
+    STATE_DIR: join(fakeBin, 'state'),
+    WORKFLOW_ID: 'fixture-run',
+    ...env,
+  };
   if (process.platform === 'win32' && env.PATH !== undefined) {
     for (const key of Object.keys(childEnv)) {
       if (key.toLowerCase() === 'path') delete childEnv[key];
@@ -492,11 +498,20 @@ describe('merge action boundary', () => {
       INPUTS_MERGE_METHOD: 'squash',
       GH_LOG: ghLog,
       PATH: `${fakeBin}${delimiter}${process.env.PATH ?? ''}`,
+      STATE_DIR: fixture.artifacts,
+      WORKFLOW_ID: 'run-17',
     });
 
     expect(result.exitCode).toBe(0);
     expect(JSON.parse(stdout(result))).toMatchObject({ merged: true });
     expect(await Bun.file(ghLog).exists()).toBe(true);
+    // The confirmed merge is recorded for ticket-status (AK18h).
+    const merges = JSON.parse(
+      await readFile(join(fixture.artifacts, 'tracker', 'run-17', 'merges.json'), 'utf8')
+    ) as { url: string }[];
+    expect(merges.map(m => m.url)).toEqual([
+      (fixture.plan.pull_requests as Array<{ url: string }>)[0]?.url,
+    ]);
   });
 
   test('returns the live base between PRs and preserves it through the next iteration', async () => {

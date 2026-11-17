@@ -1,6 +1,6 @@
 # Dry-run fixture: an undeclared policy GitHub would not report reaches the agent
 # and the gate as unknown; the gate holds and no merge is attempted.
-tracker-guard: ""
+tracker-check: ""
 ci-policy:
   requirement: "unknown"
   source: ""
@@ -45,6 +45,8 @@ execute:
   queued: []
   prior_base_sha: ""
   summary: "merge is not authorized"
+merged-any: { count: "0" }
+ticket-status: "no merges"
 fixture:
   expect: completed
   reached: [ci-policy, assess, gate]

@@ -3,7 +3,8 @@ description: >-
   Assess an explicit bounded list of GitHub PRs, then merge eligible changes
   sequentially using gh and GitHub branch protection. A script reads the
   required-check policy and results; agents judge review and validation
-  evidence. No forge engine extension is required.
+  evidence. After the batch, one rollout (when a deploy command is set), then
+  the Jira tickets the merges name move as the loop moves its own.
 model: medium
 interactive: true
 mutates_checkout: false
@@ -41,12 +42,20 @@ inputs:
       root; `*` stays in one segment, `**` spans segments, a trailing `/` covers a
       directory. A match holds the PR: a human must make that change. Empty or
       "none" protects nothing.
+  deploy:
+    default: ""
+    description: >-
+      Optional trusted deployment command, forwarded to archon-deploy once after
+      the batch merged. Empty skips deployment.
+  health:
+    default: ""
+    description: Trusted health command for archon-deploy; required with deploy.
 returns: merge
 nodes:
-  # Jira does not reach this workflow yet (S4b): in a repository whose .archon/tracker.json
-  # names Jira this refuses the run before any agent spends. Every other node waits for it.
-  - id: tracker-guard
-    script: tracker-guard
+  # First node (AK18e): without .archon/tracker.json the run ends here, before any agent.
+  # It records the run's start, against which ticket-status confirms each merge.
+  - id: tracker-check
+    script: tracker-check
     runtime: bun
     mutates_checkout: false
 
@@ -54,7 +63,7 @@ nodes:
     script: ci-policy
     runtime: bun
     mutates_checkout: false
-    depends_on: [tracker-guard]
+    depends_on: [tracker-check]
     with:
       prs: "$INPUTS.prs"
       required_checks: "$INPUTS.required_checks"
@@ -84,7 +93,7 @@ nodes:
     script: path-policy
     runtime: bun
     mutates_checkout: false
-    depends_on: [tracker-guard]
+    depends_on: [tracker-check]
     with:
       prs: "$INPUTS.prs"
       protected_paths: "$INPUTS.protected_paths"
@@ -245,3 +254,33 @@ nodes:
               prior_base_sha: { type: string }
               summary: { type: string }
             required: [done, merged, urls, queued, prior_base_sha, summary]
+
+  # What the batch merged, from the run's state records (a failed merge fails the group, and
+  # a binding to a failed node fails the reader). Clears a deployment.md an agent may have left.
+  - id: merged-any
+    script: merged-any
+    runtime: bun
+    depends_on: [merge]
+    trigger_rule: all_done
+    output_format:
+      type: object
+      properties: { count: { type: string } }
+      required: [count]
+
+  # Merging is not shipping: one rollout after the batch (Grill G5), as the loop does after its merge.
+  - id: deploy
+    include: archon-deploy
+    depends_on: [merged-any]
+    when: "$merged-any.output.count != '0' && $INPUTS.deploy != ''"
+    with:
+      deploy: "$INPUTS.deploy"
+      health: "$INPUTS.health"
+      identity: ""
+
+  # The tickets the merges name, however the rollout ended (AK18h).
+  - id: ticket-status
+    script: ticket-status
+    runtime: bun
+    depends_on: [merged-any, deploy]
+    trigger_rule: all_done
+    when: "$INPUTS.mode != 'preview'"

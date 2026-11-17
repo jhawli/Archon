@@ -1,0 +1,58 @@
+# Dry-run fixture: the gate holds, nothing merges, so merged-any counts none, the rollout
+# is skipped even with a deploy command set, and ticket-status finds no merge to act on.
+tracker-check: ""
+ci-policy:
+  requirement: "unknown"
+  source: ""
+  checks: []
+  checks_state: "unknown"
+  results: []
+  reason: "GitHub did not report the required checks for example/app@main: rulesets (HTTP 403). Declare them with the required_checks input"
+path-policy:
+  state: "not_applicable"
+  patterns: []
+  heads: []
+  matches: []
+  reason: ""
+assess:
+  summary: "stub: review and validation verified"
+  eligible: true
+  method: "squash"
+  validation_verified: true
+  review_verified: true
+  plan_digest: "fixture"
+  holds: []
+publish-holds:
+  published: false
+  updated: []
+  summary: "stub: nothing to publish"
+gate:
+  ready: false
+  summary: "required CI policy is unknown: GitHub did not report the required checks"
+  method: "squash"
+  plan_digest: "fixture"
+refresh:
+  authorized: false
+  repository: "example/app"
+  number: 7
+  head_sha: "0123456789abcdef0123456789abcdef01234567"
+  method: "squash"
+  summary: "stub: gate not ready"
+execute:
+  done: true
+  merged: false
+  urls: []
+  queued: []
+  prior_base_sha: ""
+  summary: "merge is not authorized"
+merged-any: { count: "0" }
+ticket-status: "no merges"
+fixture:
+  expect: completed
+  reached: [gate, merged-any, ticket-status]
+  inputs:
+    prs: '["https://github.com/example/app/pull/7"]'
+    mode: "approve"
+    merge_method: "squash"
+    deploy: "true"
+    health: "true"

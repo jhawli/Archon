@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseAgentJson } from '../../.shared/agent-json.ts';
+import { runState } from '../../.shared/claims.ts';
+import { recordMerge } from '../../.shared/queue-status.ts';
 
 type JsonObject = Record<string, unknown>;
 type MergeMethod = keyof typeof methodFlags;
@@ -368,6 +370,9 @@ function execute(): void {
     state.mergedAt !== '' &&
     object(state.mergeCommit).oid !== undefined
   ) {
+    // For ticket-status (AK18h): only a merge GitHub confirmed, never a pull request only queued.
+    const oid = object(state.mergeCommit).oid;
+    recordMerge(runState(), { url, mergedAt: state.mergedAt, mergeCommit: typeof oid === 'string' ? oid : '' });
     const completed = [...urls, url];
     const base = current.value.base;
     const baseReadback =

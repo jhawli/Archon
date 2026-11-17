@@ -1,7 +1,7 @@
 # Dry-run fixture: the scripted protected-path policy finds a governance file in
 # the PR, the assess agent is told which files and that a human must make the
 # change, and the gate (which reads the same output) holds; nothing merges.
-tracker-guard: ""
+tracker-check: ""
 ci-policy:
   requirement: "required"
   source: "declared"
@@ -59,6 +59,8 @@ execute:
   queued: []
   prior_base_sha: ""
   summary: "merge is not authorized"
+merged-any: { count: "0" }
+ticket-status: "no merges"
 fixture:
   expect: completed
   reached: [ci-policy, path-policy, assess, gate]

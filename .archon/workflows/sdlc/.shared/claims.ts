@@ -243,9 +243,14 @@ export function recordLap(state: string, facts: LapFacts): void {
   writeJson(join(state, 'lap.json'), facts);
 }
 
+/** Removes a `deployment.md` an agent may have left: only the deploy block after the caller writes one. */
+export function clearDeployment(artifacts: string): void {
+  rmSync(deploymentFile(artifacts), { force: true });
+}
+
 /** land's record: after it no agent runs, so it also clears a `deployment.md` an agent may have left. */
 export function recordLanding(state: string, artifacts: string, facts: LapFacts): void {
-  rmSync(deploymentFile(artifacts), { force: true });
+  clearDeployment(artifacts);
   recordLap(state, facts);
 }
 
@@ -278,7 +283,8 @@ export function recordFinished(state: string, marker: string, key: string): void
   writeJson(join(state, 'finished.json'), { ...readFinished(state), [marker]: key });
 }
 
-function deployedFact(artifacts: string): string {
+/** `true` when the deploy block confirmed the rollout, `false` when it did not, '' without a rollout. */
+export function deployedFact(artifacts: string): string {
   const path = deploymentFile(artifacts);
   if (!existsSync(path)) return '';
   return /^- deployed: True$/m.test(readFileSync(path, 'utf8')) ? 'true' : 'false';
