@@ -10,7 +10,7 @@ import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
 import { deployedFact, type PrView, runState, statusName } from '../../.shared/claims.ts';
 import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
 import { queueStatus, readMerges, readStart } from '../../.shared/queue-status.ts';
-import { runLine } from '../../.shared/questions.ts';
+import { askedBefore, runLine } from '../../.shared/questions.ts';
 import { prKeys } from '../../.shared/tickets.ts';
 
 const run = trimmed(process.env.WORKFLOW_ID);
@@ -49,13 +49,15 @@ if (merges.length === 0) {
     try {
       const current = tickets.get(move.key) ?? '';
       if (move.status !== null && move.status !== current) await jira.move(move.key, move.status);
+      if (move.status !== null) tickets.set(move.key, move.status);
       const name = statusName(move.status ?? current, config.status);
-      // Once per run and pull request: this node may run again.
+      // Once per run and pull request, the question once per run: this node may run again.
+      const comments = await jira.comments(move.key);
       const head = `Merge-Queue: Lauf ${run}. PR: ${move.pr}.`;
-      if (!(await jira.comments(move.key)).some(comment => comment.body.startsWith(head))) {
+      if (!comments.some(comment => comment.body.startsWith(head))) {
         await jira.comment(move.key, `${head} Status: ${name}.\n\n${line}`);
       }
-      if (move.ask !== null) await jira.ask(move.key, `${move.ask}\n\n${line}`);
+      if (move.ask !== null && !askedBefore(comments, move.ask, line, config)) await jira.ask(move.key, `${move.ask}\n\n${line}`);
       lines.push(`${move.key}: ${name}${move.ask !== null ? ', asked the owner' : ''}`);
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);

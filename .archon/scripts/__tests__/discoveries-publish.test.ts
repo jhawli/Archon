@@ -24,6 +24,13 @@ describe('AK18g: findings in Jira', () => {
     expect(calls.filter(c => c.method === 'PUT')).toHaveLength(0);
     expect(calls.filter(c => c.method === 'POST' && c.path === '/rest/api/3/issue')).toHaveLength(0);
   });
+  it('a rerun after the comment was written: the same evidence is not posted twice', async () => {
+    const before = { id: 7, author: CFG.assignee, body: 'Neuer Beleg: Die App stürzt ab, wenn der Barcode leer ist.\nBeleg: app/scan.swift:41\n\nLauf: archon archon-discoveries r1', created: '2026-11-17T10:00:00.000+0000' };
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-40': { status: CFG.status.todo, comments: [before] } } });
+    const r = await publishDiscoveries(jira, [finding({ classification: 'update-existing', target_item: { key: 'CONC-40' } })], true, snap, state(), RUN);
+    expect(calls.filter(c => c.method === 'POST')).toHaveLength(0);
+    expect(r.existing).toEqual(['CONC-40']);
+  });
   it('Jira did not answer during the search: nothing written, "nicht geprüft"', async () => {
     const { jira, calls } = fakeJira();
     const r = await publishDiscoveries(jira, [finding()], false, snap, state(), RUN);

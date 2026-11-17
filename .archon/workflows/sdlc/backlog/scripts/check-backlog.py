@@ -50,7 +50,7 @@ def main() -> int:
             if not isinstance(value, str) or not value.strip():
                 fail(f"ticket {index} needs a non-empty string '{field}'")
         key = ticket["key"]
-        if not KEY.match(key):
+        if not KEY.fullmatch(key):
             fail(f"ticket {index} key '{key}' must be a lowercase slug")
         if key in seen:
             fail(f"duplicate key '{key}'")

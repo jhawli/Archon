@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mayPublish, publishBacklog } from '../../workflows/sdlc/.shared/backlog-publish';
+import { backlogMarker, mayPublish, publishBacklog } from '../../workflows/sdlc/.shared/backlog-publish';
 import { CFG, fakeJira, state } from './jira-fixtures';
 
 const RUN = 'https://example.atlassian.net/jira/software/projects/CONC/boards/5';
@@ -29,7 +29,7 @@ describe('AK18f: the backlog is filed in Jira', () => {
   });
   it('the same title from the same document counts as existing, even under another slug', async () => {
     const { jira, calls } = fakeJira();
-    const snapshot = { 'CONC-60': { status: CFG.status.todo, title: 'A Kernweg', own: 'backlog-s4b-backlog-a-kern' } };
+    const snapshot = { 'CONC-60': { status: CFG.status.todo, title: 'A Kernweg', own: backlogMarker(doc, 'a-kern') } };
     const result = await publishBacklog(jira, sliced.slice(0, 1), doc, snapshot, state(), RUN);
     expect(result.existing).toEqual(['CONC-60']);
     expect(calls.filter(c => c.method === 'POST' && c.path === '/rest/api/3/issue')).toHaveLength(0);
@@ -39,6 +39,20 @@ describe('AK18f: the backlog is filed in Jira', () => {
     const bad = [{ ...core, body: `Julian: ${'x'.repeat(130)}` }];
     const error = await publishBacklog(jira, bad, doc, {}, state(), RUN).then(() => null, (e: unknown) => (e as Error).message);
     expect(error).toContain('reserved');
+    expect(calls).toHaveLength(0);
+  });
+  it('another document with the same file name, or the same first 16 letters, is not this one', async () => {
+    expect(backlogMarker('docs/feature-concept-a.md', 'a-core')).not.toBe(backlogMarker('docs/feature-concept-b.md', 'a-core'));
+    const { jira, calls } = fakeJira();
+    const snapshot = { 'CONC-60': { status: CFG.status.todo, title: 'A Kernweg', own: backlogMarker('Ideas/a/PRD.md', 'a-core') } };
+    const result = await publishBacklog(jira, sliced.slice(0, 1), 'Ideas/b/PRD.md', snapshot, state(), RUN);
+    expect(result.created).toEqual(['CONC-51']);
+    expect(calls.filter(c => c.method === 'POST' && c.path === '/rest/api/3/issue')).toHaveLength(1);
+  });
+  it('a key with a line break never reaches a marker', async () => {
+    const { jira, calls } = fakeJira();
+    const error = await publishBacklog(jira, [{ ...core, key: 'a-core\n' }], doc, {}, state(), RUN).then(() => null, (e: unknown) => (e as Error).message);
+    expect(error).toContain('key');
     expect(calls).toHaveLength(0);
   });
 });

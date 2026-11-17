@@ -28,6 +28,10 @@ describe('AK18h: the merge queue moves tickets like the loop, after one rollout'
   it('held: no merge recorded, no ticket touched', () => {
     expect(queueStatus([], false, new Map(), onReview, START, CFG)).toEqual([]);
   });
+  it('two merged pull requests name the same ticket: it moves once, the second sees it on Staging', () => {
+    const moves = queueStatus([{ url: PR }, { url: PR2 }], true, new Map([[PR, view()], [PR2, view({ title: 'CONC-12 Rest', mergedAt: '2026-11-20T10:07:00Z' })]]), onReview, START, CFG);
+    expect(moves.map(m => [m.key, m.status])).toEqual([['CONC-12', CFG.status.staging], ['CONC-12', null]]);
+  });
   it('a ticket on To Do (a session’s) is listed, not moved', () => {
     const r = queueStatus([{ url: PR }], true, new Map([[PR, view()]]), new Map([['CONC-12', CFG.status.todo]]), START, CFG)[0];
     expect(r?.key).toBe('CONC-12');

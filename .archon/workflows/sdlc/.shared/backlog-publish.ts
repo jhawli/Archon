@@ -6,7 +6,7 @@
  * run become `Depends on: CONC-n`; check-backlog.py lets a ticket depend only on earlier ones.
  */
 import { createHash } from 'node:crypto';
-import { basename, extname } from 'node:path';
+import { basename, extname, posix } from 'node:path';
 import type { Snapshot } from './board-all.ts';
 import type { Jira } from './jira.ts';
 import { createTicket } from './outbox.ts';
@@ -20,9 +20,18 @@ export function mayPublish(mode: string, approval: unknown): boolean {
   return mode === 'approve' && typeof approval === 'object' && approval !== null && (approval as { decision?: unknown }).decision === 'approve';
 }
 
+/**
+ * The document's part of a marker: up to 16 letters of its name, readable, and a hash of its
+ * whole path, so `Ideas/a/PRD.md` and `Ideas/b/PRD.md`, or two names alike in their first 16
+ * letters, never share markers (nor `backlog-prd-` the tickets of `prd-extra`).
+ */
 export function documentSlug(path: string): string {
-  return basename(path, extname(path)).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 16) || 'prd';
+  const name = basename(path, extname(path)).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 16).replace(/^-+|-+$/g, '') || 'prd';
+  return `${name}-${createHash('sha256').update(posix.normalize(path.replaceAll('\\', '/'))).digest('hex').slice(0, 6)}`;
 }
+
+/** check-backlog.py's key; checked again here, since a marker goes into a Jira query. */
+const KEY = /^[a-z0-9][a-z0-9-]{1,60}$/;
 
 export function backlogMarker(doc: string, key: string): string {
   const marker = `backlog-${documentSlug(doc)}-${key}`;
@@ -35,6 +44,7 @@ export async function publishBacklog(
   jira: Jira, tickets: readonly Sliced[], doc: string, snapshot: Readonly<Record<string, Snapshot>>, state: string, runUrl: string
 ): Promise<{ created: string[]; existing: string[] }> {
   for (const t of tickets) {
+    if (!KEY.test(t.key)) throw new Error(`backlog ticket ${JSON.stringify(t.key)}: key must be lowercase letters, digits and dashes`);
     if ([t.title, t.phase, t.body].some(reservedText)) throw new Error(`backlog ticket ${t.key}: text opens like a loop record or the owner, which is reserved`);
   }
   const prefix = `backlog-${documentSlug(doc)}-`;

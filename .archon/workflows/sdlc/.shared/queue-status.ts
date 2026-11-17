@@ -54,15 +54,18 @@ export function queueStatus(
   config: TrackerConfig
 ): QueueMove[] {
   const moves: QueueMove[] = [];
+  // Each move carries forward: a second pull request naming the same ticket sees it where the first left it.
+  const now = new Map(tickets);
   for (const { url } of merges) {
     const view = views.get(url) ?? null;
     for (const key of view === null ? [] : prKeys(view, config.project)) {
-      const current = tickets.get(key);
+      const current = now.get(key);
       if (current === undefined) continue;
       const lap = { pr: url, landed: 'merged', deployed: deployed ? 'true' : 'false', delivers: '', created: {} };
       const confirmed = confirmMerge(lap, view, key, startedAt, config.project);
       const decided = finalStatus(key, current, confirmed, config.status);
       const doubt = confirmed.landed !== 'merged' && decided.status !== null;
+      if (decided.status !== null) now.set(key, decided.status);
       moves.push({
         key,
         pr: url,

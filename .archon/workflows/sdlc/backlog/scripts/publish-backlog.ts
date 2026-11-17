@@ -5,7 +5,7 @@
  * ticket keys, a summary; the list also goes to `backlog-publication.md`.
  */
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { mayPublish, publishBacklog, type Sliced } from '../../.shared/backlog-publish.ts';
 import { snapshotAll } from '../../.shared/board-all.ts';
 import { runState } from '../../.shared/claims.ts';
@@ -32,7 +32,9 @@ if (!mayPublish(mode, nullableJson(process.env.INPUTS_APPROVAL))) {
     depends_on: Array.isArray(t.depends_on) ? t.depends_on.map(str) : [],
   }));
   const boardUrl = `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;
-  const { created, existing } = await publishBacklog(new Jira(config), tickets, trimmed(process.env.INPUTS_PRD), snapshotAll(state), state, boardUrl);
+  // The document as read-prd.py admitted it, relative to the checkout: `./x.md` and `x.md` are one document.
+  const doc = relative(process.cwd(), resolve(process.cwd(), trimmed(process.env.INPUTS_PRD)));
+  const { created, existing } = await publishBacklog(new Jira(config), tickets, doc, snapshotAll(state), state, boardUrl);
   const summary = `${created.length} angelegt (${created.join(', ') || 'keins'}), ${existing.length} schon da (${existing.join(', ') || 'keins'})`;
   writeFileSync(join(artifacts, 'backlog-publication.md'), `# Backlog in Jira\n\n${summary}\n`);
   emit({ published: true, created, existing, summary });

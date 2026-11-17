@@ -31,7 +31,7 @@ import {
   workItem,
 } from '../../.shared/claims.ts';
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
-import { runLine } from '../../.shared/questions.ts';
+import { askedBefore, runLine } from '../../.shared/questions.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
@@ -111,7 +111,10 @@ try {
   if (!said) {
     await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.\n\n${line}`);
   }
-  if (result.ask !== null) await jira.ask(item.key, `${result.ask}\n\n${line}`);
+  // Once per run as well: a second `@` mention would mail the owner twice.
+  if (result.ask !== null && !askedBefore(await jira.comments(item.key), result.ask, line, config)) {
+    await jira.ask(item.key, `${result.ask}\n\n${line}`);
+  }
   const unconfirmed = doubt ? ', merge not confirmed by GitHub' : '';
   lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}`);
   if (freeError !== undefined) throw freeError;

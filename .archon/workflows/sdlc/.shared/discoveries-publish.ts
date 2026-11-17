@@ -61,7 +61,14 @@ export async function publishDiscoveries(
         result.skipped.push(`${key}: nicht mehr offen, kein Kommentar`);
         continue;
       }
-      await jira.comment(key, `Neuer Beleg: ${p.public_summary}\nBeleg: ${p.evidence.join(', ')}\n\n${line}`);
+      // A rerun (this node again, or the same report once more) posts the same evidence once.
+      const head = `Neuer Beleg: ${p.public_summary}`;
+      const proof = `Beleg: ${p.evidence.join(', ')}`;
+      if ((await jira.comments(key)).some(c => c.body.trimStart().startsWith(head) && c.body.includes(proof))) {
+        result.existing.push(key);
+        continue;
+      }
+      await jira.comment(key, `${head}\n${proof}\n\n${line}`);
       result.commented.push(key);
     }
   }

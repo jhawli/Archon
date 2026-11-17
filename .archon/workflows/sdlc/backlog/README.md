@@ -25,7 +25,5 @@ document with the same title, counts as existing, so re-running on the same
 document never duplicates the backlog. Without `.archon/tracker.json` the first
 node (`tracker-read`) refuses the run before any agent.
 
-After publication, a caller may feed tickets to `archon-triage`, `archon-ship`, or
-the optional `archon-lifecycle` composition. Automatic lifecycle intake requires
-an explicit state-label mapping so the caller, rather than this pack, owns what
-counts as previously touched.
+After publication the tickets sit in the active sprint on To Do, where
+`archon-loop` takes them up in sprint order (and waits on `Depends on:`).
