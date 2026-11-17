@@ -83,6 +83,11 @@ describe('AK18i: lifting a flag', () => {
 });
 
 describe('a question the default or a new flag settled', () => {
+  it('a flag note before the answer is not a new hold: the answer still counts', () => {
+    const q = asked([c(11, ARCHON, PRODUCT), c(12, JULIAN, ':flag_on: Flag added'), c(13, JULIAN, 'Hinweis zeigen')]);
+    expect(q.reflagged).toBe(false);
+    expect(mayUnflag(q)).toBe(true);
+  });
   it('an applied default closes the question: no second default', () => {
     const q = asked([c(10, ARCHON, TECH), c(14, ARCHON, `Vorgabe angewendet: Cache beim Start leeren\n\nkeine Antwort\n\n${runLine('archon-manager', 'run2')}`, MON_10 + 25 * H)]);
     expect(q.applied).toBe(true);

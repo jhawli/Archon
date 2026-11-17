@@ -314,7 +314,9 @@ export async function applyManagerOps(
     }
     cursor.keep(index + 1, false);
   }
-  cursor.clear();
+  // Kept, not cleared: manager-write may run again on the same outbox (it removes the file only
+  // after the run actions), and a cleared cursor would write the whole list a second time.
+  cursor.keep(ops.length, false);
   return created;
 }
 

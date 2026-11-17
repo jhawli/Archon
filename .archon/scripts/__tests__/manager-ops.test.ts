@@ -156,6 +156,15 @@ describe('AK18i to AK18m: what the manager writes, and in which order', () => {
     expect(again.error).toBeNull();
     expect(writes(again.calls).map(c => `${c.method} ${c.path}`)).toEqual(['POST /rest/api/3/issue/CONC-9/comment']);
   });
+  it('a rerun after the whole list was written writes nothing again', async () => {
+    const raw = [{ op: 'comment', key: 'CONC-9', text: 'Hinweis' }, { op: 'ask', key: 'CONC-9', text: 'A oder B?', kind: 'produkt', options: ['A', 'B'], recommendation: 'A' }];
+    const tickets = { 'CONC-9': { status: S.todo } };
+    const st = state();
+    expect((await pass(raw, tickets, {}, st)).error).toBeNull();
+    const again = await pass(raw, tickets, {}, st);
+    expect(again.error).toBeNull();
+    expect(writes(again.calls)).toHaveLength(0);
+  });
   it('ask (AK18j): the flag, then the question with the mention, its kind and when the default is due', async () => {
     const { calls, error } = await pass([{ op: 'ask', key: 'CONC-5', text: 'Leere Liste ausblenden oder Hinweis?', kind: 'technisch', fallback: 'Hinweis zeigen', options: ['Ausblenden', 'Hinweis zeigen'], recommendation: 'Hinweis zeigen' }], { 'CONC-5': { status: S.todo } });
     expect(error).toBeNull();

@@ -60,7 +60,7 @@ function status(id: string, config: TrackerConfig): string {
   return name.startsWith('status ') ? `New oder anderer (${id})` : name;
 }
 
-function questionLine(q: Question | null, now: number): string {
+function questionLine(q: Question | null, now: number, flagged: boolean): string {
   if (q === null) return 'keine';
   const state = q.reflagged
     ? 'danach erneut markiert, ohne neue Frage'
@@ -68,7 +68,7 @@ function questionLine(q: Question | null, now: number): string {
       ? `beantwortet (Kommentar ${q.answer.id})`
       : q.applied
         ? 'Vorgabe angewendet'
-        : defaultDue(q, now)
+        : flagged && defaultDue(q, now)
           ? 'offen, Vorgabe fällig'
           : 'offen';
   return `Kommentar ${q.comment.id}, ${q.kind === 'ohne' ? 'ohne Art' : q.kind}, von ${q.byRun ? 'einem Lauf' : 'einer Session'}, ${state}`;
@@ -100,7 +100,7 @@ export function boardAllMarkdown(all: BoardAll, now: number, config: TrackerConf
       `Herkunft: ${marker === undefined ? 'Julian' : `eigen (${marker})`}`,
       `Labels: ${t.labels.length > 0 ? t.labels.join(', ') : 'keine'}`,
       `Flagged: ${t.flagged ? 'ja' : 'nein'}`,
-      `Frage: ${questionLine(lastQuestion(rows, config), now)}`,
+      `Frage: ${questionLine(lastQuestion(rows, config), now, t.flagged)}`,
       `Manager darf: ${RIGHTS_TEXT[rights(t.status, config.status)]}`,
       ''
     );

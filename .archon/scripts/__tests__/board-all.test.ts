@@ -65,6 +65,19 @@ describe('board-all.md', () => {
     expect([kept['CONC-7']?.answered, kept['CONC-8']?.answered, kept['CONC-9']?.answered, kept['CONC-10']?.answered]).toEqual([true, undefined, undefined, undefined]);
     expect(boardAllMarkdown(all, NOW, CFG)).toContain('Beantwortet, diesen Durchgang umsetzen: CONC-7');
   });
+  it('a due default shows only on a flagged ticket: without the flag there is nothing to apply', () => {
+    const tech = '@Julian Frage (technisch, Vorgabe ab 2026-11-17 10:00 UTC): Cache leeren?\nVorgabe: leeren\n\nLauf: archon archon-manager r1';
+    const c = (key: string): TicketComment => ({ id: 1, body: tech, created: '2026-11-16T10:00:00.000Z', createdAt: Date.parse('2026-11-16T10:00:00.000Z'), author: CFG.assignee, url: `u/${key}` });
+    const all: BoardAll = {
+      tickets: [t('CONC-20', CFG.status.todo, true, { flagged: true }), t('CONC-21', CFG.status.todo, true, { flagged: false })],
+      comments: new Map([['CONC-20', [c('CONC-20')]], ['CONC-21', [c('CONC-21')]]]),
+      own: new Map(),
+    };
+    const md = boardAllMarkdown(all, NOW, CFG);
+    const block = (key: string): string => md.slice(md.indexOf(`## ${key} `)).split('\n## ')[0] ?? '';
+    expect(block('CONC-20')).toContain('Vorgabe fällig');
+    expect(block('CONC-21')).not.toContain('Vorgabe fällig');
+  });
   it('a snapshot whose answered is not true is refused', () => {
     const state = mkdtempSync(join(tmpdir(), 'state-'));
     writeFileSync(join(state, 'keys-all.json'), JSON.stringify({ 'CONC-5': { status: '1', title: 'x', own: '', answered: false } }));
