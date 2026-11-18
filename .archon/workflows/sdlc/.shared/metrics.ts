@@ -29,7 +29,7 @@ export function checkMetrics(raw: unknown): Metrics {
   const holdouts = typeof r.holdouts === 'string' ? r.holdouts.trim() : '';
   if (!PASS_LINE.test(line)) throw new Error(`the metrics line does not have the agreed form: ${line.slice(0, 120)}`);
   if (holdouts !== '' && !HOLDOUT_DRAFT.test(holdouts)) {
-    throw new Error(`the holdout line may hold only ids, results and ticket keys: ${holdouts.slice(0, 120)}`);
+    throw new Error(`the holdout line may hold only ids, results and ticket keys (or this pass's mgr- markers): ${holdouts.slice(0, 120)}`);
   }
   return { line, holdouts };
 }

@@ -101,8 +101,9 @@ export function parseManagerOutbox(raw: unknown, project: string): { ops: Manage
         // `createTicket` writes the line `Loop finding: <marker>` itself: an agent's copy of it goes,
         // and another marker's line refuses (it would make the ticket read as that marker's).
         const own = `Loop finding: ${e.marker}`;
-        const lead = typeof e.text === 'string' ? e.text.trimStart() : '';
-        const body = lead === own || lead.startsWith(`${own}\n`) ? lead.slice(own.length) : e.text;
+        // Every leading copy goes, also with trailing blanks or `\r\n`.
+        const copy = new RegExp(`^(?:\\s*${own}[ \\t]*(?:\\r?\\n|$))+`);
+        const body = typeof e.text === 'string' ? e.text.replace(copy, '') : e.text;
         if (typeof body === 'string' && body.trimStart().startsWith('Loop finding:')) throw new Error(`${where}: text opens with a Loop finding line; the script writes ${own} itself`);
         const op = { op: 'create' as const, marker: e.marker, title, text: words({ text: body }, 'text', where), ask: e.ask === undefined ? null : askSpec(e.ask, where), top: e.top === true };
         if ((creates += 1) > MANAGER_CAP) dropped.push(`create ${op.marker} „${title}“`);

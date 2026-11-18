@@ -97,6 +97,12 @@ describe('questions and caps in the outbox', () => {
     expect(parseManagerOutbox(create('Loop finding: mgr-leere-liste\n\nWas ein Nutzer sieht'), 'CONC').ops[0]).toMatchObject({ op: 'create', text: 'Was ein Nutzer sieht' });
     expect(() => parseManagerOutbox(create('Loop finding: mgr-andere-liste\n\nText'), 'CONC')).toThrow('Loop finding');
     expect(() => parseManagerOutbox(create('Loop finding: mgr-leere-liste'), 'CONC')).toThrow('empty');
+    const text = (lead: string): string => {
+      try { return JSON.stringify(parseManagerOutbox(create(`${lead}Was ein Nutzer sieht`), 'CONC').ops[0]); } catch (e) { return (e as Error).message; }
+    };
+    for (const lead of ['Loop finding: mgr-leere-liste\r\n\r\n', 'Loop finding: mgr-leere-liste \n', 'Loop finding: mgr-leere-liste\nLoop finding: mgr-leere-liste\n\n']) {
+      expect(text(lead)).toContain('"text":"Was ein Nutzer sieht"');
+    }
   });
   it('six rewrites (AK18i): five pass, the sixth is dropped and named', () => {
     const raw = [5, 6, 7, 8, 9, 10].map(n => ({ op: 'rewrite', key: `CONC-${n}`, text: 'neu', reason: 'klarer' }));
