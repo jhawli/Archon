@@ -13,14 +13,16 @@
  * canceled by hand included.
  */
 import { CLAIM_PREFIX } from './claims.ts';
-import type { Family, Jira, TicketComment, TrackerConfig } from './jira.ts';
+import { doneStatuses, type Family, type Jira, type TicketComment, type TrackerConfig } from './jira.ts';
 
 /** The record of a parent waiting for its sub-tasks; agents may not write it (`reservedText`). */
 export const WAIT_PREFIX = 'Loop wait: ';
+/** The record that the wait is over (the parent went to Staging); a later In Progress is not a wait. */
+export const WAIT_ENDED_PREFIX = 'Loop wait ended: ';
 
 /** Sub-tasks that keep their parent from Staging: any not on Staging, Live or Canceled. */
 export function openChildren(family: Family, s: TrackerConfig['status']): string[] {
-  const done = new Set([s.staging, s.live, s.canceled]);
+  const done = doneStatuses(s);
   return family.children.filter(child => !done.has(child.status)).map(child => child.key);
 }
 
@@ -36,8 +38,7 @@ export async function restParent(jira: Jira, key: string): Promise<string | null
   if (target === null) return null;
   const family = target === key ? own : await jira.family(target);
   if (family.subtask) return null;
-  const closed = new Set([s.staging, s.live, s.canceled]);
-  return family.activeSprint && !closed.has(family.status) ? target : null;
+  return family.activeSprint && !doneStatuses(s).has(family.status) ? target : null;
 }
 
 export function waitText(keys: readonly string[]): string {
@@ -46,11 +47,14 @@ export function waitText(keys: readonly string[]): string {
 
 /**
  * Whether the ticket's latest loop record says it waits for its sub-tasks. A live claim after
- * it means a lap took the ticket up again; a released claim no longer reads as one.
+ * it means a lap took the ticket up again (a released claim no longer reads as one), and a
+ * `Loop wait ended:` means the wait is over: a ticket set back to In Progress later is not waiting.
  */
 export function waiting(comments: readonly TicketComment[], config: TrackerConfig): boolean {
   const records = comments.filter(
-    comment => comment.author === config.assignee && (comment.body.startsWith(WAIT_PREFIX) || comment.body.startsWith(CLAIM_PREFIX))
+    comment =>
+      comment.author === config.assignee &&
+      [WAIT_PREFIX, WAIT_ENDED_PREFIX, CLAIM_PREFIX].some(prefix => comment.body.startsWith(prefix))
   );
   return records.at(-1)?.body.startsWith(WAIT_PREFIX) ?? false;
 }
@@ -68,7 +72,7 @@ export async function promoteParent(jira: Jira, key: string, line: string): Prom
   if (!waiting(await jira.comments(key), jira.config)) return null;
   await jira.move(key, s.staging);
   const children = family.children.map(child => child.key).join(', ');
-  await jira.comment(key, `Alle Subtickets (${children}) stehen auf Staging, Live oder Canceled: ${key} geht auf Staging.\n\n${line}`);
+  await jira.comment(key, `${WAIT_ENDED_PREFIX}alle Subtickets (${children}) stehen auf Staging, Live oder Canceled: ${key} geht auf Staging.\n\n${line}`);
   return `${key}: Staging, its sub-tasks are done`;
 }
 

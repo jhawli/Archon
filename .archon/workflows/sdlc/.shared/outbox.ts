@@ -12,7 +12,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, restMarker, statusName } from './claims.ts';
 import { note } from './io.ts';
-import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
+import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
 import { reservedQuestion, reservedText } from './questions.ts';
 import { restParent } from './subtickets.ts';
 import { namesTicket, prKeys } from './tickets.ts';
@@ -251,7 +251,7 @@ export function prRefusal(
   if (!namesTicket(pr, target, config.project)) {
     return `the pull request does not name ${target}`;
   }
-  const done = new Set([config.status.staging, config.status.live, config.status.canceled]);
+  const done = doneStatuses(config.status);
   const foreign = prKeys(pr, config.project).filter(
     key => key !== target && !writable.has(key) && !done.has(statuses.get(key) ?? '')
   );
@@ -270,6 +270,7 @@ export async function lapLink(jira: Jira, target: string | null, marker: string)
   if (marker === restMarker(target)) {
     const parent = await restParent(jira, target);
     if (parent !== null) return { parent };
+    note(`${marker}: ${target} (or its parent) is not open in the active sprint, so the rest is a ticket of its own that relates to ${target}, not a sub-task.`);
   }
   return { relates: [target] };
 }

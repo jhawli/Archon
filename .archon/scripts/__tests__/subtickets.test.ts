@@ -2,7 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import { applyOutbox, type Op } from '../../workflows/sdlc/.shared/outbox';
 import { queueStatus } from '../../workflows/sdlc/.shared/queue-status';
 import { reservedText, runLine } from '../../workflows/sdlc/.shared/questions';
-import { promoteParent, restParent, sweepWaiting, WAIT_PREFIX, waitText } from '../../workflows/sdlc/.shared/subtickets';
+import {
+  promoteParent,
+  restParent,
+  sweepWaiting,
+  WAIT_ENDED_PREFIX,
+  WAIT_PREFIX,
+  waiting,
+  waitText,
+} from '../../workflows/sdlc/.shared/subtickets';
 import { type Call, CFG, type FakeComment, type FakeTicket, fakeJira, state } from './jira-fixtures';
 
 const S = CFG.status;
@@ -139,6 +147,19 @@ describe('the waiting parent goes to Staging when its sub-tasks are done', () =>
       expect(steps(calls).some(step => step.startsWith('POST'))).toBe(false);
     }
   });
+  it('a wait that ended (the parent went to Staging) does not count again when the ticket is set back to In Progress', async () => {
+    const comments = [at(1, waitText(['CONC-51'])), at(2, `${WAIT_ENDED_PREFIX}alle Subtickets fertig`)];
+    const { jira, calls } = fakeJira({ tickets: waitingParent(comments) });
+    expect(await promoteParent(jira, 'CONC-5', LINE)).toBeNull();
+    expect(steps(calls).some(step => step.startsWith('POST'))).toBe(false);
+    expect(waiting(comments.map(c => ({ ...c, createdAt: 0, url: '' })), CFG)).toBe(false);
+  });
+  it('the comment that moves the parent ends the wait', async () => {
+    const { jira, calls } = fakeJira({ tickets: waitingParent([at(1, waitText(['CONC-51']))]) });
+    await promoteParent(jira, 'CONC-5', LINE);
+    const said = calls.find(call => call.method === 'POST' && call.path.endsWith('/comment'));
+    expect(JSON.stringify(said?.body)).toContain(WAIT_ENDED_PREFIX.trim());
+  });
   it('a released claim after the wait no longer counts as one', async () => {
     const { jira } = fakeJira({ tickets: waitingParent([at(1, waitText(['CONC-51'])), at(2, 'Loop claim released: run r2 ended.')]) });
     expect(await promoteParent(jira, 'CONC-5', LINE)).not.toBeNull();
@@ -163,6 +184,7 @@ describe('the wait record is the scripts’ own', () => {
   it('an agent may not write a comment that opens like it', () => {
     expect(reservedText(waitText(['CONC-51']))).toBe(true);
     expect(reservedText(`${WAIT_PREFIX}x`)).toBe(true);
+    expect(reservedText(`${WAIT_ENDED_PREFIX}x`)).toBe(true);
     expect(reservedText('Wartet auf CONC-51')).toBe(false);
   });
 });

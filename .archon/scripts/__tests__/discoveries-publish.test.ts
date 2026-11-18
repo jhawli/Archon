@@ -43,6 +43,20 @@ describe('AK18g: findings in Jira', () => {
       .then(() => null, (e: unknown) => (e as Error).message);
     expect(error).toContain('CONC-999');
   });
+  it('a key that is only a name on every object (constructor) is refused before anything is written', async () => {
+    const { jira, calls } = fakeJira();
+    const error = await publishDiscoveries(jira, [finding({ related_items: [{ key: 'constructor' }] })], true, snap, state(), RUN)
+      .then(() => null, (e: unknown) => (e as Error).message);
+    expect(error).toContain('constructor is not on the board');
+    expect(calls).toHaveLength(0);
+  });
+  it('a new finding relates to each ticket it names (VAULT-22)', async () => {
+    const { jira, calls } = fakeJira({ sprint: 36 });
+    await publishDiscoveries(jira, [finding()], true, snap, state(), RUN);
+    expect(calls.find(c => c.path === '/rest/api/3/issueLink')?.body).toEqual({
+      type: { name: 'Relates' }, inwardIssue: { key: 'CONC-51' }, outwardIssue: { key: 'CONC-12' },
+    });
+  });
   it('a target that is no longer open gets no comment', async () => {
     const { jira, calls } = fakeJira({ tickets: { 'CONC-12': { status: CFG.status.live } } });
     const r = await publishDiscoveries(jira, [finding({ classification: 'update-existing', target_item: { key: 'CONC-12' } })], true, snap, state(), RUN);

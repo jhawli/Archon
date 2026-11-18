@@ -34,7 +34,7 @@ export function questionText(kind: QuestionKind, text: string, fallback: string,
 export function reservedText(text: string): boolean {
   const t = text.trimStart();
   return (
-    /^Loop (claim|result|review|wait):/.test(t) ||
+    /^Loop (claim|result|review|wait|wait ended):/.test(t) ||
     t.startsWith('@') ||
     t.startsWith('Julian:') ||
     t.startsWith('Vorgabe angewendet:') ||

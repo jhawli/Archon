@@ -5,7 +5,7 @@
  * and labels untouched. Nothing is written when the ticket search was incomplete.
  */
 import type { Snapshot } from './board-all.ts';
-import type { Jira } from './jira.ts';
+import { doneStatuses, type Jira } from './jira.ts';
 import { createTicket } from './outbox.ts';
 import { reservedText, runLine } from './questions.ts';
 
@@ -37,11 +37,12 @@ export async function publishDiscoveries(
     if (p.actionable && p.classification === 'new' && (p.marker === null || !MARKER.test(p.marker))) throw new Error(`finding ${i}: marker must be disc- and 16 hex digits`);
     // A pull request carries no key: only tickets are checked against the board.
     const named = [p.target_item, ...p.related_items].flatMap(ref => (ref === null || ref.key === '' ? [] : [ref.key]));
-    const unknown = named.find(key => snapshot[key] === undefined);
+    // Own keys only: `constructor` must not pass for a ticket and reach a link call.
+    const unknown = named.find(key => !Object.hasOwn(snapshot, key));
     if (unknown !== undefined) throw new Error(`finding ${i}: ${unknown} is not on the board`);
   }
   const s = jira.config.status;
-  const closed = new Set([s.staging, s.live, s.canceled]);
+  const closed = doneStatuses(s);
   const line = runLine('archon-discoveries', process.env.WORKFLOW_ID ?? '');
   for (const p of proposals) {
     if (!p.actionable) continue;

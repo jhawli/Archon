@@ -33,6 +33,14 @@ export interface TrackerConfig {
   readonly sprintField: string;
 }
 
+/**
+ * The statuses past the work: delivered (Staging, Live) or canceled. Jira's sub-task blocking
+ * condition on the Staging transition of the board workflow names the same three (VAULT-22).
+ */
+export function doneStatuses(s: TrackerConfig['status']): ReadonlySet<string> {
+  return new Set([s.staging, s.live, s.canceled]);
+}
+
 type Json = Record<string, unknown>;
 
 function obj(value: unknown): Json {
