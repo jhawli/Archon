@@ -435,6 +435,27 @@ describe('holdouts behind a fence', () => {
     }
   });
 
+  it('the holdout verifier runs on Sonnet in every node that registers it', () => {
+    // The manager runs all scenarios each pass through eight or nine verifiers whose context
+    // grows to 200k tokens; on the node's large tier (Opus) they were 86 % of a manager pass
+    // (concairge, run 06f7a5c2, 2026-11-18). The writer keeps the node's model.
+    interface Node { id: string; agents?: Record<string, { model?: string }> }
+    const nodes: string[] = [];
+    for (const file of ['loop/archon-loop.yaml', 'manager/archon-manager.yaml', 'holdouts/archon-holdouts.yaml']) {
+      const workflow = Bun.YAML.parse(readFileSync(resolve(pack, file), 'utf8')) as { nodes: Node[] };
+      for (const node of workflow.nodes) {
+        const agents = node.agents ?? {};
+        if (agents['holdout-verifier']) {
+          nodes.push(`${file}:${node.id}`);
+          expect(`${file}:${node.id} ${agents['holdout-verifier'].model}`).toBe(`${file}:${node.id} sonnet`);
+        }
+        if (agents['holdout-writer']) expect(agents['holdout-writer'].model).toBeUndefined();
+      }
+    }
+    expect(nodes).toEqual(['loop/archon-loop.yaml:check-app', 'loop/archon-loop.yaml:review',
+      'manager/archon-manager.yaml:manage']);
+  });
+
   it('takes an approval link with a label after it, never text without a link', () => {
     // Reviewers wrote "<url> (Manager decision, ...)" and the gate refused correct approvals.
     const url = 'https://github.com/o/r/pull/74#issuecomment-123';

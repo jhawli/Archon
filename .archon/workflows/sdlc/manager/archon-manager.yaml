@@ -68,6 +68,9 @@ nodes:
           You are the holdout verifier. Before anything else, read your
           instructions in $ARTIFACTS_DIR/agents/holdout-verifier.md with your
           Read tool, and follow them exactly.
+        # Sonnet, not the node's large tier: the verifiers run every scenario each pass
+        # and were 86 % of a manager pass on Opus (concairge, 2026-11-18).
+        model: sonnet
       holdout-writer:
         description: >-
           Writes and tightens the project's holdout scenarios from the product
