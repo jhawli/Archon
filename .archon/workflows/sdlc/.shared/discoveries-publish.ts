@@ -48,7 +48,9 @@ export async function publishDiscoveries(
     if (p.classification === 'new' && p.marker !== null) {
       const related = p.related_items.map(ref => (ref.key !== '' ? ref.key : ref.url ?? '')).filter(ref => ref !== '');
       const text = `${p.public_summary}\n\nBeleg: ${p.evidence.join(', ')}${related.length > 0 ? `\n\nRelated: ${related.join(', ')}` : ''}`;
-      const filed = await createTicket(jira, { op: 'create', marker: p.marker, title: p.public_title, text }, runUrl, state);
+      // A Jira "relates to" link to each ticket it names, checked against the board above (VAULT-22).
+      const relates = p.related_items.flatMap(ref => (ref.key !== '' ? [ref.key] : []));
+      const filed = await createTicket(jira, { op: 'create', marker: p.marker, title: p.public_title, text }, runUrl, state, { relates });
       (filed.existed ? result.existing : result.created).push(filed.key);
     } else if (p.classification === 'update-existing') {
       const key = p.target_item?.key ?? '';

@@ -27,7 +27,20 @@ export const CFG: TrackerConfig = {
 };
 
 export interface FakeComment { readonly id: number; readonly author: string; readonly body: string; readonly created: string }
-export interface FakeTicket { readonly status: string; readonly body?: string; readonly flagged?: boolean; readonly comments?: readonly FakeComment[] }
+export interface FakeTicket {
+  readonly status: string;
+  readonly body?: string;
+  readonly flagged?: boolean;
+  readonly comments?: readonly FakeComment[];
+  /** Sub-task of this key (VAULT-22). */
+  readonly parent?: string;
+  /** The state of the sprint it is in; none without. */
+  readonly sprint?: 'active' | 'closed';
+  /** Its sub-tasks, by key; their statuses come from their own entries. */
+  readonly children?: readonly string[];
+  /** Keys it already has a "relates to" link with. */
+  readonly relates?: readonly string[];
+}
 export interface Call { method: string; path: string; body: unknown }
 
 /**
@@ -48,7 +61,18 @@ export function fakeJira(
   const fields = (key: string): Record<string, unknown> => {
     const t = opts.tickets?.[key];
     if (t === undefined) return {};
-    return { summary: key, description: adf(t.body ?? ''), status: { id: t.status }, labels: [], [CFG.flagField]: t.flagged ? [{ id: CFG.flagOn }] : [] };
+    return {
+      summary: key,
+      description: adf(t.body ?? ''),
+      status: { id: t.status },
+      labels: [],
+      [CFG.flagField]: t.flagged ? [{ id: CFG.flagOn }] : [],
+      issuetype: { subtask: t.parent !== undefined },
+      ...(t.parent !== undefined ? { parent: { key: t.parent } } : {}),
+      subtasks: (t.children ?? []).map(child => ({ key: child, fields: { status: { id: opts.tickets?.[child]?.status ?? '' } } })),
+      [CFG.sprintField]: t.sprint === undefined ? null : [{ id: 7, state: t.sprint }],
+      issuelinks: (t.relates ?? []).map(other => ({ type: { name: 'Relates' }, outwardIssue: { key: other } })),
+    };
   };
   const send: Transport = async (method, path, body) => {
     calls.push({ method, path, body });
@@ -78,7 +102,9 @@ export function fakeJira(
     if (method === 'GET' && bare.endsWith('/transitions')) {
       return ok({ transitions: Object.values(CFG.status).map(id => ({ id: `t${id}`, to: { id } })) });
     }
-    if (method === 'GET' && bare === '/rest/api/3/project/CONC') return ok({ id: '10002' });
+    if (method === 'GET' && bare === '/rest/api/3/project/CONC') {
+      return ok({ id: '10002', issueTypes: [{ id: '10009', name: 'Task', subtask: false }, { id: '10010', name: 'Sub-Task', subtask: true }] });
+    }
     if (method === 'POST' && bare === '/rest/api/3/issue') return ok({ key: `CONC-${(next += 1)}` }, 201);
     if (method === 'POST' && bare.endsWith('/comment')) return ok({ id: '10100' }, 201);
     if (method === 'GET' && bare.startsWith('/rest/agile/1.0/board/5/sprint')) {

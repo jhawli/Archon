@@ -149,8 +149,25 @@ export interface LapResult {
 
 export const restMarker = (key: string): string => `rest-${key.toLowerCase()}`;
 
-/** The ticket's status after a lap (AK18). Null leaves it as it is. */
+/**
+ * The ticket's status after a lap (AK18). Null leaves it as it is. A ticket that would go to
+ * Staging while `openChildren` (its sub-tasks not yet on Staging, Live or Canceled) are left
+ * stays In Progress and waits for them (`waitingOn`, VAULT-22): Jira's workflow refuses that
+ * move too, and a parent on Staging with open parts tears the delivery apart.
+ */
 export function finalStatus(
+  key: string,
+  current: string,
+  lap: LapResult,
+  s: TrackerConfig['status'],
+  openChildren: readonly string[] = []
+): { status: string | null; ask: string | null; waitingOn: readonly string[] } {
+  const decided = lapStatus(key, current, lap, s);
+  if (decided.status !== s.staging || openChildren.length === 0) return { ...decided, waitingOn: [] };
+  return { status: s.progress, ask: decided.ask, waitingOn: openChildren };
+}
+
+function lapStatus(
   key: string,
   current: string,
   lap: LapResult,

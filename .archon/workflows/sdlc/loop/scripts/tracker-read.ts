@@ -16,9 +16,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expiryHours, pruneRunStates, runState } from '../../.shared/claims.ts';
-import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, trimmed } from '../../.shared/io.ts';
 import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
 import { boardMarkdown, clearOutbox, WRITERS, writableKeys } from '../../.shared/outbox.ts';
+import { runLine } from '../../.shared/questions.ts';
+import { sweepWaiting } from '../../.shared/subtickets.ts';
 import { trackerCheck } from '../../.shared/tracker-check.ts';
 import { loadJiraBoard, openPulls } from '../../.shared/tracker-board.ts';
 import { workability } from '../../.shared/workable.ts';
@@ -33,6 +35,13 @@ const state = runState();
 trackerCheck('archon-loop');
 const config = pinTrackerConfig(state);
 pruneRunStates(process.env.STATE_DIR ?? '', KEEP_RUN_STATE_MS);
+// Parents waiting for sub-tasks that are done by now go to Staging (VAULT-22), a sub-task
+// canceled by hand included. A failure here is noted and left for the next lap, never this one's.
+try {
+  for (const done of await sweepWaiting(new Jira(config), runLine('archon-loop', process.env.WORKFLOW_ID ?? ''))) note(done);
+} catch (error) {
+  note(`waiting parents not swept: ${error instanceof Error ? error.message : String(error)}`);
+}
 const loaded = await loadJiraBoard(new Jira(config), openPulls());
 const waiting = new Map<string, string>();
 for (const entry of workability(loaded.board, hours, Date.now(), new Set(), loaded.links).waiting) {

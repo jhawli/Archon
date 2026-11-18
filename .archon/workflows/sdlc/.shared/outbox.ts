@@ -10,10 +10,11 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { authorName, readCreated, readFinished, recordCreated, recordFinished, statusName } from './claims.ts';
+import { authorName, readCreated, readFinished, recordCreated, recordFinished, restMarker, statusName } from './claims.ts';
 import { note } from './io.ts';
 import { adf, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
 import { reservedQuestion, reservedText } from './questions.ts';
+import { restParent } from './subtickets.ts';
 import { namesTicket, prKeys } from './tickets.ts';
 
 export type Op =
@@ -258,11 +259,28 @@ export function prRefusal(
 }
 
 /**
+ * Where a ticket build or review files during the lap on `target` hangs (VAULT-22): the rest of
+ * a partial delivery (`rest-<target>`) is a sub-task of the target, or of the target's parent
+ * when the target is a sub-task itself, while that ticket is open in the active sprint. Any
+ * other ticket, and a rest whose parent is not open there, relates to the target. The script
+ * decides this from the lap's ticket; nothing an agent writes names a parent.
+ */
+export async function lapLink(jira: Jira, target: string | null, marker: string): Promise<TicketLink> {
+  if (target === null) return {};
+  if (marker === restMarker(target)) {
+    const parent = await restParent(jira, target);
+    if (parent !== null) return { parent };
+  }
+  return { relates: [target] };
+}
+
+/**
  * Apply checked writes. Returns marker → key for the tickets this outbox filed or found.
  *
  * With `resume` (the writer and its list as read), how far the list got is kept in the run's
  * state directory, so a rerun after a failure goes on behind the last write that worked and
- * repeats no comment.
+ * repeats no comment. `target` is the lap's ticket key (null for a lap on a pull request
+ * alone); tickets filed here hang under it or relate to it (`lapLink`).
  */
 export async function applyOutbox(
   jira: Jira,
@@ -270,7 +288,8 @@ export async function applyOutbox(
   runUrl: string,
   line: string,
   state: string,
-  resume?: { readonly writer: LoopWriter; readonly raw: unknown }
+  resume?: { readonly writer: LoopWriter; readonly raw: unknown },
+  target: string | null = null
 ): Promise<Record<string, string>> {
   const c = jira.config;
   const created: Record<string, string> = {};
@@ -283,7 +302,8 @@ export async function applyOutbox(
   for (const [index, op] of ops.entries()) {
     if (op.op === 'create') {
       // Always asked, also behind the progress mark: it finds its own ticket and returns its key.
-      created[op.marker] = (await createTicket(jira, op, runUrl, state)).key;
+      const link = readFinished(state)[op.marker] === undefined ? await lapLink(jira, target, op.marker) : {};
+      created[op.marker] = (await createTicket(jira, op, runUrl, state, link)).key;
     } else if (index >= done) {
       if (op.op === 'comment') await jira.comment(op.key, `${op.text}\n\n${line}`);
       else if (op.op === 'ask') await jira.ask(op.key, `${op.text}\n\n${line}`);
@@ -306,15 +326,26 @@ export async function applyOutbox(
 }
 
 /**
+ * How a new ticket hangs on others (VAULT-22): `parent` files it as a Jira sub-task of that
+ * ticket, which carries the parent's sprint; `relates` adds a "relates to" link to each.
+ */
+export interface TicketLink {
+  readonly parent?: string;
+  readonly relates?: readonly string[];
+}
+
+/**
  * One ticket per marker, however often the writer runs: first this run's own record (Jira's
  * search index lags a ticket filed moments ago), then the remote link Jira keeps for the marker.
- * A ticket this run filed but did not finish setting up (link, To Do, sprint) is finished here.
+ * A ticket this run filed but did not finish setting up (links, To Do, sprint) is finished here.
+ * The remote link stays the marker's record even where the ticket also has a parent or links.
  */
 export async function createTicket(
   jira: Jira,
   op: Extract<Op, { op: 'create' }>,
   runUrl: string,
-  state: string
+  state: string,
+  link: TicketLink = {}
 ): Promise<{ key: string; existed: boolean }> {
   const c = jira.config;
   const globalId = `archon:${c.project}:${op.marker}`;
@@ -333,10 +364,19 @@ export async function createTicket(
       return { key, existed: true };
     }
     const project = await jira.call('GET', `/rest/api/3/project/${c.project}`);
+    let kind: Record<string, string> = { name: 'Task' };
+    if (link.parent !== undefined) {
+      jira.issue(link.parent);
+      const types = Array.isArray(project?.issueTypes) ? (project.issueTypes as { id?: unknown; subtask?: unknown }[]) : [];
+      const sub = types.find(type => type.subtask === true && typeof type.id === 'string');
+      if (sub === undefined) throw new Error(`project ${c.project} has no sub-task type for the rest of ${link.parent}`);
+      kind = { id: String(sub.id) };
+    }
     const issue = await jira.call('POST', '/rest/api/3/issue', {
       fields: {
         project: { id: String(project?.id) },
-        issuetype: { name: 'Task' },
+        issuetype: kind,
+        ...(link.parent !== undefined ? { parent: { key: link.parent } } : {}),
         summary: op.title,
         description: adf(`Loop finding: ${op.marker}\n\n${op.text}`),
         assignee: { accountId: c.assignee },
@@ -347,13 +387,20 @@ export async function createTicket(
     // Recorded at once: a rerun after a failure below must find this ticket, not file another.
     recordCreated(state, op.marker, key);
   }
-  // Each step below may run twice: Jira replaces a remote link with the same globalId, the
-  // status is moved only when it differs, and a ticket already in the sprint stays there.
+  // Each step below may run twice: Jira replaces a remote link with the same globalId, a
+  // "relates to" link already there is not added again, the status is moved only when it
+  // differs, and a ticket already in the sprint stays there.
   await jira.call('POST', `${jira.issue(key)}/remotelink`, {
     globalId,
     object: { url: runUrl, title: `Archon loop (${op.marker})` },
   });
+  for (const other of link.relates ?? []) if (other !== key) await jira.relate(key, other);
   if ((await jira.ticket(key)).status !== c.status.todo) await jira.move(key, c.status.todo);
+  if (link.parent !== undefined) {
+    // A sub-task carries its parent's sprint; Jira files it there on its own.
+    recordFinished(state, op.marker, key);
+    return { key, existed };
+  }
   const sprints = await jira.call('GET', `/rest/agile/1.0/board/${c.board}/sprint?state=active`);
   const active = Array.isArray(sprints?.values) ? (sprints.values as { id?: unknown }[])[0] : undefined;
   if (typeof active?.id === 'number') {

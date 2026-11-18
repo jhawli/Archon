@@ -33,6 +33,7 @@ import {
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
 import { askedBefore, runLine } from '../../.shared/questions.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
+import { openChildren, promoteParent, WAIT_PREFIX, waitText } from '../../.shared/subtickets.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
@@ -90,8 +91,10 @@ try {
   const view = prView(recorded.pr);
   const lap = confirmMerge(recorded, view, item.key, claimedAt, config.project);
   const ticket = await jira.ticket(item.key);
+  // Read after review filed this lap's rest: an open sub-task keeps the ticket off Staging (VAULT-22).
+  const family = await jira.family(item.key);
   const doubt = recorded.landed === 'merged' && lap.landed !== 'merged';
-  const decided = finalStatus(item.key, ticket.status, lap, config.status);
+  const decided = finalStatus(item.key, ticket.status, lap, config.status, openChildren(family, config.status));
   const doubted =
     doubt && decided.status !== null && decided.ask === null
       ? {
@@ -111,12 +114,27 @@ try {
   if (!said) {
     await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.\n\n${line}`);
   }
+  // Delivered but waiting for sub-tasks: the record the sweep reads, once per run.
+  if (result.waitingOn.length > 0 && !all.some(comment => comment.body.startsWith(WAIT_PREFIX) && comment.body.includes(line))) {
+    await jira.comment(item.key, `${waitText(result.waitingOn)}\n\n${line}`);
+  }
   // Once per run as well: a second `@` mention would mail the owner twice.
   if (result.ask !== null && !askedBefore(await jira.comments(item.key), result.ask, line, config)) {
     await jira.ask(item.key, `${result.ask}\n\n${line}`);
   }
   const unconfirmed = doubt ? ', merge not confirmed by GitHub' : '';
-  lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}`);
+  const waits = result.waitingOn.length > 0 ? `, waits for ${result.waitingOn.join(', ')}` : '';
+  lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}${waits}`);
+  // This sub-task may have been the last open one: its parent goes on. A failure here is the
+  // parent's, not this ticket's; the next lap's sweep tries again.
+  if (family.subtask && family.parent !== null) {
+    try {
+      const moved = await promoteParent(jira, family.parent, line);
+      if (moved !== null) lines.push(moved);
+    } catch (error) {
+      lines.push(`${family.parent}: not moved on yet (${error instanceof Error ? error.message : String(error)}), the next lap's sweep tries again`);
+    }
+  }
   if (freeError !== undefined) throw freeError;
 } catch (error) {
   // Flag the ticket so it does not sit there unseen, whatever part of the release failed.

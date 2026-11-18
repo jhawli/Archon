@@ -206,8 +206,8 @@ describe('when this run claimed its ticket', () => {
 describe('status after the lap', () => {
   const merged = { pr: 'https://github.com/o/r/pull/9', landed: 'merged', deployed: 'true' };
   it('leaves a ticket alone that is not In Progress or Review (the pick canceled it)', () => {
-    expect(finalStatus('CONC-5', S.canceled, lap(merged), S)).toEqual({ status: null, ask: null });
-    expect(finalStatus('CONC-5', S.todo, lap(merged), S)).toEqual({ status: null, ask: null });
+    expect(finalStatus('CONC-5', S.canceled, lap(merged), S)).toEqual({ status: null, ask: null, waitingOn: [] });
+    expect(finalStatus('CONC-5', S.todo, lap(merged), S)).toEqual({ status: null, ask: null, waitingOn: [] });
   });
   it('merged, rollout not confirmed: Review and a question', () => {
     for (const deployed of ['', 'false']) {
@@ -220,6 +220,7 @@ describe('status after the lap', () => {
     expect(finalStatus('CONC-5', S.progress, lap({ ...merged, delivers: 'all' }), S)).toEqual({
       status: S.staging,
       ask: null,
+      waitingOn: [],
     });
   });
   it('merged, deployed, part delivered with a rest ticket: Staging', () => {
@@ -227,6 +228,7 @@ describe('status after the lap', () => {
     expect(finalStatus('CONC-5', S.review, lap({ ...merged, delivers: 'part', created }), S)).toEqual({
       status: S.staging,
       ask: null,
+      waitingOn: [],
     });
   });
   it('merged, deployed, part delivered without a rest ticket: Staging and a question', () => {
@@ -239,11 +241,30 @@ describe('status after the lap', () => {
       expect(finalStatus('CONC-5', S.progress, lap({ pr: merged.pr, landed }), S)).toEqual({
         status: S.review,
         ask: null,
+        waitingOn: [],
       });
     }
   });
   it('no pull request: back to To Do', () => {
-    expect(finalStatus('CONC-5', S.progress, lap(), S)).toEqual({ status: S.todo, ask: null });
+    expect(finalStatus('CONC-5', S.progress, lap(), S)).toEqual({ status: S.todo, ask: null, waitingOn: [] });
+  });
+  it('part delivered with its rest as an open sub-task: stays In Progress and waits for it (VAULT-22)', () => {
+    const created = { [restMarker('CONC-5')]: 'CONC-51' };
+    expect(finalStatus('CONC-5', S.progress, lap({ ...merged, delivers: 'part', created }), S, ['CONC-51'])).toEqual({
+      status: S.progress,
+      ask: null,
+      waitingOn: ['CONC-51'],
+    });
+  });
+  it('an open sub-task from earlier also holds a full delivery; the question of a missing rest stays', () => {
+    expect(finalStatus('CONC-5', S.review, lap({ ...merged, delivers: 'all' }), S, ['CONC-49']).status).toBe(S.progress);
+    const missing = finalStatus('CONC-5', S.progress, lap({ ...merged, delivers: 'part' }), S, ['CONC-49']);
+    expect(missing.status).toBe(S.progress);
+    expect(missing.ask).toContain('Rest-Ticket');
+  });
+  it('open sub-tasks change nothing but the step to Staging', () => {
+    expect(finalStatus('CONC-5', S.progress, lap({ ...merged, deployed: '' }), S, ['CONC-51']).status).toBe(S.review);
+    expect(finalStatus('CONC-5', S.progress, lap(), S, ['CONC-51'])).toEqual({ status: S.todo, ask: null, waitingOn: [] });
   });
   it('the rest marker is the key in lower case', () => {
     expect(restMarker('CONC-5')).toBe('rest-conc-5');

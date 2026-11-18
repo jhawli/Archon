@@ -374,6 +374,19 @@ export const TICKET_FIELDS: readonly string[] = [
   'updated',
 ];
 
+/** A ticket's place in Jira's hierarchy, read straight from the issue (never through search). */
+export interface Family {
+  readonly key: string;
+  readonly status: string;
+  /** A Jira sub-task: it cannot have sub-tasks of its own. */
+  readonly subtask: boolean;
+  /** The parent's key, for a sub-task (and for a ticket under an epic). */
+  readonly parent: string | null;
+  /** In the board's active sprint (a sub-task carries its parent's). */
+  readonly activeSprint: boolean;
+  readonly children: readonly { readonly key: string; readonly status: string }[];
+}
+
 /** A search that pages past this is a runaway query, not a board. */
 const MAX_SEARCH_PAGES = 50;
 
@@ -488,6 +501,40 @@ export class Jira {
   async ticket(key: string): Promise<Ticket> {
     const fields = [...TICKET_FIELDS, this.config.flagField].join(',');
     return this.toTicket(obj(await this.call('GET', `${this.issue(key)}?fields=${fields}`)), false);
+  }
+
+  async family(key: string): Promise<Family> {
+    const path = `${this.issue(key)}?fields=status,issuetype,parent,subtasks,${this.config.sprintField}`;
+    const fields = obj(obj(await this.call('GET', path)).fields);
+    const parent = str(obj(fields.parent).key);
+    return {
+      key,
+      status: str(obj(fields.status).id),
+      subtask: obj(fields.issuetype).subtask === true,
+      parent: parent === '' ? null : parent,
+      activeSprint: list(fields[this.config.sprintField]).some(sprint => str(obj(sprint).state) === 'active'),
+      children: list(fields.subtasks).map(raw => ({
+        key: str(obj(raw).key),
+        status: str(obj(obj(obj(raw).fields).status).id),
+      })),
+    };
+  }
+
+  /** A Jira "relates to" link between two tickets of this project; one that is there already is not added again. */
+  async relate(key: string, other: string): Promise<void> {
+    this.issue(other);
+    const fields = obj(obj(await this.call('GET', `${this.issue(key)}?fields=issuelinks`)).fields);
+    const linked = list(fields.issuelinks).some(raw => {
+      const link = obj(raw);
+      const ends = [str(obj(link.inwardIssue).key), str(obj(link.outwardIssue).key)];
+      return str(obj(link.type).name) === 'Relates' && ends.includes(other);
+    });
+    if (linked) return;
+    await this.call('POST', '/rest/api/3/issueLink', {
+      type: { name: 'Relates' },
+      inwardIssue: { key },
+      outwardIssue: { key: other },
+    });
   }
 
   /** All comments, oldest (lowest id) first. Read straight from the issue, never through search. */

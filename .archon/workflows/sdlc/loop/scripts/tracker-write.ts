@@ -37,16 +37,18 @@ if (writer === 'pick' && Array.isArray(raw) && raw.length > 0) {
   jira = new Jira(config);
   onBoard = await writableNow(jira, state);
 }
-const ops = checkOutbox(raw, writer, ticketKeyOf(target, config), config.project, onBoard, outboxProgress(state, writer, raw));
+const targetKey = ticketKeyOf(target, config);
+const ops = checkOutbox(raw, writer, targetKey, config.project, onBoard, outboxProgress(state, writer, raw));
 // Where a filed ticket's remote link points: the lap's target as pick named it (claim checks it
 // after this writer), else the board.
 const runUrl = target.startsWith('https://')
   ? target
   : `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;
+// Tickets build and review file hang under the lap's ticket or relate to it (`lapLink`); pick files none.
 const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, runLine('archon-loop', process.env.WORKFLOW_ID ?? ''), state, {
     writer,
     raw,
-  });
+  }, writer === 'pick' ? null : targetKey);
 if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
 rmSync(file, { force: true });
 emit({ applied: String(ops.length), created: JSON.stringify(created) });

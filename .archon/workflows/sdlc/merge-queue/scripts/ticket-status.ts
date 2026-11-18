@@ -11,6 +11,7 @@ import { deployedFact, type PrView, runState, statusName } from '../../.shared/c
 import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
 import { queueStatus, readMerges, readStart } from '../../.shared/queue-status.ts';
 import { askedBefore, runLine } from '../../.shared/questions.ts';
+import { openChildren, promoteParent, WAIT_PREFIX, waitText } from '../../.shared/subtickets.ts';
 import { prKeys } from '../../.shared/tickets.ts';
 
 const run = trimmed(process.env.WORKFLOW_ID);
@@ -38,14 +39,20 @@ if (merges.length === 0) {
     else views.set(url, view);
   }
   const tickets = new Map<string, string>();
+  // Open sub-tasks keep a ticket off Staging (VAULT-22); a sub-task's parent may go on after it.
+  const children = new Map<string, readonly string[]>();
+  const parents = new Map<string, string>();
   for (const key of new Set([...views.values()].flatMap(view => prKeys(view, config.project)))) {
     try {
-      tickets.set(key, (await jira.ticket(key)).status);
+      const family = await jira.family(key);
+      tickets.set(key, family.status);
+      children.set(key, openChildren(family, config.status));
+      if (family.subtask && family.parent !== null) parents.set(key, family.parent);
     } catch (error) {
       failures.push(`${key}: could not be read (${error instanceof Error ? error.message : String(error)})`);
     }
   }
-  for (const move of queueStatus(merges, deployed, views, tickets, readStart(state), config)) {
+  for (const move of queueStatus(merges, deployed, views, tickets, readStart(state), config, children)) {
     try {
       const current = tickets.get(move.key) ?? '';
       if (move.status !== null && move.status !== current) await jira.move(move.key, move.status);
@@ -57,6 +64,10 @@ if (merges.length === 0) {
       if (!comments.some(comment => comment.body.startsWith(head))) {
         await jira.comment(move.key, `${head} Status: ${name}.\n\n${line}`);
       }
+      // Delivered but waiting for sub-tasks: the record the sweep reads, once per run.
+      if (move.waitingOn.length > 0 && !comments.some(comment => comment.body.startsWith(WAIT_PREFIX) && comment.body.includes(line))) {
+        await jira.comment(move.key, `${waitText(move.waitingOn)}\n\n${line}`);
+      }
       if (move.ask !== null && !askedBefore(comments, move.ask, line, config)) await jira.ask(move.key, `${move.ask}\n\n${line}`);
       lines.push(`${move.key}: ${name}${move.ask !== null ? ', asked the owner' : ''}`);
     } catch (error) {
@@ -67,6 +78,16 @@ if (merges.length === 0) {
       } catch (flagError) {
         failures.push(`could not flag ${move.key} either: ${flagError instanceof Error ? flagError.message : String(flagError)}`);
       }
+    }
+  }
+  // A sub-task this batch set may have been its parent's last open one. A failure here is the
+  // parent's; the next loop lap's sweep tries again.
+  for (const parent of new Set(parents.values())) {
+    try {
+      const moved = await promoteParent(jira, parent, line);
+      if (moved !== null) lines.push(moved);
+    } catch (error) {
+      lines.push(`${parent}: not moved on yet (${error instanceof Error ? error.message : String(error)}), the next loop lap's sweep tries again`);
     }
   }
   if (failures.length > 0) {

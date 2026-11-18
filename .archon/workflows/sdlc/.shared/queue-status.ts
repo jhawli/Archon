@@ -43,15 +43,24 @@ export function readStart(state: string): number {
   return typeof at === 'number' ? at : Number.NaN;
 }
 
-export interface QueueMove { readonly key: string; readonly pr: string; readonly status: string | null; readonly ask: string | null }
+export interface QueueMove {
+  readonly key: string;
+  readonly pr: string;
+  readonly status: string | null;
+  readonly ask: string | null;
+  /** Open sub-tasks that keep the ticket In Progress instead of Staging (VAULT-22). */
+  readonly waitingOn: readonly string[];
+}
 
+/** `children` are each ticket's open sub-tasks (`openChildren`); a ticket without an entry has none. */
 export function queueStatus(
   merges: readonly { readonly url: string }[],
   deployed: boolean,
   views: ReadonlyMap<string, PrView>,
   tickets: ReadonlyMap<string, string>,
   startedAt: number,
-  config: TrackerConfig
+  config: TrackerConfig,
+  children: ReadonlyMap<string, readonly string[]> = new Map()
 ): QueueMove[] {
   const moves: QueueMove[] = [];
   // Each move carries forward: a second pull request naming the same ticket sees it where the first left it.
@@ -63,7 +72,7 @@ export function queueStatus(
       if (current === undefined) continue;
       const lap = { pr: url, landed: 'merged', deployed: deployed ? 'true' : 'false', delivers: '', created: {} };
       const confirmed = confirmMerge(lap, view, key, startedAt, config.project);
-      const decided = finalStatus(key, current, confirmed, config.status);
+      const decided = finalStatus(key, current, confirmed, config.status, children.get(key) ?? []);
       const doubt = confirmed.landed !== 'merged' && decided.status !== null;
       if (decided.status !== null) now.set(key, decided.status);
       moves.push({
@@ -73,6 +82,7 @@ export function queueStatus(
         ask: doubt
           ? `Die Merge-Queue hat ${url} gemergt, GitHub bestätigt das für dieses Ticket nicht (nach Laufstart, Schlüssel im PR). Bitte prüfen.`
           : decided.ask,
+        waitingOn: decided.waitingOn,
       });
     }
   }
