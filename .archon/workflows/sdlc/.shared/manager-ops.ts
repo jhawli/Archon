@@ -98,7 +98,13 @@ export function parseManagerOutbox(raw: unknown, project: string): { ops: Manage
       case 'create': {
         if (typeof e.marker !== 'string' || !/^mgr-[a-z0-9-]{3,56}$/.test(e.marker)) throw new Error(`${where}: marker must be mgr- and 3-56 of a-z, 0-9, -`);
         const title = words(e, 'title', where, 200);
-        const op = { op: 'create' as const, marker: e.marker, title, text: words(e, 'text', where), ask: e.ask === undefined ? null : askSpec(e.ask, where), top: e.top === true };
+        // `createTicket` writes the line `Loop finding: <marker>` itself: an agent's copy of it goes,
+        // and another marker's line refuses (it would make the ticket read as that marker's).
+        const own = `Loop finding: ${e.marker}`;
+        const lead = typeof e.text === 'string' ? e.text.trimStart() : '';
+        const body = lead === own || lead.startsWith(`${own}\n`) ? lead.slice(own.length) : e.text;
+        if (typeof body === 'string' && body.trimStart().startsWith('Loop finding:')) throw new Error(`${where}: text opens with a Loop finding line; the script writes ${own} itself`);
+        const op = { op: 'create' as const, marker: e.marker, title, text: words({ text: body }, 'text', where), ask: e.ask === undefined ? null : askSpec(e.ask, where), top: e.top === true };
         if ((creates += 1) > MANAGER_CAP) dropped.push(`create ${op.marker} „${title}“`);
         else ops.push(op);
         return;

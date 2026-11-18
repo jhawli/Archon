@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appendMetrics, checkMetrics, lastHoldoutLine, METRICS_FILE, writeBaseResults } from '../../workflows/sdlc/.shared/metrics';
+import { appendMetrics, checkMetrics, lastHoldoutLine, METRICS_FILE, resolveHoldouts, writeBaseResults } from '../../workflows/sdlc/.shared/metrics';
 
 const LINE = '2026-11-20T10:00Z | merged since last pass: 3 (simple 2, complex 1, continue 0) | open PRs: 1 | loop send-backs since last pass: 0 | merge-gate refusals: 0 | ship correction rounds: 0 | flagged open: 2 | owner questions open: 1 | default branch checks: green (local gate) | laps since last pass: 5 (empty 1, failed 0) | health actions: 0';
 const HOLD = '2026-11-20T10:00Z | holdouts at abc123: H-01 PASS, H-02 FAIL CONC-44';
@@ -18,6 +18,15 @@ describe('AK18n: metrics go to a file, never to Jira', () => {
   });
   it('a holdout line with a scenario title is refused (ids and keys only)', () => {
     expect(() => checkMetrics({ line: LINE, holdouts: '2026-11-20T10:00Z | holdouts at abc123: H-02 FAIL Einkaufsliste leer' })).toThrow('ids');
+  });
+  it('a ticket this pass creates is named by its marker and gets its key; one never filed loses the reference', () => {
+    const draft = '2026-11-20T10:00Z | holdouts at abc123: H-01 PASS, H-02 FAIL mgr-drinks-kathi, H-03 FAIL CONC-44, H-04 INCOMPLETE mgr-ui-tests';
+    expect(() => checkMetrics({ line: LINE, holdouts: draft })).not.toThrow();
+    expect(resolveHoldouts({ line: LINE, holdouts: draft }, { 'mgr-drinks-kathi': 'CONC-50' }).holdouts)
+      .toBe('2026-11-20T10:00Z | holdouts at abc123: H-01 PASS, H-02 FAIL CONC-50, H-03 FAIL CONC-44, H-04 INCOMPLETE');
+    const state = mkdtempSync(join(tmpdir(), 'state-'));
+    writeFileSync(join(state, METRICS_FILE), `${draft}\n`);
+    expect(lastHoldoutLine(state)).toBe('');
   });
   it('the loop gets the latest holdout line, freshly written before the app check', () => {
     const state = mkdtempSync(join(tmpdir(), 'state-'));

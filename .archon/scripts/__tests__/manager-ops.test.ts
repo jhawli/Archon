@@ -92,6 +92,12 @@ describe('questions and caps in the outbox', () => {
     expect(() => parseManagerOutbox(ask({ options: ['A'] }), 'CONC')).toThrow('2 to 6 options');
     expect(() => parseManagerOutbox(ask({ recommendation: 'C' }), 'CONC')).toThrow('one of the options');
   });
+  it('a create text that opens with its own marker line loses it (the script writes it), a foreign one refuses (AK18c)', () => {
+    const create = (text: string): Record<string, unknown>[] => [{ op: 'create', marker: 'mgr-leere-liste', title: 'Leere Liste', text }];
+    expect(parseManagerOutbox(create('Loop finding: mgr-leere-liste\n\nWas ein Nutzer sieht'), 'CONC').ops[0]).toMatchObject({ op: 'create', text: 'Was ein Nutzer sieht' });
+    expect(() => parseManagerOutbox(create('Loop finding: mgr-andere-liste\n\nText'), 'CONC')).toThrow('Loop finding');
+    expect(() => parseManagerOutbox(create('Loop finding: mgr-leere-liste'), 'CONC')).toThrow('empty');
+  });
   it('six rewrites (AK18i): five pass, the sixth is dropped and named', () => {
     const raw = [5, 6, 7, 8, 9, 10].map(n => ({ op: 'rewrite', key: `CONC-${n}`, text: 'neu', reason: 'klarer' }));
     const { ops, dropped } = parseManagerOutbox(raw, 'CONC');

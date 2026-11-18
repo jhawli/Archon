@@ -14,7 +14,7 @@ import { archonCommand } from '../../.shared/forge.ts';
 import { artifactsDir, emit, note } from '../../.shared/io.ts';
 import { Jira, pinTrackerConfig, repoRoot } from '../../.shared/jira.ts';
 import { managerPass, parseManagerOutbox } from '../../.shared/manager-ops.ts';
-import { appendMetrics, checkMetrics } from '../../.shared/metrics.ts';
+import { appendMetrics, checkMetrics, resolveHoldouts } from '../../.shared/metrics.ts';
 import { outboxFile, readOutbox } from '../../.shared/outbox.ts';
 import { runLine } from '../../.shared/questions.ts';
 import { checkRunOps, type RunOp } from '../../.shared/run-ops.ts';
@@ -74,7 +74,7 @@ const { ops, dropped, created } = await managerPass(jira, raw, state, openPulls(
 
 const once = join(state, 'metrics-appended');
 if (!existsSync(once)) {
-  appendMetrics(stateDir, metrics);
+  appendMetrics(stateDir, resolveHoldouts(metrics, created)); // a marker of a ticket filed above → its key
   writeFileSync(once, `${Date.now()}\n`);
 }
 
