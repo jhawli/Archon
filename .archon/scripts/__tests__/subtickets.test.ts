@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { readCreated } from '../../workflows/sdlc/.shared/claims';
 import { applyOutbox, type Op } from '../../workflows/sdlc/.shared/outbox';
 import { queueStatus } from '../../workflows/sdlc/.shared/queue-status';
 import { reservedText, runLine } from '../../workflows/sdlc/.shared/questions';
@@ -66,6 +67,45 @@ describe('a rest ticket files as a sub-task of the lap’s ticket (VAULT-22)', (
     await applyOutbox(jira, [{ ...rest, marker: 'rest-conc-9' }], RUN, LINE, state(), undefined, 'CONC-5');
     expect(filed(calls).parent).toBeUndefined();
     expect(steps(calls)).toContain('POST /rest/api/3/issueLink');
+  });
+});
+
+describe('a ticket delivered in part a second time gets a new rest (VAULT-22)', () => {
+  const id = (marker: string): string => `archon:CONC:${marker}`;
+  it('the first rest is on Staging: the new one files as rest-conc-5-2, under CONC-5', async () => {
+    const tickets = { 'CONC-5': lapTicket, 'CONC-45': { status: S.staging, parent: 'CONC-5' } };
+    const { jira, calls } = fakeJira({ sprint: 7, tickets, linked: { [id('rest-conc-5')]: 'CONC-45' } });
+    const dir = state();
+    expect(await applyOutbox(jira, [rest], RUN, LINE, dir, undefined, 'CONC-5')).toEqual({ 'rest-conc-5': 'CONC-51' });
+    expect(filed(calls).parent).toEqual({ key: 'CONC-5' });
+    expect(JSON.stringify(filed(calls).description)).toContain('Loop finding: rest-conc-5-2');
+    const link = calls.find(call => call.path === '/rest/api/3/issue/CONC-51/remotelink')?.body as { globalId: string };
+    expect(link.globalId).toBe(id('rest-conc-5-2'));
+    // Release reads the rest under the marker review wrote.
+    expect(readCreated(dir)['rest-conc-5']).toBe('CONC-51');
+  });
+  it('parts done and canceled alike are passed over; the first open part is used again', async () => {
+    const tickets = { 'CONC-5': lapTicket, 'CONC-45': { status: S.live }, 'CONC-46': { status: S.canceled }, 'CONC-47': { status: S.todo } };
+    const linked = { [id('rest-conc-5')]: 'CONC-45', [id('rest-conc-5-2')]: 'CONC-46', [id('rest-conc-5-3')]: 'CONC-47' };
+    const { jira, calls } = fakeJira({ sprint: 7, tickets, linked });
+    expect(await applyOutbox(jira, [rest], RUN, LINE, state(), undefined, 'CONC-5')).toEqual({ 'rest-conc-5': 'CONC-47' });
+    expect(calls.some(call => call.method === 'POST' && call.path === '/rest/api/3/issue')).toBe(false);
+  });
+  it('a rerun of a half set up later part links that part, not the first', async () => {
+    const tickets = { 'CONC-5': lapTicket, 'CONC-45': { status: S.staging } };
+    const { jira, calls } = fakeJira({ sprint: 7, tickets, linked: { [id('rest-conc-5')]: 'CONC-45' }, failOnce: 'POST /rest/api/3/issue/CONC-51/remotelink' });
+    const dir = state();
+    await applyOutbox(jira, [rest], RUN, LINE, dir, { writer: 'review', raw: [rest] }, 'CONC-5').catch(() => undefined);
+    calls.length = 0;
+    await applyOutbox(jira, [rest], RUN, LINE, dir, { writer: 'review', raw: [rest] }, 'CONC-5');
+    const link = calls.find(call => call.path === '/rest/api/3/issue/CONC-51/remotelink')?.body as { globalId: string };
+    expect(link.globalId).toBe(id('rest-conc-5-2'));
+    expect(calls.some(call => call.method === 'POST' && call.path === '/rest/api/3/issue')).toBe(false);
+  });
+  it('any other marker names its finding for good: a canceled one is not filed again', async () => {
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-45': { status: S.canceled } }, linked: { [id('design-im-weg')]: 'CONC-45' } });
+    expect(await applyOutbox(jira, [finding], RUN, LINE, state(), undefined, 'CONC-5')).toEqual({ 'design-im-weg': 'CONC-45' });
+    expect(steps(calls)).toEqual(['POST /rest/api/3/search/jql']);
   });
 });
 

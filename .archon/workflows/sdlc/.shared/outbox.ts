@@ -335,11 +335,22 @@ export interface TicketLink {
   readonly relates?: readonly string[];
 }
 
+/** A ticket's rest is filed at most this often; past it the writer fails instead of filing on. */
+const MAX_REST_PARTS = 20;
+
+/** The `n`th ticket of a marker: `rest-conc-40`, then `rest-conc-40-2`, `rest-conc-40-3`, … */
+const markerPart = (marker: string, n: number): string => (n === 1 ? marker : `${marker}-${n}`);
+
 /**
  * One ticket per marker, however often the writer runs: first this run's own record (Jira's
  * search index lags a ticket filed moments ago), then the remote link Jira keeps for the marker.
  * A ticket this run filed but did not finish setting up (links, To Do, sprint) is finished here.
  * The remote link stays the marker's record even where the ticket also has a parent or links.
+ *
+ * A rest (`rest-<key>`) is the one marker that may file again: a ticket delivered in part a
+ * second time has a new rest, while the first is on Staging, Live or Canceled by then. That
+ * rest takes the marker's next part (`rest-conc-40-2`, VAULT-22); one still open is used again.
+ * Any other marker names one finding for good, a canceled one included: it does not come back.
  */
 export async function createTicket(
   jira: Jira,
@@ -349,15 +360,30 @@ export async function createTicket(
   link: TicketLink = {}
 ): Promise<{ key: string; existed: boolean }> {
   const c = jira.config;
-  const globalId = `archon:${c.project}:${op.marker}`;
-  let key = readCreated(state)[op.marker];
+  const rest = op.marker.startsWith('rest-');
+  const created = readCreated(state);
+  let key = created[op.marker];
+  // The marker the ticket carries: for a later part of a rest, the part this run recorded with it.
+  let marker =
+    (key !== undefined && rest
+      ? Object.keys(created).find(part => part.startsWith(`${op.marker}-`) && created[part] === key)
+      : undefined) ?? op.marker;
   // Found in this run's records or by its remote link: filed before, not by this call.
   const existed = key !== undefined;
   if (key !== undefined && readFinished(state)[op.marker] === key) return { key, existed };
   if (key === undefined) {
-    const found = await jira.search(`issue in issuesWithRemoteLinksByGlobalId("${globalId}")`, ['status']);
-    if (found.length > 1) throw new Error(`more than one ticket carries ${globalId}`);
-    if (found.length === 1) {
+    for (let n = 1; ; n += 1) {
+      marker = markerPart(op.marker, n);
+      const id = `archon:${c.project}:${marker}`;
+      const found = await jira.search(`issue in issuesWithRemoteLinksByGlobalId("${id}")`, ['status']);
+      if (found.length > 1) throw new Error(`more than one ticket carries ${id}`);
+      if (found.length === 0) break;
+      const fields = (found[0]?.fields ?? {}) as { status?: { id?: string } };
+      const status = fields.status?.id ?? '';
+      if (rest && doneStatuses(c.status).has(status)) {
+        if (n >= MAX_REST_PARTS) throw new Error(`${op.marker}: ${MAX_REST_PARTS} rest tickets are filed already, no further one`);
+        continue;
+      }
       // Linked by an earlier run, so set up by it; where it stands by now is not this run's to change.
       key = String(found[0]?.key);
       recordCreated(state, op.marker, key);
@@ -379,21 +405,23 @@ export async function createTicket(
         issuetype: kind,
         ...(link.parent !== undefined ? { parent: { key: link.parent } } : {}),
         summary: op.title,
-        description: adf(`Loop finding: ${op.marker}\n\n${op.text}`),
+        description: adf(`Loop finding: ${marker}\n\n${op.text}`),
         assignee: { accountId: c.assignee },
       },
     });
     key = String(issue?.key);
     jira.issue(key); // throws on anything but a key of this project, before it is recorded
     // Recorded at once: a rerun after a failure below must find this ticket, not file another.
+    // A later part is recorded under its own marker too, so the rerun links the right one.
     recordCreated(state, op.marker, key);
+    if (marker !== op.marker) recordCreated(state, marker, key);
   }
   // Each step below may run twice: Jira replaces a remote link with the same globalId, a
   // "relates to" link already there is not added again, the status is moved only when it
   // differs, and a ticket already in the sprint stays there.
   await jira.call('POST', `${jira.issue(key)}/remotelink`, {
-    globalId,
-    object: { url: runUrl, title: `Archon loop (${op.marker})` },
+    globalId: `archon:${c.project}:${marker}`,
+    object: { url: runUrl, title: `Archon loop (${marker})` },
   });
   for (const other of link.relates ?? []) if (other !== key) await jira.relate(key, other);
   if ((await jira.ticket(key)).status !== c.status.todo) await jira.move(key, c.status.todo);
@@ -407,7 +435,7 @@ export async function createTicket(
   if (typeof active?.id === 'number') {
     await jira.call('POST', `/rest/agile/1.0/sprint/${active.id}/issue`, { issues: [key] });
   } else {
-    note(`${key} (${op.marker}) is filed on To Do outside a sprint: board ${c.board} has no active sprint, so no lap will start it until it is planned into one.`);
+    note(`${key} (${marker}) is filed on To Do outside a sprint: board ${c.board} has no active sprint, so no lap will start it until it is planned into one.`);
   }
   recordFinished(state, op.marker, key);
   return { key, existed };

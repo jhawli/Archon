@@ -49,7 +49,15 @@ export interface Call { method: string; path: string; body: unknown }
  * `found` what any other search finds (remote-link lookups).
  */
 export function fakeJira(
-  opts: { found?: string[]; sprint?: number | null; failOnce?: string; tickets?: Record<string, FakeTicket>; ranked?: string[] } = {}
+  opts: {
+    found?: string[];
+    sprint?: number | null;
+    failOnce?: string;
+    tickets?: Record<string, FakeTicket>;
+    ranked?: string[];
+    /** Remote-link lookups by globalId (`archon:CONC:<marker>` → key); without it they find `found`. */
+    linked?: Record<string, string>;
+  } = {}
 ): { jira: Jira; calls: Call[] } {
   const calls: Call[] = [];
   let next = 50;
@@ -86,6 +94,11 @@ export function fakeJira(
       const jql = typeof asked === 'string' ? asked : '';
       // The new options answer only the two searches they were made for; every other search
       // (writableJql, remote-link lookups) finds `found`, as before.
+      const global = opts.linked === undefined ? null : /^issue in issuesWithRemoteLinksByGlobalId\("([^"]+)"\)$/.exec(jql);
+      if (global !== null) {
+        const hit = opts.linked?.[global[1] ?? ''];
+        return ok({ issues: hit === undefined ? [] : [{ key: hit, fields: fields(hit) }], isLast: true });
+      }
       const listed = opts.tickets === undefined ? null : /^key in \(([^)]*)\)$/.exec(jql);
       const keys = listed !== null
         ? (listed[1] ?? '').split(', ').filter(key => opts.tickets?.[key] !== undefined)
