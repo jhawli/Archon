@@ -118,6 +118,12 @@ describe('outbox check', () => {
     expect(failure(() => checkOutbox(rest, 'build', 'CONC-5', 'CONC', BOARD))).toContain('only review files rest tickets');
     expect(checkOutbox(rest, 'review', 'CONC-5', 'CONC', BOARD)).toHaveLength(1);
   });
+  it('a rest marker is rest-<key>: its later parts are the loop’s to number, never an agent’s (VAULT-22)', () => {
+    for (const marker of ['rest-conc-5-2', 'rest-conc-5-x', 'rest-x']) {
+      const list = [{ op: 'create', marker, title: 'Rest', text: 'x' }];
+      expect(failure(() => checkOutbox(list, 'review', 'CONC-5', 'CONC', BOARD))).toContain('a rest marker is rest-<the ticket key');
+    }
+  });
   it('the script before an agent clears the outbox files of the writers still to come', () => {
     const artifacts = mkdtempSync(join(tmpdir(), 'outbox-'));
     mkdirSync(join(artifacts, 'tracker', 'outbox'), { recursive: true });

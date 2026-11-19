@@ -102,6 +102,10 @@ export function checkOutbox(
       }
       // A rest ticket tells release that a partial delivery is accounted for; only the reviewer decides that.
       if (e.marker.startsWith('rest-') && writer !== 'review') throw new Error(`${where}: only review files rest tickets`);
+      // A rest is `rest-<key>`; its later parts (`rest-conc-40-2`) are the loop's to number (`createTicket`).
+      if (e.marker.startsWith('rest-') && !/^rest-[a-z][a-z0-9]*-[1-9]\d*$/.test(e.marker)) {
+        throw new Error(`${where}: a rest marker is rest-<the ticket key in lower case>`);
+      }
       if (typeof e.title !== 'string' || e.title.trim() === '' || e.title.length > 200) {
         throw new Error(`${where}: title is empty or longer than 200`);
       }
@@ -413,8 +417,7 @@ export async function createTicket(
     jira.issue(key); // throws on anything but a key of this project, before it is recorded
     // Recorded at once: a rerun after a failure below must find this ticket, not file another.
     // A later part is recorded under its own marker too, so the rerun links the right one.
-    recordCreated(state, op.marker, key);
-    if (marker !== op.marker) recordCreated(state, marker, key);
+    recordCreated(state, op.marker, key, marker !== op.marker ? marker : undefined);
   }
   // Each step below may run twice: Jira replaces a remote link with the same globalId, a
   // "relates to" link already there is not added again, the status is moved only when it

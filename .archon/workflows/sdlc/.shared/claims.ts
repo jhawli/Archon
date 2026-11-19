@@ -287,8 +287,9 @@ export function readCreated(state: string): Record<string, string> {
   return strings(readObject(join(state, 'created.json')));
 }
 
-export function recordCreated(state: string, marker: string, key: string): void {
-  writeJson(join(state, 'created.json'), { ...readCreated(state), [marker]: key });
+/** `part` is the marker a later part of a rest carries (`rest-conc-40-2`), kept in the same write. */
+export function recordCreated(state: string, marker: string, key: string, part?: string): void {
+  writeJson(join(state, 'created.json'), { ...readCreated(state), [marker]: key, ...(part === undefined ? {} : { [part]: key }) });
 }
 
 /** Filed tickets that also got their link, status and sprint; one that is only in `created` is half set up. */
