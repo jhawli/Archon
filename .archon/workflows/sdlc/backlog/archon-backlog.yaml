@@ -13,6 +13,9 @@ inputs:
   prd:
     required: true
     description: Path, inside the checkout, of the PRD or product document to slice.
+  feature:
+    required: true
+    description: Key of the open feature the tickets go under as slices on Startklar (CONC-34).
   publication:
     default: preview
     description: preview renders the backlog locally; approve waits for a human; auto publishes this run.
@@ -28,6 +31,8 @@ nodes:
     script: backlog-read
     runtime: bun
     mutates_checkout: false
+    with:
+      feature: "$INPUTS.feature"
     output_format:
       type: object
       properties:
@@ -104,6 +109,7 @@ nodes:
       mode: "$INPUTS.publication"
       approval: { from: "$authorize.output", if_skipped: null }
       prd: "$INPUTS.prd"
+      feature: "$INPUTS.feature"
     output_format:
       type: object
       properties:

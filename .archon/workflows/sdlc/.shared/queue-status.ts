@@ -66,7 +66,7 @@ export function queueStatus(
     for (const key of view === null ? [] : prKeys(view, config.project)) {
       const current = now.get(key);
       if (current === undefined) continue;
-      const lap = { pr: url, landed: 'merged', deployed: deployed ? 'true' : 'false', delivers: '', created: {} };
+      const lap = { pr: url, landed: 'merged', deployed: deployed ? 'true' : 'false', delivers: '', tasks: [], created: {} };
       const confirmed = confirmMerge(lap, view, key, startedAt, config.project);
       // A merge always names its pull request, so a queue is never the answer here.
       const decided = finalStatus(key, current, confirmed, config.status, config.status.todo);

@@ -14,7 +14,7 @@ The move:
 
 ## Read first
 
-- The ticket in full, with its comments: `$ARTIFACTS_DIR/tracker/item.md` (work items are Jira tickets like `CONC-5`; you hold no Jira token, so this file is how you read it). A comment headed `Contract` is the acceptance contract: build to it, criterion by criterion.
+- The ticket in full, with its comments: `$ARTIFACTS_DIR/tracker/item.md` (work items are Jira tickets like `CONC-5`; you hold no Jira token, so this file is how you read it). A comment headed `Contract` is the acceptance contract: build to it, criterion by criterion. A slice lists its tasks under `Tasks:`: work through the open ones in their order.
 - For `continue`: the pull request, its diff, its CI (`gh pr checks <n>`), every review comment (the latest `Loop review:` comment first) and the builder reports before yours. Fix what they found, with the evidence they gave. A `Loop review: not merged` comment is the merge gate refusing a merge: when its reasons are about the code (a failed line the review marked as this change's, a failed step of the shipping pipeline) fix those; when they are only about the default branch having moved, merge it in; when they are only about the app check's evidence or the review's record, change nothing and say so, and the reviewers check it again. A run that changes no code runs no checks either: the output saved for that commit still stands.
 - The product's direction and conventions: `engineering.md`, the mission and the product document (look once at the root and in `docs/`; treat a file that is not there as absent).
 

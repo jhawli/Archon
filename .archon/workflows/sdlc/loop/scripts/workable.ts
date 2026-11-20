@@ -11,7 +11,6 @@
  * have, because a run killed before that step never frees its item. It also puts a ticket
  * such a run left in progress back where a lap can take it (`recoverOrphans`): Review with a
  * pull request, else its own queue, and a question when Jira refuses the way.
- * And a parent waiting for sub-tasks that are all done by now goes to Staging (`sweepWaiting`).
  *
  * Output: `{ "workable": [ref], "claims": [ticket + run], "ended": [...], "waiting": [...],
  * "updated" }`. A ref is `{kind: 'ticket', key}` for a Jira ticket and
@@ -26,7 +25,6 @@ import { ticketPr, type PrRow } from '../../.shared/tickets.ts';
 import { trackerCheck } from '../../.shared/tracker-check.ts';
 import { loadJiraBoard, openPulls } from '../../.shared/tracker-board.ts';
 import { runLine } from '../../.shared/questions.ts';
-import { sweepWaiting, waiting } from '../../.shared/subtickets.ts';
 import { workability } from '../../.shared/workable.ts';
 
 function gh(args: string[]): unknown {
@@ -53,8 +51,7 @@ const endedRuns = new Set(
 );
 
 /**
- * Tickets a dead run left in progress (a parent waiting for its sub-tasks is there on purpose
- * and stays, `waiting`). Nothing else finds them: the board holds the queues' tickets and the
+ * Tickets a dead run left in progress. Nothing else finds them: the board holds the queues' tickets and the
  * ones pull requests name, and pick may not write to a ticket in progress. A ticket
  * the loop itself started (`deadClaims`) whose every claim is dead goes back where a lap can
  * take it: Review when an open pull request names it, else its own queue, with the `Loop result:`
@@ -77,8 +74,6 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
       const changed = fields.statuscategorychangedate;
       const startedAt = typeof changed === 'string' ? Date.parse(changed) : Number.NaN;
       const all = await client.comments(key);
-      // Delivered and waiting for its sub-tasks (VAULT-22): In Progress on purpose, not left behind.
-      if (waiting(all, c)) continue;
       const dead = deadClaims(all, hours, Date.now(), endedRuns, startedAt);
       const holder = dead[0];
       if (holder === undefined) continue;
@@ -121,14 +116,6 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
 }
 const jira = new Jira(config);
 for (const line of await recoverOrphans(jira)) console.error(`workable: ${line}`);
-// A parent waiting for sub-tasks that are done by now (one canceled by hand, say) goes to
-// Staging here too: with nothing else workable no lap starts, and its sweep would not run
-// (VAULT-22). A waiting parent's claims are released, so `recoverOrphans` leaves it alone.
-try {
-  for (const line of await sweepWaiting(jira, runLine('archon-loop', 'scheduler'))) console.error(`workable: ${line}`);
-} catch (error) {
-  console.error(`workable: waiting parents not swept (${error instanceof Error ? error.message : String(error)})`);
-}
 const loaded = await loadJiraBoard(jira, pulls);
 // An answer that lifts a park leaves the same items workable, and the scheduler must still
 // see the board as changed.

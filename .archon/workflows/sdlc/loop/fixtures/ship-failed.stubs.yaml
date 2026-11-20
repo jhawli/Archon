@@ -36,6 +36,7 @@ review:
   pr: ''
   sha: ''
   delivers: none
+  tasks_done: "Tasks done: none"
   dispositions: []
   judge_changes: []
   reason: 'stub: ship stopped at its forge check'

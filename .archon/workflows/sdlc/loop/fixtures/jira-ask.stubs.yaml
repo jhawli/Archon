@@ -45,6 +45,7 @@ review:
   pr: "https://github.com/example/app/pull/9"
   sha: abc1234
   delivers: none
+  tasks_done: "Tasks done: none"
   dispositions: []
   judge_changes: []
   reason: "stub: CONC-5 asks for public share links, the product document keeps notes private; the owner decides"

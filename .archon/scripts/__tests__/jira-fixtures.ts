@@ -36,26 +36,48 @@ export const CFG: TrackerConfig = {
 export interface FakeComment { readonly id: number; readonly author: string; readonly body: string; readonly created: string }
 export interface FakeTicket {
   readonly status: string;
-  /** Issue type id; a slice without, a sub-task when it has a parent. */
+  /** Issue type id; without it a sub-task when it has a parent, else a slice. */
   readonly type?: string;
+  readonly title?: string;
   readonly body?: string;
   readonly flagged?: boolean;
   readonly comments?: readonly FakeComment[];
-  /** Sub-task of this key (VAULT-22). */
+  /** Its parent: the feature of a slice, the slice of a task. */
   readonly parent?: string;
   /** The state of the sprint it is in; none without. */
   readonly sprint?: 'active' | 'closed';
-  /** Its sub-tasks, by key; their statuses come from their own entries. */
+  /** Its sub-tasks, by key; their statuses and titles come from their own entries. */
   readonly children?: readonly string[];
   /** Keys it already has a "relates to" link with. */
   readonly relates?: readonly string[];
 }
 export interface Call { method: string; path: string; body: unknown }
+/** One bulk move as Jira received it: `target` is `project,type,parent`, `statuses` target → sources. */
+export interface FakeBulkMove { readonly target: string; readonly keys: readonly string[]; readonly statuses: Record<string, string[]> }
+
+interface Booked {
+  status: string;
+  type: string;
+  title: string;
+  body: string;
+  flagged: boolean;
+  comments: readonly FakeComment[];
+  parent?: string;
+  sprint?: 'active' | 'closed';
+  children: string[];
+  relates: readonly string[];
+}
+
+/** Where a ticket filed as this type starts (VAULT-28): a bug on Gemeldet, anything else on Offen. */
+const START: Record<string, string> = { [TYPES.bug]: STATUS.todoBug };
+const OPEN = '10060';
 
 /**
  * A Jira that moves anything anywhere and files new tickets as CONC-51 up. `tickets` are the
- * tickets it knows (status, text, flag, comments), `ranked` the active sprint in rank order,
- * `found` what any other search finds (remote-link lookups).
+ * tickets it knows (status, type, text, flag, comments), `ranked` the active sprint in rank order,
+ * `found` what any other search finds (remote-link lookups). It remembers what happens: a
+ * transition moves a ticket, a filed ticket is there afterwards (a sub-task under its parent),
+ * and a bulk move sets type, parent and status (`bulkStatus` makes it land elsewhere).
  */
 export function fakeJira(
   opts: {
@@ -66,32 +88,50 @@ export function fakeJira(
     ranked?: string[];
     /** Remote-link lookups by globalId (`archon:CONC:<marker>` → key); without it they find `found`. */
     linked?: Record<string, string>;
+    /** The status a bulk move really leaves its tickets on, whatever it asked for. */
+    bulkStatus?: string;
   } = {}
-): { jira: Jira; calls: Call[] } {
+): { jira: Jira; calls: Call[]; bulkMoves: FakeBulkMove[]; book: ReadonlyMap<string, Readonly<Booked>> } {
   const calls: Call[] = [];
+  const bulkMoves: FakeBulkMove[] = [];
   let next = 50;
   let failed = false;
-  // Where each ticket stands now: a transition moves it, as Jira does.
-  const moved = new Map<string, string>();
-  const statusOf = (key: string): string => moved.get(key) ?? opts.tickets?.[key]?.status ?? '';
+  const book = new Map<string, Booked>();
+  for (const [key, t] of Object.entries(opts.tickets ?? {})) {
+    book.set(key, {
+      status: t.status,
+      type: t.type ?? (t.parent !== undefined ? SUBTASK_TYPE : TYPES.slice),
+      title: t.title ?? key,
+      body: t.body ?? '',
+      flagged: t.flagged ?? false,
+      comments: t.comments ?? [],
+      ...(t.parent !== undefined ? { parent: t.parent } : {}),
+      ...(t.sprint !== undefined ? { sprint: t.sprint } : {}),
+      children: [...(t.children ?? [])],
+      relates: t.relates ?? [],
+    });
+  }
   const ok = (value: unknown, status = 200): { status: number; text: string } => ({
     status,
     text: value === undefined ? '' : JSON.stringify(value),
   });
   const fields = (key: string): Record<string, unknown> => {
-    const t = opts.tickets?.[key];
+    const t = book.get(key);
     if (t === undefined) return {};
     return {
-      summary: key,
-      description: adf(t.body ?? ''),
-      status: { id: statusOf(key) },
+      summary: t.title,
+      description: adf(t.body),
+      status: { id: t.status },
       labels: [],
       [CFG.flagField]: t.flagged ? [{ id: CFG.flagOn }] : [],
-      issuetype: { id: t.type ?? (t.parent !== undefined ? SUBTASK_TYPE : TYPES.slice), subtask: t.parent !== undefined },
+      issuetype: { id: t.type, subtask: t.type === SUBTASK_TYPE },
       ...(t.parent !== undefined ? { parent: { key: t.parent } } : {}),
-      subtasks: (t.children ?? []).map(child => ({ key: child, fields: { status: { id: statusOf(child) } } })),
+      subtasks: t.children.map(child => ({
+        key: child,
+        fields: { status: { id: book.get(child)?.status ?? '' }, summary: book.get(child)?.title ?? child },
+      })),
       [CFG.sprintField]: t.sprint === undefined ? null : [{ id: 7, state: t.sprint }],
-      issuelinks: (t.relates ?? []).map(other => ({ type: { name: 'Relates' }, outwardIssue: { key: other } })),
+      issuelinks: t.relates.map(other => ({ type: { name: 'Relates' }, outwardIssue: { key: other } })),
     };
   };
   const send: Transport = async (method, path, body) => {
@@ -113,25 +153,25 @@ export function fakeJira(
       }
       const listed = opts.tickets === undefined ? null : /^key in \(([^)]*)\)$/.exec(jql);
       const keys = listed !== null
-        ? (listed[1] ?? '').split(', ').filter(key => opts.tickets?.[key] !== undefined)
+        ? (listed[1] ?? '').split(', ').filter(key => book.has(key))
         : opts.ranked !== undefined && jql.endsWith('ORDER BY Rank ASC') ? opts.ranked : (opts.found ?? []);
       return ok({ issues: keys.map(key => ({ key, fields: fields(key) })), isLast: true });
     }
     const comments = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/comment$/.exec(bare);
     if (method === 'GET' && comments !== null) {
-      const list = opts.tickets?.[comments[1] ?? '']?.comments ?? [];
+      const list = book.get(comments[1] ?? '')?.comments ?? [];
       return ok({ comments: list.map(c => ({ id: String(c.id), body: adf(c.body), created: c.created, author: { accountId: c.author } })), total: list.length });
     }
     const issue = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(bare);
-    if (method === 'GET' && issue !== null && opts.tickets?.[issue[1] ?? ''] !== undefined) return ok({ key: issue[1], fields: fields(issue[1] ?? '') });
+    if (method === 'GET' && issue !== null && book.has(issue[1] ?? '')) return ok({ key: issue[1], fields: fields(issue[1] ?? '') });
     if (method === 'GET' && bare.endsWith('/transitions')) {
       return ok({ transitions: Object.values(CFG.status).map(id => ({ id: `t${id}`, to: { id } })) });
     }
     const moving = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(bare);
     if (method === 'POST' && moving !== null) {
       const id = (body as { transition?: { id?: unknown } } | undefined)?.transition?.id;
-      const to = typeof id === 'string' ? id.slice(1) : '';
-      if (opts.tickets?.[moving[1] ?? ''] !== undefined) moved.set(moving[1] ?? '', to);
+      const t = book.get(moving[1] ?? '');
+      if (t !== undefined && typeof id === 'string') t.status = id.slice(1);
       return ok(undefined, 204);
     }
     if (method === 'GET' && bare === '/rest/api/3/project/CONC') {
@@ -146,14 +186,43 @@ export function fakeJira(
         ],
       });
     }
-    if (method === 'POST' && bare === '/rest/api/3/issue') return ok({ key: `CONC-${(next += 1)}` }, 201);
+    if (method === 'POST' && bare === '/rest/api/3/issue') {
+      const key = `CONC-${(next += 1)}`;
+      const f = (body as { fields?: { issuetype?: { id?: string; name?: string }; parent?: { key?: string }; summary?: string } }).fields ?? {};
+      const type = f.issuetype?.id ?? (f.issuetype?.name === 'Task' ? TYPES.filing : '');
+      const parent = f.parent?.key;
+      book.set(key, {
+        status: START[type] ?? OPEN, type, title: f.summary ?? key, body: '', flagged: false, comments: [],
+        ...(parent !== undefined ? { parent } : {}), children: [], relates: [],
+      });
+      if (parent !== undefined) book.get(parent)?.children.push(key);
+      return ok({ key }, 201);
+    }
+    if (method === 'POST' && bare === '/rest/api/3/bulk/issues/move') {
+      const mapping = (body as { targetToSourcesMapping: Record<string, { issueIdsOrKeys: string[]; targetStatus: { statuses: Record<string, string[]> }[] }> })
+        .targetToSourcesMapping;
+      for (const [target, m] of Object.entries(mapping)) {
+        const statuses = m.targetStatus[0]?.statuses ?? {};
+        bulkMoves.push({ target, keys: m.issueIdsOrKeys, statuses });
+        const [, type, parent] = target.split(',');
+        for (const key of m.issueIdsOrKeys) {
+          const t = book.get(key);
+          if (t === undefined) continue;
+          t.type = type ?? t.type;
+          if (parent !== undefined) t.parent = parent;
+          t.status = opts.bulkStatus ?? Object.keys(statuses)[0] ?? t.status;
+        }
+      }
+      return ok({ taskId: 't1' }, 201);
+    }
+    if (method === 'GET' && bare === '/rest/api/3/bulk/queue/t1') return ok({ status: 'COMPLETE' });
     if (method === 'POST' && bare.endsWith('/comment')) return ok({ id: '10100' }, 201);
     if (method === 'GET' && bare.startsWith('/rest/agile/1.0/board/5/sprint')) {
       return ok({ values: opts.sprint === null || opts.sprint === undefined ? [] : [{ id: opts.sprint }] });
     }
     return ok(undefined, 204);
   };
-  return { jira: new Jira(CFG, send), calls };
+  return { jira: new Jira(CFG, send, () => Promise.resolve()), calls, bulkMoves, book };
 }
 
 /** A fresh state directory for one run, like `jira-outbox.test.ts` uses. */

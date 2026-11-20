@@ -12,9 +12,9 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, restMarker, statusName } from './claims.ts';
 import { note } from './io.ts';
-import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, todoStatuses, type TrackerConfig } from './jira.ts';
+import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, todoFor, todoStatuses, type TrackerConfig } from './jira.ts';
 import { reservedQuestion, reservedText } from './questions.ts';
-import { restParent } from './subtickets.ts';
+import { restFeature } from './subtickets.ts';
 import { namesTicket, prKeys } from './tickets.ts';
 
 export type Op =
@@ -264,18 +264,18 @@ export function prRefusal(
 }
 
 /**
- * Where a ticket build or review files during the lap on `target` hangs (VAULT-22): the rest of
- * a partial delivery (`rest-<target>`) is a sub-task of the target, or of the target's parent
- * when the target is a sub-task itself, while that ticket is open in the active sprint. Any
- * other ticket, and a rest whose parent is not open there, relates to the target. The script
- * decides this from the lap's ticket; nothing an agent writes names a parent.
+ * Where a ticket build or review files during the lap on `target` hangs (VAULT-28): the rest of
+ * a partial delivery (`rest-<target>`) is a new slice under the feature of the target slice
+ * (AK17); every other ticket, and the rest of a ticket without a feature (a bug), is a bug that
+ * relates to the target. The script decides this from the lap's ticket; nothing an agent
+ * writes names a feature.
  */
 export async function lapLink(jira: Jira, target: string | null, marker: string): Promise<TicketLink> {
   if (target === null) return {};
   if (marker === restMarker(target)) {
-    const parent = await restParent(jira, target);
-    if (parent !== null) return { parent };
-    note(`${marker}: ${target} (or its parent) is not open in the active sprint, so the rest is a ticket of its own that relates to ${target}, not a sub-task.`);
+    const feature = await restFeature(jira, target);
+    if (feature !== null) return { feature, relates: [target] };
+    note(`${marker}: ${target} is not a slice under a feature, so the rest is a bug that relates to it.`);
   }
   return { relates: [target] };
 }
@@ -332,11 +332,12 @@ export async function applyOutbox(
 }
 
 /**
- * How a new ticket hangs on others (VAULT-22): `parent` files it as a Jira sub-task of that
- * ticket, which carries the parent's sprint; `relates` adds a "relates to" link to each.
+ * How a new ticket hangs on others (VAULT-28): with `feature` it becomes a slice under that
+ * feature on Startklar, without one a bug on Gemeldet (decision 3); `relates` adds a
+ * "relates to" link to each.
  */
 export interface TicketLink {
-  readonly parent?: string;
+  readonly feature?: string;
   readonly relates?: readonly string[];
 }
 
@@ -349,11 +350,16 @@ const markerPart = (marker: string, n: number): string => (n === 1 ? marker : `$
 /**
  * One ticket per marker, however often the writer runs: first this run's own record (Jira's
  * search index lags a ticket filed moments ago), then the remote link Jira keeps for the marker.
- * A ticket this run filed but did not finish setting up (links, To Do, sprint) is finished here.
- * The remote link stays the marker's record even where the ticket also has a parent or links.
+ * A ticket this run filed but did not finish setting up (links, sprint, its type and queue) is
+ * finished here. The remote link stays the marker's record even where the ticket also has a
+ * feature or links.
+ *
+ * Jira sets a new ticket's parent and status past the workflow only with a change of type
+ * (VAULT-28, C4): a slice is filed as the plain type (`types.filing`) and then bulk-moved to a
+ * slice on Startklar under its feature. A bug starts on its queue, Gemeldet, by itself.
  *
  * A rest (`rest-<key>`) is the one marker that may file again: a ticket delivered in part a
- * second time has a new rest, while the first is on Staging, Live or Canceled by then. That
+ * second time has a new rest, while the first is on Staging, Live or Verworfen by then. That
  * rest takes the marker's next part (`rest-conc-40-2`, VAULT-22); one still open is used again.
  * Any other marker names one finding for good, a canceled one included: it does not come back.
  */
@@ -395,20 +401,12 @@ export async function createTicket(
       recordFinished(state, op.marker, key);
       return { key, existed: true };
     }
+    if (link.feature !== undefined) jira.issue(link.feature);
     const project = await jira.call('GET', `/rest/api/3/project/${c.project}`);
-    let kind: Record<string, string> = { name: 'Task' };
-    if (link.parent !== undefined) {
-      jira.issue(link.parent);
-      const types = Array.isArray(project?.issueTypes) ? (project.issueTypes as { id?: unknown; subtask?: unknown }[]) : [];
-      const sub = types.find(type => type.subtask === true && typeof type.id === 'string');
-      if (sub === undefined) throw new Error(`project ${c.project} has no sub-task type for the rest of ${link.parent}`);
-      kind = { id: String(sub.id) };
-    }
     const issue = await jira.call('POST', '/rest/api/3/issue', {
       fields: {
         project: { id: String(project?.id) },
-        issuetype: kind,
-        ...(link.parent !== undefined ? { parent: { key: link.parent } } : {}),
+        issuetype: { id: link.feature !== undefined ? c.types.filing : c.types.bug },
         summary: op.title,
         description: adf(`Loop finding: ${marker}\n\n${op.text}`),
         assignee: { accountId: c.assignee },
@@ -421,25 +419,27 @@ export async function createTicket(
     recordCreated(state, op.marker, key, marker !== op.marker ? marker : undefined);
   }
   // Each step below may run twice: Jira replaces a remote link with the same globalId, a
-  // "relates to" link already there is not added again, the status is moved only when it
-  // differs, and a ticket already in the sprint stays there.
+  // "relates to" link already there is not added again, a ticket already in the sprint stays
+  // there, a bug is moved only when it is not on its queue, and a slice is not moved again.
   await jira.call('POST', `${jira.issue(key)}/remotelink`, {
     globalId: `archon:${c.project}:${marker}`,
     object: { url: runUrl, title: `Archon loop (${marker})` },
   });
   for (const other of link.relates ?? []) if (other !== key) await jira.relate(key, other);
-  if ((await jira.ticket(key)).status !== c.status.todo) await jira.move(key, c.status.todo);
-  if (link.parent !== undefined) {
-    // A sub-task carries its parent's sprint; Jira files it there on its own.
-    recordFinished(state, op.marker, key);
-    return { key, existed };
+  if (link.feature === undefined) {
+    const todo = todoFor(c.types.bug, c);
+    if ((await jira.status(key)) !== todo) await jira.moveTo(key, todo);
   }
   const sprints = await jira.call('GET', `/rest/agile/1.0/board/${c.board}/sprint?state=active`);
   const active = Array.isArray(sprints?.values) ? (sprints.values as { id?: unknown }[])[0] : undefined;
   if (typeof active?.id === 'number') {
     await jira.call('POST', `/rest/agile/1.0/sprint/${active.id}/issue`, { issues: [key] });
   } else {
-    note(`${key} (${marker}) is filed on To Do outside a sprint: board ${c.board} has no active sprint, so no lap will start it until it is planned into one.`);
+    note(`${key} (${marker}) is filed outside a sprint: board ${c.board} has no active sprint, so no lap will start it until it is planned into one.`);
+  }
+  // Last, so the ticket joins the queue only once it is linked and in the sprint.
+  if (link.feature !== undefined && (await jira.family(key)).type !== c.types.slice) {
+    await jira.bulkMove(key, c.types.slice, link.feature, c.status.todo);
   }
   recordFinished(state, op.marker, key);
   return { key, existed };

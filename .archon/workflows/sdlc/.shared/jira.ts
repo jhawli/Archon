@@ -43,8 +43,8 @@ export interface TrackerConfig {
 }
 
 /**
- * The statuses past the work: delivered (Staging, Live) or canceled. Jira's sub-task blocking
- * condition on the Staging transition of the board workflow names the same three (VAULT-22).
+ * The statuses past the work: delivered (Staging, Live) or canceled (Verworfen). A dependency
+ * on such a ticket no longer blocks, and a rest marker whose ticket is there files a new part.
  */
 export function doneStatuses(s: TrackerConfig['status']): ReadonlySet<string> {
   return new Set([s.staging, s.live, s.canceled]);
@@ -402,6 +402,22 @@ export interface Ticket {
   readonly assignee: string | null;
   readonly inOpenSprint: boolean;
   readonly updated: number;
+  /** The slice's tasks (its Jira sub-tasks), in Jira's order. */
+  readonly tasks: readonly TaskRef[];
+}
+
+/** A task of a slice: a Jira sub-task, with its title (`Task 3: Lese-Knoten`). */
+export interface TaskRef {
+  readonly key: string;
+  readonly status: string;
+  readonly title: string;
+}
+
+function taskRefs(subtasks: unknown): TaskRef[] {
+  return list(subtasks).map(raw => {
+    const fields = obj(obj(raw).fields);
+    return { key: str(obj(raw).key), status: str(obj(fields.status).id), title: str(fields.summary) };
+  });
 }
 
 export const TICKET_FIELDS: readonly string[] = [
@@ -412,6 +428,7 @@ export const TICKET_FIELDS: readonly string[] = [
   'labels',
   'assignee',
   'updated',
+  'subtasks',
 ];
 
 /** A ticket's place in Jira's hierarchy, read straight from the issue (never through search). */
@@ -422,11 +439,11 @@ export interface Family {
   readonly type: string;
   /** A Jira sub-task: it cannot have sub-tasks of its own. */
   readonly subtask: boolean;
-  /** The parent's key, for a sub-task (and for a ticket under an epic). */
+  /** The parent's key: the slice of a task, the feature of a slice. */
   readonly parent: string | null;
   /** In the board's active sprint (a sub-task carries its parent's). */
   readonly activeSprint: boolean;
-  readonly children: readonly { readonly key: string; readonly status: string }[];
+  readonly children: readonly TaskRef[];
 }
 
 /** A search that pages past this is a runaway query, not a board. */
@@ -518,6 +535,7 @@ export class Jira {
       assignee: assignee === '' ? null : assignee,
       inOpenSprint: openSprint,
       updated: Date.parse(str(fields.updated)) || 0,
+      tasks: taskRefs(fields.subtasks),
     };
   }
 
@@ -557,10 +575,7 @@ export class Jira {
       subtask: obj(fields.issuetype).subtask === true,
       parent: parent === '' ? null : parent,
       activeSprint: list(fields[this.config.sprintField]).some(sprint => str(obj(sprint).state) === 'active'),
-      children: list(fields.subtasks).map(raw => ({
-        key: str(obj(raw).key),
-        status: str(obj(obj(obj(raw).fields).status).id),
-      })),
+      children: taskRefs(fields.subtasks),
     };
   }
 
@@ -656,6 +671,52 @@ export class Jira {
       }
     }
     throw new Error(`${key}: not on ${statusId} after three moves`);
+  }
+
+  /**
+   * Type, parent and status in one step, past the workflow (VAULT-28): how a new ticket becomes
+   * a slice on the queue under its feature. Jira sets the status only together with a change of
+   * type, so the caller files the ticket as the plain type first. The payload is the Vault's
+   * (`board_jira.umziehen`); afterwards type, parent and status are read back and checked.
+   */
+  async bulkMove(key: string, typeId: string, parent: string, status: string): Promise<void> {
+    this.issue(parent);
+    const before = await this.family(key);
+    if (before.type === typeId) throw new Error(`${key}: bulk move to its own type ${typeId}; Jira would not set the status`);
+    const started = obj(
+      await this.call('POST', '/rest/api/3/bulk/issues/move', {
+        sendBulkNotification: false,
+        targetToSourcesMapping: {
+          [`${this.config.project},${typeId},${parent}`]: {
+            inferClassificationDefaults: true,
+            inferFieldDefaults: true,
+            inferStatusDefaults: false,
+            inferSubtaskTypeDefault: true,
+            issueIdsOrKeys: [key],
+            targetStatus: [{ statuses: { [status]: [before.status] } }],
+          },
+        },
+      })
+    );
+    const task = str(started.taskId);
+    if (!/^[A-Za-z0-9-]+$/.test(task)) throw new Error(`${key}: bulk move gave no task id`);
+    for (let n = 0; n < 60; n += 1) {
+      const queue = obj(await this.call('GET', `/rest/api/3/bulk/queue/${task}`));
+      const state = str(queue.status);
+      if (state === 'COMPLETE') {
+        if (list(queue.failedAccessibleIssues).length > 0 || Object.keys(obj(queue.failedAccessibleIssues)).length > 0) {
+          throw new Error(`${key}: bulk move failed: ${JSON.stringify(queue.failedAccessibleIssues).slice(0, 300)}`);
+        }
+        const now = await this.family(key);
+        if (now.status !== status || now.type !== typeId || now.parent !== parent) {
+          throw new Error(`${key}: bulk move left it on ${now.status} (type ${now.type}, parent ${now.parent ?? 'none'})`);
+        }
+        return;
+      }
+      if (['FAILED', 'CANCELLED', 'DEAD'].includes(state)) throw new Error(`${key}: bulk move ${state}`);
+      await this.pause(2000);
+    }
+    throw new Error(`${key}: bulk move not done after two minutes`);
   }
 
   /** The ticket's status id, read straight from the issue. */

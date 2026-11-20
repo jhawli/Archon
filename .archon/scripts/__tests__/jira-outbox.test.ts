@@ -184,6 +184,7 @@ const ticket = (key: string, over: Partial<Ticket> = {}): Ticket => ({
   assignee: CFG.assignee,
   inOpenSprint: true,
   updated: 0,
+  tasks: [],
   ...over,
 });
 
@@ -308,7 +309,7 @@ describe('outbox apply', () => {
     expect(checkOutbox(list, 'pick', null, 'CONC', board, 1)).toHaveLength(2);
     expect(() => checkOutbox(list, 'pick', null, 'CONC', new Set(), 1)).toThrow('CONC-5 is not on this lap');
   });
-  it('create: a new ticket with its marker, linked, on To Do, in the open sprint', async () => {
+  it('create: a new ticket with its marker, linked, a bug already on Gemeldet, in the open sprint', async () => {
     const { jira, calls } = fakeJira({ sprint: 7 });
     const dir = state();
     const op: Op = { op: 'create', marker: 'rest-conc-5', title: 'Rest von CONC-5', text: 'Was fehlt' };
@@ -319,8 +320,6 @@ describe('outbox apply', () => {
       'POST /rest/api/3/issue',
       'POST /rest/api/3/issue/CONC-51/remotelink',
       'GET /rest/api/3/issue/CONC-51',
-      'GET /rest/api/3/issue/CONC-51/transitions',
-      'POST /rest/api/3/issue/CONC-51/transitions',
       'GET /rest/agile/1.0/board/5/sprint',
       'POST /rest/agile/1.0/sprint/7/issue',
     ]);
@@ -330,7 +329,8 @@ describe('outbox apply', () => {
     expect(fields.assignee).toEqual({ accountId: CFG.assignee });
     expect(JSON.stringify(fields.description)).toContain('Loop finding: rest-conc-5');
     expect((calls[3]?.body as { globalId: string }).globalId).toBe('archon:CONC:rest-conc-5');
-    expect(calls[8]?.body).toEqual({ issues: ['CONC-51'] });
+    expect(fields.issuetype).toEqual({ id: CFG.types.bug });
+    expect(calls[6]?.body).toEqual({ issues: ['CONC-51'] });
     expect(readCreated(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
     expect(readFinished(dir)).toEqual({ 'rest-conc-5': 'CONC-51' });
   });
@@ -346,8 +346,6 @@ describe('outbox apply', () => {
     expect(steps(calls)).toEqual([
       'POST /rest/api/3/issue/CONC-51/remotelink',
       'GET /rest/api/3/issue/CONC-51',
-      'GET /rest/api/3/issue/CONC-51/transitions',
-      'POST /rest/api/3/issue/CONC-51/transitions',
       'GET /rest/agile/1.0/board/5/sprint',
       'POST /rest/agile/1.0/sprint/7/issue',
     ]);

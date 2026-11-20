@@ -55,6 +55,7 @@ review:
   pr: "https://github.com/example/app/pull/9"
   sha: abc1234
   delivers: none
+  tasks_done: "Tasks done: none"
   dispositions:
   - line: D1
     action: blocks

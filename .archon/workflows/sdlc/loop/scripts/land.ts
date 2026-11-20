@@ -36,6 +36,8 @@ const named = trimmed(process.env.INPUTS_SHA);
 const route = trimmed(process.env.INPUTS_ROUTE);
 const target = trimmed(process.env.INPUTS_TARGET);
 const delivers = trimmed(process.env.INPUTS_DELIVERS);
+// The review's `Tasks done: 1, 2` line (VAULT-28); release reads only the numbers out of it.
+const tasks = trimmed(process.env.INPUTS_TASKS);
 const evidenceProblems = text(process.env.INPUTS_EVIDENCE_PROBLEMS).split('\n').filter(line => line.trim() !== '');
 const reviewStarted = Number(trimmed(process.env.INPUTS_REVIEW_STARTED)) || 0;
 const prFiles = text(process.env.INPUTS_FILES).split('\n').map(f => f.trim()).filter(f => f !== '');
@@ -175,7 +177,7 @@ if (view.code !== 0) {
 
 /** The outcome, recorded first for release (a ticket's status needs it even if a later node fails). */
 const landed = (outcome: 'merged' | 'refused', reason: string): void => {
-  recordLanding(trackerState, artifacts, { pr: prUrl, landed: outcome, delivers });
+  recordLanding(trackerState, artifacts, { pr: prUrl, landed: outcome, delivers, tasks });
   emit({ outcome, reason });
 };
 

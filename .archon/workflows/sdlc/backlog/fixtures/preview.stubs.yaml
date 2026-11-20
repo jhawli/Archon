@@ -20,3 +20,4 @@ fixture:
   expect: completed
   inputs:
     prd: "PRD.md"
+    feature: "CONC-34"

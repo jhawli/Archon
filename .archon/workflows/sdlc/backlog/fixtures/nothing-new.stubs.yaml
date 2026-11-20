@@ -17,4 +17,5 @@ fixture:
   reached: [check]
   inputs:
     prd: "PRD.md"
+    feature: "CONC-34"
     publication: "approve"

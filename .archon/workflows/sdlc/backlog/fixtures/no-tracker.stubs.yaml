@@ -8,5 +8,6 @@ fixture:
   fail-node: tracker-read
   inputs:
     prd: "PRD.md"
+    feature: "CONC-34"
     publication: "auto"
 exec-code: true

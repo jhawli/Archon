@@ -329,6 +329,7 @@ nodes:
         pr: { type: string }
         sha: { type: string }
         delivers: { type: string, enum: [all, part, none] }
+        tasks_done: { type: string }
         dispositions:
           type: array
           items:
@@ -350,7 +351,7 @@ nodes:
               approval: { type: string }
             required: [file, change, approval]
         reason: { type: string }
-      required: [outcome, pr, sha, delivers, dispositions, judge_changes, reason]
+      required: [outcome, pr, sha, delivers, tasks_done, dispositions, judge_changes, reason]
 
   # A failed write here (a refused entry, Jira down) stops the merge: land waits for it.
   - id: write-review
@@ -375,6 +376,7 @@ nodes:
       pr: "$review.output.pr"
       sha: "$review.output.sha"
       delivers: "$review.output.delivers"
+      tasks: "$review.output.tasks_done"
       dispositions: "$review.output.dispositions"
       judge_changes: "$review.output.judge_changes"
       route: "$pick.output.route"

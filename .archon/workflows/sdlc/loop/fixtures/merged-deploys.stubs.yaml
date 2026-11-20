@@ -42,6 +42,7 @@ review:
   pr: https://github.com/example/app/pull/9
   sha: abc1234
   delivers: all
+  tasks_done: "Tasks done: 1"
   dispositions: []
   judge_changes: []
   reason: stub

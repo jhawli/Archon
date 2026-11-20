@@ -9,7 +9,7 @@ import { CFG } from './jira-fixtures';
 const NOW = Date.parse('2026-11-18T12:00:00Z');
 function t(key: string, status: string, inOpenSprint: boolean, extra: Partial<Ticket> = {}): Ticket {
   return { key, url: `https://example.atlassian.net/browse/${key}`, title: `Titel ${key}`, body: `Text ${key}`, status,
-    type: CFG.types.slice, labels: [], flagged: false, assignee: CFG.assignee, inOpenSprint, updated: 0, ...extra };
+    type: CFG.types.slice, labels: [], flagged: false, assignee: CFG.assignee, inOpenSprint, updated: 0, tasks: [], ...extra };
 }
 const ALL: BoardAll = {
   tickets: [t('CONC-5', CFG.status.todo, true), t('CONC-12', CFG.status.staging, false), t('CONC-40', CFG.status.live, false), t('CONC-3', '10014', false)],

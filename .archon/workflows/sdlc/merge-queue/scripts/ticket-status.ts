@@ -11,7 +11,7 @@ import { deployedFact, type PrView, runState, statusName } from '../../.shared/c
 import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
 import { queueStatus, readMerges, readStart } from '../../.shared/queue-status.ts';
 import { askedBefore, runLine } from '../../.shared/questions.ts';
-import { promoteParent } from '../../.shared/subtickets.ts';
+import { closeTasks } from '../../.shared/subtickets.ts';
 import { prKeys } from '../../.shared/tickets.ts';
 
 const run = trimmed(process.env.WORKFLOW_ID);
@@ -39,13 +39,10 @@ if (merges.length === 0) {
     else views.set(url, view);
   }
   const tickets = new Map<string, string>();
-  // A sub-task's parent may go on after it (VAULT-22).
-  const parents = new Map<string, string>();
   for (const key of new Set([...views.values()].flatMap(view => prKeys(view, config.project)))) {
     try {
       const family = await jira.family(key);
       tickets.set(key, family.status);
-      if (family.subtask && family.parent !== null) parents.set(key, family.parent);
     } catch (error) {
       failures.push(`${key}: could not be read (${error instanceof Error ? error.message : String(error)})`);
     }
@@ -53,7 +50,13 @@ if (merges.length === 0) {
   for (const move of queueStatus(merges, deployed, views, tickets, readStart(state), config)) {
     try {
       const current = tickets.get(move.key) ?? '';
-      if (move.status !== null && move.status !== current) await jira.moveTo(move.key, move.status);
+      if (move.status !== null && move.status !== current) {
+        // A merge delivers the slice: its open tasks are done before Review (VAULT-28).
+        if (move.status === config.status.review || move.status === config.status.staging) {
+          await closeTasks(jira, move.key, { delivers: '', tasks: [] }, null);
+        }
+        await jira.moveTo(move.key, move.status);
+      }
       if (move.status !== null) tickets.set(move.key, move.status);
       const name = statusName(move.status ?? current, config.status);
       // Once per run and pull request, the question once per run: this node may run again.
@@ -72,16 +75,6 @@ if (merges.length === 0) {
       } catch (flagError) {
         failures.push(`could not flag ${move.key} either: ${flagError instanceof Error ? flagError.message : String(flagError)}`);
       }
-    }
-  }
-  // A sub-task this batch set may have been its parent's last open one. A failure here is the
-  // parent's; the next loop lap's sweep tries again.
-  for (const parent of new Set(parents.values())) {
-    try {
-      const moved = await promoteParent(jira, parent, line);
-      if (moved !== null) lines.push(moved);
-    } catch (error) {
-      lines.push(`${parent}: not moved on yet (${error instanceof Error ? error.message : String(error)}), the next loop lap's sweep tries again`);
     }
   }
   if (failures.length > 0) {

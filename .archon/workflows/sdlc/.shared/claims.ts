@@ -18,6 +18,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type Jira, requireTracker, type Ticket, type TicketComment, todoStatuses, type TrackerConfig } from './jira.ts';
+import { tasksDone } from './subtickets.ts';
 import { namesTicket, ticketKeyOf } from './tickets.ts';
 
 type JsonObject = Record<string, unknown>;
@@ -143,6 +144,8 @@ export interface LapResult {
   readonly landed: string;
   readonly deployed: string;
   readonly delivers: string;
+  /** The task numbers the review says this change fully delivers (`Tasks done: 1, 2`, VAULT-28). */
+  readonly tasks: readonly number[];
   /** Markers the review filed tickets for (`write-review` output). */
   readonly created: Readonly<Record<string, string>>;
 }
@@ -197,7 +200,7 @@ export function finalStatus(
  * GitHub reports (`confirmMerge`).
  */
 
-type LapFacts = Partial<Record<'pr' | 'landed' | 'delivers', string>>;
+type LapFacts = Partial<Record<'pr' | 'landed' | 'delivers' | 'tasks', string>>;
 
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/;
@@ -306,6 +309,7 @@ export function readLap(state: string, artifacts: string, pickedPr: string): Lap
     landed: facts.landed ?? '',
     deployed: deployedFact(artifacts),
     delivers: facts.delivers ?? '',
+    tasks: tasksDone(facts.tasks ?? ''),
     created: readCreated(state),
   };
 }
@@ -367,6 +371,13 @@ export function statusName(id: string, s: TrackerConfig['status']): string {
   return name === undefined ? `status ${id}` : STATUS_NAMES[name];
 }
 
+/** A task's state as the agents read it: done, dropped, or still open. */
+function taskState(id: string, s: TrackerConfig['status']): string {
+  if (id === s.taskDone) return STATUS_NAMES.taskDone;
+  if (id === s.taskDropped) return STATUS_NAMES.taskDropped;
+  return 'offen';
+}
+
 /** Who wrote a comment, as the agents read it: the owner's words approve a judge change. */
 export function authorName(account: string, config: TrackerConfig): string {
   if (account === config.assignee) return 'Archon';
@@ -386,6 +397,10 @@ export function itemMarkdown(ticket: Ticket, rows: readonly TicketComment[], con
     '',
   ];
   if (ticket.body !== '') lines.push(ticket.body, '');
+  // The slice's tasks, in order: the review names the numbers it fully delivers (VAULT-28).
+  if (ticket.tasks.length > 0) {
+    lines.push('Tasks:', ...ticket.tasks.map(task => `- ${task.title} (${taskState(task.status, s)})`), '');
+  }
   for (const row of rows) {
     lines.push(`## Kommentar ${row.id} (${row.created}, ${authorName(row.author, config)})`, '', row.body, '');
   }

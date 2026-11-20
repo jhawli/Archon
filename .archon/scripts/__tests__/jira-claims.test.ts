@@ -79,6 +79,7 @@ const lap = (over: Partial<LapResult> = {}): LapResult => ({
   landed: '',
   deployed: '',
   delivers: '',
+  tasks: [],
   created: {},
   ...over,
 });
@@ -267,7 +268,7 @@ describe('lap facts', () => {
   it('reads what land, the outbox writer and deploy left, even when deploy failed', () => {
     const { state, artifacts } = run();
     recordLap(state, { pr: 'https://github.com/o/r/pull/9' });
-    recordLanding(state, artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'part' });
+    recordLanding(state, artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'part', tasks: 'Tasks done: 1, 3' });
     recordCreated(state, 'rest-conc-5', 'CONC-40');
     writeFileSync(join(artifacts, 'deployment.md'), '# Deployment\n\n- deployed: False\n- revision: abc\n');
     expect(readLap(state, artifacts, '')).toEqual({
@@ -275,6 +276,7 @@ describe('lap facts', () => {
       landed: 'merged',
       deployed: 'false',
       delivers: 'part',
+      tasks: [1, 3],
       created: { 'rest-conc-5': 'CONC-40' },
     });
   });
@@ -400,6 +402,7 @@ describe('the ticket file for the agents', () => {
       assignee: 'acc-archon',
       inOpenSprint: true,
       updated: 0,
+      tasks: [],
     };
     const comments: TicketComment[] = [
       { id: 10018, body: 'Loop claim: run bbb', created: '2026-11-15T11:00:00.738+0100', createdAt: 0, author: 'acc-archon', url: '' },
@@ -428,6 +431,31 @@ describe('the ticket file for the agents', () => {
         '',
       ].join('\n')
     );
+  });
+});
+
+describe('the tasks in the ticket the agents read (VAULT-28)', () => {
+  it('lists the tasks of the slice with their state, after the text', () => {
+    const ticket: Ticket = {
+      key: 'CONC-41', url: 'https://example.atlassian.net/browse/CONC-41', title: 'Liste', body: 'Text',
+      status: S.progress, type: TYPES.slice, labels: [], flagged: false, assignee: 'acc-archon', inOpenSprint: true, updated: 0,
+      tasks: [
+        { key: 'CONC-42', status: S.taskDone, title: 'Task 1: A' },
+        { key: 'CONC-43', status: '3', title: 'Task 2: B' },
+        { key: 'CONC-44', status: '10060', title: 'Task 3: C' },
+        { key: 'CONC-45', status: S.taskDropped, title: 'Task 4: D' },
+      ],
+    };
+    expect(itemMarkdown(ticket, [], CFG)).toContain(
+      'Text\n\nTasks:\n- Task 1: A (Erledigt)\n- Task 2: B (offen)\n- Task 3: C (offen)\n- Task 4: D (Entfällt)\n'
+    );
+  });
+  it('a ticket without tasks has no such block', () => {
+    const ticket: Ticket = {
+      key: 'CONC-50', url: 'https://example.atlassian.net/browse/CONC-50', title: 'Bug', body: 'Text',
+      status: S.progress, type: TYPES.bug, labels: [], flagged: false, assignee: 'acc-archon', inOpenSprint: true, updated: 0, tasks: [],
+    };
+    expect(itemMarkdown(ticket, [], CFG)).not.toContain('Tasks:');
   });
 });
 

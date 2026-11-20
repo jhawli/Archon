@@ -2,117 +2,136 @@ import { describe, expect, it } from 'bun:test';
 import { readCreated } from '../../workflows/sdlc/.shared/claims';
 import { applyOutbox, type Op } from '../../workflows/sdlc/.shared/outbox';
 import { reservedText, runLine } from '../../workflows/sdlc/.shared/questions';
-import {
-  promoteParent,
-  restParent,
-  sweepWaiting,
-  WAIT_ENDED_PREFIX,
-  WAIT_PREFIX,
-  waiting,
-  waitText,
-} from '../../workflows/sdlc/.shared/subtickets';
-import { type Call, CFG, type FakeComment, type FakeTicket, fakeJira, state } from './jira-fixtures';
+import { closeTasks, restFeature, splitTasks, tasksDone } from '../../workflows/sdlc/.shared/subtickets';
+import { type Call, CFG, type FakeTicket, fakeJira, state, SUBTASK_TYPE, TYPES } from './jira-fixtures';
 
 const S = CFG.status;
-const RUN = 'https://example.atlassian.net/browse/CONC-5';
+const RUN = 'https://example.atlassian.net/browse/CONC-41';
 const LINE = runLine('archon-loop', 'run-1');
+/** A feature on Umsetzung: a status the tracker does not name. */
+const FEATURE: FakeTicket = { status: '10055', type: '10000', children: ['CONC-41'] };
+const SLICE: FakeTicket = { status: S.progress, type: TYPES.slice, parent: 'CONC-40', sprint: 'active' };
+const BUG: FakeTicket = { status: S.progress, type: TYPES.bug, sprint: 'active' };
 const steps = (calls: Call[]): string[] => calls.map(call => `${call.method} ${call.path.split('?')[0]}`);
-const filed = (calls: Call[]): Record<string, unknown> =>
-  (calls.find(call => call.method === 'POST' && call.path === '/rest/api/3/issue')?.body as { fields: Record<string, unknown> }).fields;
-const rest: Op = { op: 'create', marker: 'rest-conc-5', title: 'CONC-5 Rest: Liste', text: 'Was fehlt' };
+const filed = (calls: Call[], n = 0): Record<string, unknown> =>
+  (calls.filter(call => call.method === 'POST' && call.path === '/rest/api/3/issue')[n]?.body as { fields: Record<string, unknown> }).fields;
+const moves = (calls: Call[]): string[] =>
+  calls
+    .filter(call => call.method === 'POST' && call.path.endsWith('/transitions'))
+    .map(call => `${call.path.split('/')[5]} ${(call.body as { transition: { id: string } }).transition.id.slice(1)}`);
+const rest = (key: string): Op => ({ op: 'create', marker: `rest-${key.toLowerCase()}`, title: `${key} Rest: Liste`, text: 'Was fehlt' });
 const finding: Op = { op: 'create', marker: 'design-im-weg', title: 'Design im Weg', text: 'Warum' };
-const lapTicket: FakeTicket = { status: S.progress, sprint: 'active' };
 
-describe('a rest ticket files as a sub-task of the lap’s ticket (VAULT-22)', () => {
-  it('rest of CONC-5, open in the active sprint: a Jira sub-task under CONC-5, on To Do, no own sprint step', async () => {
-    const { jira, calls } = fakeJira({ sprint: 7, tickets: { 'CONC-5': lapTicket } });
-    expect(await applyOutbox(jira, [rest], RUN, LINE, state(), undefined, 'CONC-5')).toEqual({ 'rest-conc-5': 'CONC-51' });
-    const fields = filed(calls);
-    expect(fields.issuetype).toEqual({ id: '10010' });
-    expect(fields.parent).toEqual({ key: 'CONC-5' });
-    expect(fields.assignee).toEqual({ accountId: CFG.assignee });
-    // The marker's remote link stays: it is how a rerun finds the ticket.
-    expect(steps(calls)).toContain('POST /rest/api/3/issue/CONC-51/remotelink');
-    expect(steps(calls)).toContain('POST /rest/api/3/issue/CONC-51/transitions');
-    expect(steps(calls).some(step => step.includes('/sprint'))).toBe(false);
-    expect(steps(calls)).not.toContain('POST /rest/api/3/issueLink');
+describe('the feature a rest goes under (VAULT-28)', () => {
+  it('the rest of a slice goes under the feature of that slice', async () => {
+    const { jira } = fakeJira({ tickets: { 'CONC-40': FEATURE, 'CONC-41': SLICE } });
+    expect(await restFeature(jira, 'CONC-41')).toBe('CONC-40');
   });
-  it('the lap’s ticket is a sub-task itself: the rest goes under its parent, beside it', async () => {
-    const tickets = { 'CONC-5': { status: S.progress, parent: 'CONC-2', sprint: 'active' as const }, 'CONC-2': { status: S.progress, sprint: 'active' as const } };
-    const { jira, calls } = fakeJira({ sprint: 7, tickets });
-    await applyOutbox(jira, [rest], RUN, LINE, state(), undefined, 'CONC-5');
-    expect(filed(calls).parent).toEqual({ key: 'CONC-2' });
+  it('a bug, or a slice without a feature, has no feature for its rest', async () => {
+    const { jira } = fakeJira({ tickets: { 'CONC-50': BUG, 'CONC-52': { status: S.progress, type: TYPES.slice } } });
+    expect(await restFeature(jira, 'CONC-50')).toBeNull();
+    expect(await restFeature(jira, 'CONC-52')).toBeNull();
   });
-  it('a parent not open in the active sprint: a ticket of its own that relates to the lap’s ticket', async () => {
-    for (const parent of [
-      { status: S.staging, sprint: 'active' as const },
-      { status: S.progress, sprint: 'closed' as const },
-      { status: S.progress },
-    ]) {
-      const { jira, calls } = fakeJira({ sprint: 7, tickets: { 'CONC-5': { status: S.progress, parent: 'CONC-2', sprint: 'active' }, 'CONC-2': parent } });
-      await applyOutbox(jira, [rest], RUN, LINE, state(), undefined, 'CONC-5');
-      expect(filed(calls).issuetype).toEqual({ name: 'Task' });
-      expect(filed(calls).parent).toBeUndefined();
-      expect(calls.find(call => call.path === '/rest/api/3/issueLink')?.body).toEqual({
-        type: { name: 'Relates' },
-        inwardIssue: { key: 'CONC-51' },
-        outwardIssue: { key: 'CONC-5' },
-      });
-      expect(steps(calls)).toContain('POST /rest/agile/1.0/sprint/7/issue');
-    }
-  });
-  it('a rest named for another ticket than the lap’s is no sub-task: it only relates', async () => {
-    const { jira, calls } = fakeJira({ sprint: 7, tickets: { 'CONC-5': lapTicket } });
-    await applyOutbox(jira, [{ ...rest, marker: 'rest-conc-9' }], RUN, LINE, state(), undefined, 'CONC-5');
+});
+
+describe('a rest is a new slice under the same feature, on Startklar (AK17, VAULT-28)', () => {
+  it('filed as the plain type, linked, in the sprint, then moved to a slice on Startklar under the feature', async () => {
+    const { jira, calls, bulkMoves, book } = fakeJira({ sprint: 7, tickets: { 'CONC-40': FEATURE, 'CONC-41': SLICE } });
+    expect(await applyOutbox(jira, [rest('CONC-41')], RUN, LINE, state(), undefined, 'CONC-41')).toEqual({ 'rest-conc-41': 'CONC-51' });
+    expect(filed(calls).issuetype).toEqual({ id: TYPES.filing });
     expect(filed(calls).parent).toBeUndefined();
-    expect(steps(calls)).toContain('POST /rest/api/3/issueLink');
+    expect(bulkMoves).toEqual([{ target: 'CONC,10005,CONC-40', keys: ['CONC-51'], statuses: { '10057': ['10060'] } }]);
+    expect(book.get('CONC-51')).toMatchObject({ type: TYPES.slice, parent: 'CONC-40', status: S.todo });
+    // Sprint first, then the move: as the Vault's `rest` does it.
+    const order = steps(calls);
+    expect(order.indexOf('POST /rest/agile/1.0/sprint/7/issue')).toBeLessThan(order.indexOf('POST /rest/api/3/bulk/issues/move'));
+    expect(order).toContain('POST /rest/api/3/issueLink');
+    expect(moves(calls)).toEqual([]);
+  });
+  it('a rerun after a failed move files nothing new and moves it once', async () => {
+    const tickets = { 'CONC-40': FEATURE, 'CONC-41': SLICE };
+    const { jira, calls, bulkMoves } = fakeJira({ sprint: 7, tickets, failOnce: 'POST /rest/api/3/bulk/issues/move' });
+    const dir = state();
+    const raw = [rest('CONC-41')];
+    await applyOutbox(jira, raw, RUN, LINE, dir, { writer: 'review', raw }, 'CONC-41').catch(() => undefined);
+    calls.length = 0;
+    expect(await applyOutbox(jira, raw, RUN, LINE, dir, { writer: 'review', raw }, 'CONC-41')).toEqual({ 'rest-conc-41': 'CONC-51' });
+    expect(steps(calls)).not.toContain('POST /rest/api/3/issue');
+    expect(bulkMoves).toHaveLength(1);
+  });
+  it('a rerun after the move does not move it again', async () => {
+    const tickets = { 'CONC-40': FEATURE, 'CONC-41': SLICE };
+    const { jira, bulkMoves } = fakeJira({ sprint: 7, tickets, failOnce: 'GET /rest/api/3/bulk/queue/t1' });
+    const dir = state();
+    const raw = [rest('CONC-41')];
+    await applyOutbox(jira, raw, RUN, LINE, dir, { writer: 'review', raw }, 'CONC-41').catch(() => undefined);
+    await applyOutbox(jira, raw, RUN, LINE, dir, { writer: 'review', raw }, 'CONC-41');
+    expect(bulkMoves).toHaveLength(1);
+  });
+  it('a bulk move that ends on another status fails loudly', async () => {
+    const { jira } = fakeJira({ sprint: 7, tickets: { 'CONC-40': FEATURE, 'CONC-41': SLICE }, bulkStatus: '10060' });
+    expect(applyOutbox(jira, [rest('CONC-41')], RUN, LINE, state(), undefined, 'CONC-41')).rejects.toThrow(
+      'CONC-51: bulk move left it on 10060'
+    );
+  });
+  it('the rest of a bug is a bug that relates to it', async () => {
+    const { jira, calls, bulkMoves } = fakeJira({ sprint: 7, tickets: { 'CONC-50': BUG } });
+    await applyOutbox(jira, [rest('CONC-50')], RUN, LINE, state(), undefined, 'CONC-50');
+    expect(filed(calls).issuetype).toEqual({ id: TYPES.bug });
+    expect(bulkMoves).toEqual([]);
+    const link = calls.find(call => call.path === '/rest/api/3/issueLink')?.body as { outwardIssue: { key: string } };
+    expect(link.outwardIssue.key).toBe('CONC-50');
   });
 });
 
 describe('a ticket delivered in part a second time gets a new rest (VAULT-22)', () => {
   const id = (marker: string): string => `archon:CONC:${marker}`;
-  it('the first rest is on Staging: the new one files as rest-conc-5-2, under CONC-5', async () => {
-    const tickets = { 'CONC-5': lapTicket, 'CONC-45': { status: S.staging, parent: 'CONC-5' } };
-    const { jira, calls } = fakeJira({ sprint: 7, tickets, linked: { [id('rest-conc-5')]: 'CONC-45' } });
+  it('the first rest is on Staging: the new one files as rest-conc-41-2, again under the feature', async () => {
+    const tickets = { 'CONC-40': FEATURE, 'CONC-41': SLICE, 'CONC-45': { status: S.staging, type: TYPES.slice, parent: 'CONC-40' } };
+    const { jira, calls, bulkMoves } = fakeJira({ sprint: 7, tickets, linked: { [id('rest-conc-41')]: 'CONC-45' } });
     const dir = state();
-    expect(await applyOutbox(jira, [rest], RUN, LINE, dir, undefined, 'CONC-5')).toEqual({ 'rest-conc-5': 'CONC-51' });
-    expect(filed(calls).parent).toEqual({ key: 'CONC-5' });
-    expect(JSON.stringify(filed(calls).description)).toContain('Loop finding: rest-conc-5-2');
+    expect(await applyOutbox(jira, [rest('CONC-41')], RUN, LINE, dir, undefined, 'CONC-41')).toEqual({ 'rest-conc-41': 'CONC-51' });
+    expect(JSON.stringify(filed(calls).description)).toContain('Loop finding: rest-conc-41-2');
     const link = calls.find(call => call.path === '/rest/api/3/issue/CONC-51/remotelink')?.body as { globalId: string };
-    expect(link.globalId).toBe(id('rest-conc-5-2'));
+    expect(link.globalId).toBe(id('rest-conc-41-2'));
+    expect(bulkMoves[0]?.target).toBe('CONC,10005,CONC-40');
     // Release reads the rest under the marker review wrote.
-    expect(readCreated(dir)['rest-conc-5']).toBe('CONC-51');
+    expect(readCreated(dir)['rest-conc-41']).toBe('CONC-51');
   });
   it('parts done and canceled alike are passed over; the first open part is used again', async () => {
-    const tickets = { 'CONC-5': lapTicket, 'CONC-45': { status: S.live }, 'CONC-46': { status: S.canceled }, 'CONC-47': { status: S.todo } };
-    const linked = { [id('rest-conc-5')]: 'CONC-45', [id('rest-conc-5-2')]: 'CONC-46', [id('rest-conc-5-3')]: 'CONC-47' };
+    const tickets = { 'CONC-41': SLICE, 'CONC-45': { status: S.live }, 'CONC-46': { status: S.canceled }, 'CONC-47': { status: S.todo } };
+    const linked = { [id('rest-conc-41')]: 'CONC-45', [id('rest-conc-41-2')]: 'CONC-46', [id('rest-conc-41-3')]: 'CONC-47' };
     const { jira, calls } = fakeJira({ sprint: 7, tickets, linked });
-    expect(await applyOutbox(jira, [rest], RUN, LINE, state(), undefined, 'CONC-5')).toEqual({ 'rest-conc-5': 'CONC-47' });
+    expect(await applyOutbox(jira, [rest('CONC-41')], RUN, LINE, state(), undefined, 'CONC-41')).toEqual({ 'rest-conc-41': 'CONC-47' });
     expect(calls.some(call => call.method === 'POST' && call.path === '/rest/api/3/issue')).toBe(false);
   });
   it('a rerun of a half set up later part links that part, not the first', async () => {
-    const tickets = { 'CONC-5': lapTicket, 'CONC-45': { status: S.staging } };
-    const { jira, calls } = fakeJira({ sprint: 7, tickets, linked: { [id('rest-conc-5')]: 'CONC-45' }, failOnce: 'POST /rest/api/3/issue/CONC-51/remotelink' });
+    const tickets = { 'CONC-40': FEATURE, 'CONC-41': SLICE, 'CONC-45': { status: S.staging } };
+    const raw = [rest('CONC-41')];
+    const failOnce = 'POST /rest/api/3/issue/CONC-51/remotelink';
+    const { jira, calls } = fakeJira({ sprint: 7, tickets, linked: { [id('rest-conc-41')]: 'CONC-45' }, failOnce });
     const dir = state();
-    await applyOutbox(jira, [rest], RUN, LINE, dir, { writer: 'review', raw: [rest] }, 'CONC-5').catch(() => undefined);
+    await applyOutbox(jira, raw, RUN, LINE, dir, { writer: 'review', raw }, 'CONC-41').catch(() => undefined);
     calls.length = 0;
-    await applyOutbox(jira, [rest], RUN, LINE, dir, { writer: 'review', raw: [rest] }, 'CONC-5');
+    await applyOutbox(jira, raw, RUN, LINE, dir, { writer: 'review', raw }, 'CONC-41');
     const link = calls.find(call => call.path === '/rest/api/3/issue/CONC-51/remotelink')?.body as { globalId: string };
-    expect(link.globalId).toBe(id('rest-conc-5-2'));
+    expect(link.globalId).toBe(id('rest-conc-41-2'));
     expect(calls.some(call => call.method === 'POST' && call.path === '/rest/api/3/issue')).toBe(false);
   });
   it('any other marker names its finding for good: a canceled one is not filed again', async () => {
     const { jira, calls } = fakeJira({ tickets: { 'CONC-45': { status: S.canceled } }, linked: { [id('design-im-weg')]: 'CONC-45' } });
-    expect(await applyOutbox(jira, [finding], RUN, LINE, state(), undefined, 'CONC-5')).toEqual({ 'design-im-weg': 'CONC-45' });
+    expect(await applyOutbox(jira, [finding], RUN, LINE, state(), undefined, 'CONC-41')).toEqual({ 'design-im-weg': 'CONC-45' });
     expect(steps(calls)).toEqual(['POST /rest/api/3/search/jql']);
   });
 });
 
-describe('other tickets a lap files relate to its ticket', () => {
-  it('a finding during the lap on CONC-5: a Task with "relates to" CONC-5, in the open sprint', async () => {
-    const { jira, calls } = fakeJira({ sprint: 7, tickets: { 'CONC-5': lapTicket } });
-    await applyOutbox(jira, [finding], RUN, LINE, state(), undefined, 'CONC-5');
-    expect(filed(calls).issuetype).toEqual({ name: 'Task' });
+describe('a finding of the loop is a bug on Gemeldet (VAULT-28, decision 3)', () => {
+  it('a finding during the lap on CONC-41: a bug that relates to CONC-41, in the open sprint, not moved', async () => {
+    const { jira, calls, bulkMoves } = fakeJira({ sprint: 7, tickets: { 'CONC-40': FEATURE, 'CONC-41': SLICE } });
+    await applyOutbox(jira, [finding], RUN, LINE, state(), undefined, 'CONC-41');
+    expect(filed(calls).issuetype).toEqual({ id: TYPES.bug });
+    expect(bulkMoves).toEqual([]);
+    expect(moves(calls)).toEqual([]);
     expect(steps(calls)).toEqual([
       'POST /rest/api/3/search/jql',
       'GET /rest/api/3/project/CONC',
@@ -121,21 +140,19 @@ describe('other tickets a lap files relate to its ticket', () => {
       'GET /rest/api/3/issue/CONC-51',
       'POST /rest/api/3/issueLink',
       'GET /rest/api/3/issue/CONC-51',
-      'GET /rest/api/3/issue/CONC-51/transitions',
-      'POST /rest/api/3/issue/CONC-51/transitions',
       'GET /rest/agile/1.0/board/5/sprint',
       'POST /rest/agile/1.0/sprint/7/issue',
     ]);
   });
   it('a link that is there already is not added twice (rerun)', async () => {
-    const { jira, calls } = fakeJira({ tickets: { 'CONC-51': { status: S.todo, relates: ['CONC-5'] } } });
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-51': { status: S.todoBug, type: TYPES.bug, relates: ['CONC-5'] } } });
     await jira.relate('CONC-51', 'CONC-5');
     expect(steps(calls)).toEqual(['GET /rest/api/3/issue/CONC-51']);
   });
-  it('a lap on a pull request alone links nothing', async () => {
+  it('a lap on a pull request alone links nothing: its rest is a bug of its own', async () => {
     const { jira, calls } = fakeJira({ sprint: 7 });
-    await applyOutbox(jira, [rest], RUN, LINE, state(), undefined, null);
-    expect(filed(calls).parent).toBeUndefined();
+    await applyOutbox(jira, [rest('CONC-41')], RUN, LINE, state(), undefined, null);
+    expect(filed(calls).issuetype).toEqual({ id: TYPES.bug });
     expect(steps(calls)).not.toContain('POST /rest/api/3/issueLink');
   });
   it('a ticket of another project never reaches the link call', async () => {
@@ -144,86 +161,95 @@ describe('other tickets a lap files relate to its ticket', () => {
   });
 });
 
-describe('restParent', () => {
-  it('a sub-task under a sub-task does not exist: a parent that is a sub-task gives none', async () => {
-    const tickets = { 'CONC-5': { status: S.progress, parent: 'CONC-2', sprint: 'active' as const }, 'CONC-2': { status: S.progress, parent: 'CONC-1', sprint: 'active' as const } };
-    const { jira } = fakeJira({ tickets });
-    expect(await restParent(jira, 'CONC-5')).toBeNull();
+const TASKS = [
+  { key: 'CONC-42', status: '10061', title: 'Task 1: A' }, // already Erledigt
+  { key: 'CONC-43', status: '3', title: 'Task 2: B' },
+  { key: 'CONC-44', status: '10060', title: 'Task 3: C' },
+  { key: 'CONC-45', status: '10060', title: 'Aufräumen' }, // no number
+];
+
+describe('the tasks of a slice after a lap (VAULT-28, decision 5)', () => {
+  it('a whole delivery finishes every open task', () => {
+    expect(splitTasks(TASKS, [], 'all', S)).toEqual({ done: ['CONC-43', 'CONC-44', 'CONC-45'], rest: [], unknown: [] });
+    expect(splitTasks(TASKS, [], '', S).done).toEqual(['CONC-43', 'CONC-44', 'CONC-45']);
+  });
+  it('a part finishes the named tasks, the others go to the rest', () => {
+    expect(splitTasks(TASKS, [2], 'part', S)).toEqual({ done: ['CONC-43'], rest: ['CONC-44', 'CONC-45'], unknown: [] });
+  });
+  it('a part that names no task leaves every open one to the rest', () => {
+    expect(splitTasks(TASKS, [], 'part', S).rest).toEqual(['CONC-43', 'CONC-44', 'CONC-45']);
+  });
+  it('a number the slice does not have is reported, never guessed', () => {
+    expect(splitTasks(TASKS, [2, 9], 'part', S).unknown).toEqual([9]);
+    expect(splitTasks(TASKS, [9], 'all', S).unknown).toEqual([9]);
+  });
+  it('a task already Erledigt or Entfällt is left alone', () => {
+    expect(splitTasks(TASKS, [1], 'part', S).done).toEqual([]);
+    expect(splitTasks([{ key: 'CONC-46', status: '10062', title: 'Task 4: D' }], [], 'all', S)).toEqual({ done: [], rest: [], unknown: [] });
+  });
+  it('the line "Tasks done: 1, 2, 5" is read as numbers; anything else is no number', () => {
+    expect(tasksDone('Tasks done: 1, 2, 5')).toEqual([1, 2, 5]);
+    expect(tasksDone('Tasks done: none')).toEqual([]);
+    expect(tasksDone('Tasks done: 1; rm -rf')).toEqual([1]);
+    expect(tasksDone('verdict\nTasks done: 3\n')).toEqual([3]);
+    expect(tasksDone('')).toEqual([]);
+    expect(tasksDone('1, 2')).toEqual([]);
   });
 });
 
-const at = (id: number, body: string, author = CFG.assignee): FakeComment => ({ id, author, body, created: `2026-11-18T10:0${id % 10}:00.000+0000` });
-const waitingParent = (comments: FakeComment[], children = ['CONC-51', 'CONC-52']): Record<string, FakeTicket> => ({
-  'CONC-5': { status: S.progress, sprint: 'active', children, comments },
-  'CONC-51': { status: S.staging, parent: 'CONC-5' },
-  'CONC-52': { status: S.canceled, parent: 'CONC-5' },
-});
-
-describe('the waiting parent goes to Staging when its sub-tasks are done', () => {
-  it('waiting, every sub-task on Staging, Live or Canceled: Staging, then a comment with the run line', async () => {
-    const { jira, calls } = fakeJira({ tickets: waitingParent([at(1, 'Loop claim: run r0 x'), at(2, waitText(['CONC-51']))]) });
-    expect(await promoteParent(jira, 'CONC-5', LINE)).toContain('Staging');
-    const moved = calls.findIndex(call => call.method === 'POST' && call.path.endsWith('/transitions'));
-    const said = calls.findIndex(call => call.method === 'POST' && call.path.endsWith('/comment'));
-    expect(calls[moved]?.body).toEqual({ transition: { id: `t${S.staging}` } });
-    expect(moved).toBeLessThan(said);
-    expect(JSON.stringify(calls[said]?.body)).toContain('Lauf: archon archon-loop run-1');
+describe('closing the tasks before Review (VAULT-28, AK17)', () => {
+  const slice = (): Record<string, FakeTicket> => ({
+    'CONC-40': FEATURE,
+    'CONC-41': { ...SLICE, children: TASKS.map(t => t.key) },
+    ...Object.fromEntries(TASKS.map(t => [t.key, { status: t.status, type: SUBTASK_TYPE, title: t.title, parent: 'CONC-41' }])),
+    'CONC-90': { status: S.todo, type: TYPES.slice, parent: 'CONC-40' },
   });
-  it('one sub-task still open: nothing', async () => {
-    const tickets = { ...waitingParent([at(1, waitText(['CONC-51']))]), 'CONC-52': { status: S.todo, parent: 'CONC-5' } };
-    const { jira, calls } = fakeJira({ tickets });
-    expect(await promoteParent(jira, 'CONC-5', LINE)).toBeNull();
-    expect(steps(calls).some(step => step.startsWith('POST'))).toBe(false);
+  const made = (calls: Call[]): { parent: { key: string }; summary: string; issuetype: unknown }[] =>
+    calls
+      .filter(call => call.method === 'POST' && call.path === '/rest/api/3/issue')
+      .map(call => (call.body as { fields: { parent: { key: string }; summary: string; issuetype: unknown } }).fields);
+  it('the tasks left over are filed again under the rest slice and dropped on the old one', async () => {
+    const { jira, calls } = fakeJira({ tickets: slice() });
+    const notes = await closeTasks(jira, 'CONC-41', { delivers: 'part', tasks: [2] }, 'CONC-90');
+    expect(moves(calls)).toEqual(['CONC-43 10061', 'CONC-44 10062', 'CONC-45 10062']);
+    expect(made(calls).map(f => [f.parent.key, f.summary])).toEqual([['CONC-90', 'Task 3: C'], ['CONC-90', 'Aufräumen']]);
+    expect(made(calls)[0]?.issuetype).toEqual({ id: SUBTASK_TYPE });
+    expect(notes).toEqual(['Tasks erledigt: CONC-43.', 'Weiter in CONC-90: CONC-44, CONC-45.']);
   });
-  it('no wait record, a live claim after it, or one by another account: not a waiting parent', async () => {
-    for (const comments of [
-      [at(1, 'Loop result: run r1. Status: In Progress.')],
-      [at(1, waitText(['CONC-51'])), at(2, 'Loop claim: run r2 x')],
-      [at(1, waitText(['CONC-51']), CFG.owner)],
-    ]) {
-      const { jira, calls } = fakeJira({ tickets: waitingParent(comments) });
-      expect(await promoteParent(jira, 'CONC-5', LINE)).toBeNull();
-      expect(steps(calls).some(step => step.startsWith('POST'))).toBe(false);
-    }
+  it('a rerun files no task twice under the rest', async () => {
+    const { jira, calls } = fakeJira({ tickets: slice() });
+    await closeTasks(jira, 'CONC-41', { delivers: 'part', tasks: [2] }, 'CONC-90');
+    calls.length = 0;
+    await closeTasks(jira, 'CONC-41', { delivers: 'part', tasks: [2] }, 'CONC-90');
+    expect(calls.filter(call => call.method === 'POST')).toEqual([]);
   });
-  it('a wait that ended (the parent went to Staging) does not count again when the ticket is set back to In Progress', async () => {
-    const comments = [at(1, waitText(['CONC-51'])), at(2, `${WAIT_ENDED_PREFIX}alle Subtickets fertig`)];
-    const { jira, calls } = fakeJira({ tickets: waitingParent(comments) });
-    expect(await promoteParent(jira, 'CONC-5', LINE)).toBeNull();
-    expect(steps(calls).some(step => step.startsWith('POST'))).toBe(false);
-    expect(waiting(comments.map(c => ({ ...c, createdAt: 0, url: '' })), CFG)).toBe(false);
+  it('a whole delivery closes every open task and files nothing', async () => {
+    const { jira, calls } = fakeJira({ tickets: slice() });
+    expect(await closeTasks(jira, 'CONC-41', { delivers: 'all', tasks: [] }, null)).toEqual(['Tasks erledigt: CONC-43, CONC-44, CONC-45.']);
+    expect(moves(calls)).toEqual(['CONC-43 10061', 'CONC-44 10061', 'CONC-45 10061']);
+    expect(made(calls)).toEqual([]);
   });
-  it('the comment that moves the parent ends the wait', async () => {
-    const { jira, calls } = fakeJira({ tickets: waitingParent([at(1, waitText(['CONC-51']))]) });
-    await promoteParent(jira, 'CONC-5', LINE);
-    const said = calls.find(call => call.method === 'POST' && call.path.endsWith('/comment'));
-    expect(JSON.stringify(said?.body)).toContain(WAIT_ENDED_PREFIX.trim());
+  it('a part without a rest ticket leaves the other tasks open and says so', async () => {
+    const { jira, calls } = fakeJira({ tickets: slice() });
+    const notes = await closeTasks(jira, 'CONC-41', { delivers: 'part', tasks: [2, 7] }, null);
+    expect(moves(calls)).toEqual(['CONC-43 10061']);
+    expect(notes).toEqual([
+      'Tasks erledigt: CONC-43.',
+      'Offen ohne Rest-Ticket: CONC-44, CONC-45.',
+      '„Tasks done“ nennt 7: diese Nummer hat die Scheibe nicht, übergangen.',
+    ]);
   });
-  it('a released claim after the wait no longer counts as one', async () => {
-    const { jira } = fakeJira({ tickets: waitingParent([at(1, waitText(['CONC-51'])), at(2, 'Loop claim released: run r2 ended.')]) });
-    expect(await promoteParent(jira, 'CONC-5', LINE)).not.toBeNull();
-  });
-  it('a ticket not In Progress, or without sub-tasks, is left alone', async () => {
-    const onReview = { ...waitingParent([at(1, waitText(['CONC-51']))]), 'CONC-5': { status: S.review, children: ['CONC-51'], comments: [at(1, waitText(['CONC-51']))] } };
-    expect(await promoteParent(fakeJira({ tickets: onReview }).jira, 'CONC-5', LINE)).toBeNull();
-    expect(await promoteParent(fakeJira({ tickets: waitingParent([at(1, waitText(['CONC-51']))], []) }).jira, 'CONC-5', LINE)).toBeNull();
-  });
-  it('the sweep asks for the loop’s In Progress tickets and goes on past one that fails', async () => {
-    const tickets = { ...waitingParent([at(1, waitText(['CONC-51']))]), 'CONC-6': { status: S.progress } };
-    const { jira, calls } = fakeJira({ found: ['CONC-6', 'CONC-5'], tickets, failOnce: 'GET /rest/api/3/issue/CONC-6' });
-    const lines = await sweepWaiting(jira, LINE);
-    expect((calls[0]?.body as { jql: string }).jql).toBe(`project = CONC AND status = ${S.progress} AND assignee = "${CFG.assignee}"`);
-    expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain('CONC-6: could not be moved');
-    expect(lines[1]).toContain('CONC-5: Staging');
+  it('a ticket without tasks (a bug) is left alone', async () => {
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-50': BUG } });
+    expect(await closeTasks(jira, 'CONC-50', { delivers: 'all', tasks: [] }, null)).toEqual([]);
+    expect(calls.filter(call => call.method === 'POST')).toEqual([]);
   });
 });
 
-describe('the wait record is the scripts’ own', () => {
-  it('an agent may not write a comment that opens like it', () => {
-    expect(reservedText(waitText(['CONC-51']))).toBe(true);
-    expect(reservedText(`${WAIT_PREFIX}x`)).toBe(true);
-    expect(reservedText(`${WAIT_ENDED_PREFIX}x`)).toBe(true);
+describe('the old wait records stay the scripts’ own', () => {
+  it('an agent may not write a comment that opens like one', () => {
+    expect(reservedText('Loop wait: geliefert')).toBe(true);
+    expect(reservedText('Loop wait ended: alle')).toBe(true);
     expect(reservedText('Wartet auf CONC-51')).toBe(false);
   });
 });
