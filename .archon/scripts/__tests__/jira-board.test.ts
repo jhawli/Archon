@@ -7,6 +7,7 @@ import {
   type GithubItem,
 } from '../../workflows/sdlc/.shared/tracker-board';
 import { workability, type Board, type BoardItem } from '../../workflows/sdlc/.shared/workable';
+import { STATUS, TYPES } from './jira-fixtures';
 
 const CFG: TrackerConfig = {
   kind: 'jira',
@@ -16,14 +17,8 @@ const CFG: TrackerConfig = {
   keychain: 'none',
   assignee: 'acc-archon',
   owner: 'acc-julian',
-  status: {
-    todo: '10015',
-    progress: '3',
-    review: '10016',
-    staging: '10017',
-    live: '10018',
-    canceled: '10008',
-  },
+  status: STATUS,
+  types: TYPES,
   flagField: 'customfield_10021',
   flagOn: '10019',
   sprintField: 'customfield_10020',
@@ -223,7 +218,7 @@ describe('loading the board from Jira', () => {
     const { send, jql, comments } = fakeJira();
     const loaded = await loadJiraBoard(new Jira(CFG, send), [pull]);
     expect(jql[0]).toBe(
-      'project = CONC AND sprint in openSprints() AND status = 10015 AND assignee = "acc-archon" ORDER BY Rank ASC'
+      'project = CONC AND sprint in openSprints() AND status in (10057, 10059) AND assignee = "acc-archon" ORDER BY Rank ASC'
     );
     expect(jql.slice(1)).toEqual(['key in (CONC-9)', 'key in (CONC-3,CONC-77)']);
     expect(comments).toEqual(['CONC-5', 'CONC-6', 'CONC-9']);

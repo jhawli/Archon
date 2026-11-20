@@ -17,7 +17,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Jira, requireTracker, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
+import { type Jira, requireTracker, type Ticket, type TicketComment, todoStatuses, type TrackerConfig } from './jira.ts';
 import { namesTicket, ticketKeyOf } from './tickets.ts';
 
 type JsonObject = Record<string, unknown>;
@@ -362,7 +362,15 @@ const STATUS_NAMES: Record<keyof TrackerConfig['status'], string> = {
   staging: 'Staging',
   live: 'Live',
   canceled: 'Canceled',
+  todoBug: 'Gemeldet',
+  taskDone: 'Erledigt',
+  taskDropped: 'Entfällt',
 };
+
+/** Where a claim moves the ticket: from either queue to progress. A ticket further along stays (null). */
+export function claimStart(status: string, s: TrackerConfig['status']): string | null {
+  return todoStatuses(s).includes(status) ? s.progress : null;
+}
 
 export function statusName(id: string, s: TrackerConfig['status']): string {
   const name = (Object.keys(STATUS_NAMES) as (keyof TrackerConfig['status'])[]).find(k => s[k] === id);

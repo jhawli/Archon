@@ -6,6 +6,7 @@ import {
   type ClaimClient,
   type LapResult,
   type PrView,
+  claimStart,
   confirmMerge,
   unnamedPrAsk,
   deadClaims,
@@ -28,6 +29,7 @@ import {
   workItem,
 } from '../../workflows/sdlc/.shared/claims';
 import type { Ticket, TicketComment, TrackerConfig } from '../../workflows/sdlc/.shared/jira';
+import { STATUS, TYPES } from './jira-fixtures';
 
 const CFG: TrackerConfig = {
   kind: 'jira',
@@ -37,14 +39,8 @@ const CFG: TrackerConfig = {
   keychain: 'none',
   assignee: 'acc-archon',
   owner: 'acc-julian',
-  status: {
-    todo: '10015',
-    progress: '3',
-    review: '10016',
-    staging: '10017',
-    live: '10018',
-    canceled: '10008',
-  },
+  status: STATUS,
+  types: TYPES,
   flagField: 'customfield_10021',
   flagOn: '10019',
   sprintField: 'customfield_10020',
@@ -404,6 +400,7 @@ describe('the ticket file for the agents', () => {
       title: 'Tags für Notizen',
       body: 'Was gebaut wird.\n\n- eins',
       status: S.progress,
+      type: TYPES.slice,
       labels: ['route:simple'],
       flagged: false,
       assignee: 'acc-archon',
@@ -437,5 +434,14 @@ describe('the ticket file for the agents', () => {
         '',
       ].join('\n')
     );
+  });
+});
+
+describe('a claim starts the work (VAULT-28)', () => {
+  it('from either queue to Entwicklung, a bug from Gemeldet too; a ticket further along stays', () => {
+    expect(claimStart(S.todo, S)).toBe('10058');
+    expect(claimStart(S.todoBug, S)).toBe('10058');
+    expect(claimStart(S.progress, S)).toBeNull();
+    expect(claimStart(S.review, S)).toBeNull();
   });
 });

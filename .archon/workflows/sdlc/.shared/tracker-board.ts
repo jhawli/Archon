@@ -3,7 +3,7 @@
  * and which `Depends on` targets still block. Used by the launch gate and by tracker-read,
  * so both see the same facts. Pull requests stay on GitHub and come in as `gh pr list` rows.
  */
-import { doneStatuses, type Jira, type Ticket, type TicketComment } from './jira.ts';
+import { doneStatuses, type Jira, type Ticket, type TicketComment, todoStatuses } from './jira.ts';
 import { dependencyKeys, prKeys } from './tickets.ts';
 import { OWNER_LABEL, type Board, type BoardItem, type Links } from './workable.ts';
 
@@ -80,7 +80,7 @@ export async function loadJiraBoard(jira: Jira, pulls: readonly GithubItem[]): P
   // Flagged tickets come too: pick may lift a flag that was only bookkeeping (they are not candidates).
   const startable = (
     await jira.search(
-      `project = ${c.project} AND sprint in openSprints() AND status = ${c.status.todo} AND assignee = "${c.assignee}" ORDER BY Rank ASC`
+      `project = ${c.project} AND sprint in openSprints() AND status in (${todoStatuses(c.status).join(', ')}) AND assignee = "${c.assignee}" ORDER BY Rank ASC`
     )
   ).map(raw => jira.toTicket(raw, true));
   const have = new Set(startable.map(ticket => ticket.key));

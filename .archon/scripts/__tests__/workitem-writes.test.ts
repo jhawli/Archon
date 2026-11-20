@@ -8,6 +8,7 @@ import { Jira, NEEDS_TRACKER, type TrackerConfig, type Transport } from '../../w
 import { OWNED_LABEL_NAMES, writeTicketLabels } from '../../workflows/sdlc/.shared/labels';
 import type { Closure } from '../../workflows/sdlc/triage/scripts/verdict';
 import { PR, packScriptRunner } from './deliver-checks-harness';
+import { STATUS, TYPES } from './jira-fixtures';
 import { trackTempRoots } from './temp-roots';
 
 const { runPackScript } = packScriptRunner();
@@ -189,7 +190,8 @@ const JIRA: TrackerConfig = {
   keychain: 'none',
   assignee: 'acc-archon',
   owner: 'acc-julian',
-  status: { todo: '10015', progress: '3', review: '10016', staging: '10017', live: '10018', canceled: '10008' },
+  status: STATUS,
+  types: TYPES,
   flagField: 'customfield_10021',
   flagOn: '10019',
   sprintField: 'customfield_10020',

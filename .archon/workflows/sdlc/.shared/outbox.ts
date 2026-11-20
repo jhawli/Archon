@@ -12,7 +12,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, restMarker, statusName } from './claims.ts';
 import { note } from './io.ts';
-import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, type TrackerConfig } from './jira.ts';
+import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, todoStatuses, type TrackerConfig } from './jira.ts';
 import { reservedQuestion, reservedText } from './questions.ts';
 import { restParent } from './subtickets.ts';
 import { namesTicket, prKeys } from './tickets.ts';
@@ -125,15 +125,16 @@ export function checkOutbox(
 
 /**
  * The tickets pick may write to (decision 11): the loop's own, either startable (open
- * sprint, To Do) or waiting on review. Never a ticket of the owner's, and never one In
- * Progress: sessions work as the loop's account too, and another lap's ticket is In Progress.
+ * sprint, on a queue: Startklar or Gemeldet) or waiting on review. Never a ticket of the
+ * owner's, and never one in progress: sessions work as the loop's account too, and another
+ * lap's ticket is in progress.
  */
 export function writableKeys(tickets: readonly Ticket[], config: TrackerConfig): Set<string> {
   const s = config.status;
   return new Set(
     tickets
       .filter(t => t.assignee === config.assignee)
-      .filter(t => (t.inOpenSprint && t.status === s.todo) || t.status === s.review)
+      .filter(t => (t.inOpenSprint && todoStatuses(s).includes(t.status)) || t.status === s.review)
       .map(t => t.key)
   );
 }
@@ -148,7 +149,7 @@ export function writableJql(keys: readonly string[], config: TrackerConfig): str
   const s = config.status;
   return (
     `key in (${valid.join(',')}) AND assignee = "${config.assignee}" AND ` +
-    `(status = ${s.review} OR (status = ${s.todo} AND sprint in openSprints()))`
+    `(status = ${s.review} OR (status in (${todoStatuses(s).join(', ')}) AND sprint in openSprints()))`
   );
 }
 

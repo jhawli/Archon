@@ -9,7 +9,7 @@ import { CFG } from './jira-fixtures';
 const NOW = Date.parse('2026-11-18T12:00:00Z');
 function t(key: string, status: string, inOpenSprint: boolean, extra: Partial<Ticket> = {}): Ticket {
   return { key, url: `https://example.atlassian.net/browse/${key}`, title: `Titel ${key}`, body: `Text ${key}`, status,
-    labels: [], flagged: false, assignee: CFG.assignee, inOpenSprint, updated: 0, ...extra };
+    type: CFG.types.slice, labels: [], flagged: false, assignee: CFG.assignee, inOpenSprint, updated: 0, ...extra };
 }
 const ALL: BoardAll = {
   tickets: [t('CONC-5', CFG.status.todo, true), t('CONC-12', CFG.status.staging, false), t('CONC-40', CFG.status.live, false), t('CONC-3', '10014', false)],
@@ -28,6 +28,7 @@ describe('board-all.md', () => {
   });
   it('states the manager’s rights per status (AK18i)', () => {
     expect(rights(CFG.status.todo, CFG.status)).toBe('alles');
+    expect(rights(CFG.status.todoBug, CFG.status)).toBe('alles');
     expect(rights(CFG.status.review, CFG.status)).toBe('review');
     for (const s of [CFG.status.progress, CFG.status.staging, CFG.status.live, CFG.status.canceled, '10014']) {
       expect(rights(s, CFG.status)).toBe('kommentar');

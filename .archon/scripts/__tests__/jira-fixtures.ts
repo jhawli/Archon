@@ -4,6 +4,19 @@ import { join } from 'node:path';
 import { runState } from '../../workflows/sdlc/.shared/claims';
 import { adf, Jira, type TrackerConfig, type Transport } from '../../workflows/sdlc/.shared/jira';
 
+/**
+ * The lifecycle statuses (VAULT-28): Startklar and Gemeldet are the two queues, Entwicklung the
+ * work, Erledigt and Entfällt the ends of a task. Tests read ids from here, never a copy.
+ */
+export const STATUS = {
+  todo: '10057', todoBug: '10059', progress: '10058', review: '10016', staging: '10017',
+  live: '10018', canceled: '10063', taskDone: '10061', taskDropped: '10062',
+} as const;
+/** Bug, Scheibe (under a feature) and the plain type a new ticket is filed as (Aufgabe). */
+export const TYPES = { bug: '10011', slice: '10005', filing: '10009' } as const;
+/** The project's sub-task type (Task): the only type with `subtask: true`. */
+export const SUBTASK_TYPE = '10010';
+
 /** A Jira tracker for tests: project CONC, the loop's account `acc-archon`, the owner `acc-julian`. */
 export const CFG: TrackerConfig = {
   kind: 'jira',
@@ -13,14 +26,8 @@ export const CFG: TrackerConfig = {
   keychain: 'none',
   assignee: 'acc-archon',
   owner: 'acc-julian',
-  status: {
-    todo: '10015',
-    progress: '3',
-    review: '10016',
-    staging: '10017',
-    live: '10018',
-    canceled: '10008',
-  },
+  status: STATUS,
+  types: TYPES,
   flagField: 'customfield_10021',
   flagOn: '10019',
   sprintField: 'customfield_10020',
@@ -29,6 +36,8 @@ export const CFG: TrackerConfig = {
 export interface FakeComment { readonly id: number; readonly author: string; readonly body: string; readonly created: string }
 export interface FakeTicket {
   readonly status: string;
+  /** Issue type id; a slice without, a sub-task when it has a parent. */
+  readonly type?: string;
   readonly body?: string;
   readonly flagged?: boolean;
   readonly comments?: readonly FakeComment[];
@@ -75,7 +84,7 @@ export function fakeJira(
       status: { id: t.status },
       labels: [],
       [CFG.flagField]: t.flagged ? [{ id: CFG.flagOn }] : [],
-      issuetype: { subtask: t.parent !== undefined },
+      issuetype: { id: t.type ?? (t.parent !== undefined ? SUBTASK_TYPE : TYPES.slice), subtask: t.parent !== undefined },
       ...(t.parent !== undefined ? { parent: { key: t.parent } } : {}),
       subtasks: (t.children ?? []).map(child => ({ key: child, fields: { status: { id: opts.tickets?.[child]?.status ?? '' } } })),
       [CFG.sprintField]: t.sprint === undefined ? null : [{ id: 7, state: t.sprint }],
@@ -116,7 +125,16 @@ export function fakeJira(
       return ok({ transitions: Object.values(CFG.status).map(id => ({ id: `t${id}`, to: { id } })) });
     }
     if (method === 'GET' && bare === '/rest/api/3/project/CONC') {
-      return ok({ id: '10002', issueTypes: [{ id: '10009', name: 'Task', subtask: false }, { id: '10010', name: 'Sub-Task', subtask: true }] });
+      return ok({
+        id: '10002',
+        issueTypes: [
+          { id: '10000', name: 'Feature', subtask: false },
+          { id: TYPES.slice, name: 'Scheibe', subtask: false },
+          { id: TYPES.filing, name: 'Aufgabe', subtask: false },
+          { id: SUBTASK_TYPE, name: 'Task', subtask: true },
+          { id: TYPES.bug, name: 'Bug', subtask: false },
+        ],
+      });
     }
     if (method === 'POST' && bare === '/rest/api/3/issue') return ok({ key: `CONC-${(next += 1)}` }, 201);
     if (method === 'POST' && bare.endsWith('/comment')) return ok({ id: '10100' }, 201);

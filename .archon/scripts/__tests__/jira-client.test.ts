@@ -8,6 +8,8 @@ import {
   adf,
   plain,
   pinTrackerConfig,
+  todoFor,
+  todoStatuses,
   trackerConfig,
   type TrackerConfig,
   type Transport,
@@ -22,6 +24,7 @@ import {
   ticketPr,
   ticketUrl,
 } from '../../workflows/sdlc/.shared/tickets';
+import { STATUS, TYPES } from './jira-fixtures';
 
 const CFG: TrackerConfig = {
   kind: 'jira',
@@ -31,14 +34,8 @@ const CFG: TrackerConfig = {
   keychain: 'none',
   assignee: 'acc-archon',
   owner: 'acc-julian',
-  status: {
-    todo: '10015',
-    progress: '3',
-    review: '10016',
-    staging: '10017',
-    live: '10018',
-    canceled: '10008',
-  },
+  status: STATUS,
+  types: TYPES,
   flagField: 'customfield_10021',
   flagOn: '10019',
   sprintField: 'customfield_10020',
@@ -90,6 +87,34 @@ describe('tracker config', () => {
   it('refuses status names instead of status ids', () => {
     const status = { ...CFG.status, todo: 'To Do' };
     expect(() => trackerConfig(repoWith({ ...CFG, status }))).toThrow('numeric ids');
+  });
+  it('needs the bug queue, the two task ends and the three types (VAULT-28)', () => {
+    for (const gone of ['todoBug', 'taskDone', 'taskDropped']) {
+      expect(() => trackerConfig(repoWith({ ...CFG, status: { ...CFG.status, [gone]: undefined } }))).toThrow(
+        'status needs numeric ids for todo, todoBug, progress, review, staging, live, canceled, taskDone, taskDropped'
+      );
+    }
+    expect(() => trackerConfig(repoWith({ ...CFG, types: { bug: '10011', slice: '10005' } }))).toThrow(
+      'types needs numeric ids for bug, slice, filing'
+    );
+    expect(() => trackerConfig(repoWith({ ...CFG, types: undefined }))).toThrow('types needs numeric ids');
+    expect(trackerConfig(repoWith(CFG))).toEqual(CFG);
+  });
+  it('keeps no key the file has beyond the known ones', () => {
+    const extra = { ...CFG, status: { ...CFG.status, old: '10015' }, types: { ...CFG.types, epic: '10000' } };
+    expect(trackerConfig(repoWith(extra))).toEqual(CFG);
+  });
+});
+
+describe('the loop queue of a ticket (VAULT-28)', () => {
+  it('a bug waits on Gemeldet, a slice or anything else on Startklar', () => {
+    expect(todoFor(TYPES.bug, CFG)).toBe('10059');
+    expect(todoFor(TYPES.slice, CFG)).toBe('10057');
+    expect(todoFor(TYPES.filing, CFG)).toBe('10057');
+  });
+  it('the queues are Startklar and Gemeldet, one entry when both are the same status', () => {
+    expect(todoStatuses(CFG.status)).toEqual(['10057', '10059']);
+    expect(todoStatuses({ ...CFG.status, todoBug: CFG.status.todo })).toEqual(['10057']);
   });
 });
 
@@ -265,7 +290,8 @@ describe('Jira client', () => {
           fields: {
             summary: 'Titel',
             description: adf('Text'),
-            status: { id: '10015' },
+            status: { id: '10059' },
+            issuetype: { id: '10011', subtask: false },
             labels: ['area:ios'],
             assignee: { accountId: 'acc-archon' },
             updated: '2026-11-14T18:39:47.721+0100',
@@ -280,7 +306,8 @@ describe('Jira client', () => {
       url: 'https://example.atlassian.net/browse/CONC-7',
       title: 'Titel',
       body: 'Text',
-      status: '10015',
+      status: '10059',
+      type: '10011',
       labels: ['area:ios'],
       flagged: true,
       assignee: 'acc-archon',

@@ -8,7 +8,7 @@
  *
  * A claim already on the ticket for this same run (a resumed run) is reused, not doubled.
  *
- * The run that holds the ticket moves it from To Do to In Progress and writes it
+ * The run that holds the ticket moves it from its queue to progress and writes it
  * to `$ARTIFACTS_DIR/tracker/item.md`, where the agents read it: they hold no token. A
  * failure anywhere after the claim was posted withdraws it before the node fails, because
  * release only runs for a held claim and the ticket would stay blocked until the claim expired.
@@ -24,6 +24,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   CLAIM_PREFIX,
+  claimStart,
   editComment,
   expiryHours,
   itemMarkdown,
@@ -141,13 +142,13 @@ async function claimTicket(item: WorkItem): Promise<void> {
     // For release: a merge counts only when it came after this claim.
     recordClaim(runState(), mine.createdAt);
     const ticket = await jira.ticket(item.key);
-    const start = ticket.status === config.status.todo;
-    const status = start ? config.status.progress : ticket.status;
+    const start = claimStart(ticket.status, config.status);
+    const status = start ?? ticket.status;
     const dir = join(artifactsDir(), 'tracker');
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, 'item.md'), itemMarkdown({ ...ticket, status }, await jira.comments(item.key), config));
-    // Last, so a failure above leaves the ticket on To Do, where pick finds it again.
-    if (start) await jira.move(item.key, config.status.progress);
+    // Last, so a failure above leaves the ticket in its queue, where pick finds it again.
+    if (start !== null) await jira.move(item.key, start);
   } catch (error) {
     await withdraw(mine.id, `could not set up the ticket (${reason(error)}).`);
     throw error;

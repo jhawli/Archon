@@ -23,6 +23,7 @@ import {
 } from '../../workflows/sdlc/.shared/merge-gate';
 import type { TrackerConfig } from '../../workflows/sdlc/.shared/jira';
 import { protectedFiles } from '../../workflows/sdlc/.shared/protected-paths';
+import { STATUS, TYPES } from './jira-fixtures';
 
 const pack = resolve(import.meta.dir, '../../workflows/sdlc');
 const STARTED = 1_000_000;
@@ -480,7 +481,8 @@ describe('the merge gate with Jira', () => {
     keychain: 'none',
     assignee: 'acc-archon',
     owner: 'acc-julian',
-    status: { todo: '10015', progress: '3', review: '10016', staging: '10017', live: '10018', canceled: '10008' },
+    status: STATUS,
+    types: TYPES,
     flagField: 'customfield_10021',
     flagOn: '10019',
     sprintField: 'customfield_10020',

@@ -22,7 +22,7 @@ import {
 } from '../../workflows/sdlc/.shared/outbox';
 import { runLine } from '../../workflows/sdlc/.shared/questions';
 import { prKeys } from '../../workflows/sdlc/.shared/tickets';
-import { type Call, fakeJira, state } from './jira-fixtures';
+import { type Call, fakeJira, state, STATUS, TYPES } from './jira-fixtures';
 
 const CFG: TrackerConfig = {
   kind: 'jira',
@@ -32,14 +32,8 @@ const CFG: TrackerConfig = {
   keychain: 'none',
   assignee: 'acc-archon',
   owner: 'acc-julian',
-  status: {
-    todo: '10015',
-    progress: '3',
-    review: '10016',
-    staging: '10017',
-    live: '10018',
-    canceled: '10008',
-  },
+  status: STATUS,
+  types: TYPES,
   flagField: 'customfield_10021',
   flagOn: '10019',
   sprintField: 'customfield_10020',
@@ -184,6 +178,7 @@ const ticket = (key: string, over: Partial<Ticket> = {}): Ticket => ({
   title: `Titel ${key}`,
   body: '',
   status: CFG.status.todo,
+  type: CFG.types.slice,
   labels: [],
   flagged: false,
   assignee: CFG.assignee,
@@ -203,15 +198,17 @@ describe('which tickets pick may write to', () => {
       ticket('CONC-6', { status: CFG.status.review, assignee: CFG.owner, inOpenSprint: false }),
       ticket('CONC-7', { inOpenSprint: false }),
       ticket('CONC-8', { assignee: null }),
+      ticket('CONC-9', { status: CFG.status.todoBug, type: CFG.types.bug }),
+      ticket('CONC-10', { status: CFG.status.todoBug, type: CFG.types.bug, inOpenSprint: false }),
     ];
-    expect([...writableKeys(tickets, CFG)]).toEqual(['CONC-1', 'CONC-2', 'CONC-5']);
+    expect([...writableKeys(tickets, CFG)]).toEqual(['CONC-1', 'CONC-2', 'CONC-5', 'CONC-9']);
   });
 });
 
 describe('the write-time check of pick’s keys', () => {
   it('asks Jira for the same rule as the snapshot, for the snapshot’s keys only', () => {
     expect(writableJql(['CONC-5', 'CONC-6', 'VAULT-3', 'CONC-0'], CFG)).toBe(
-      'key in (CONC-5,CONC-6) AND assignee = "acc-archon" AND (status = 10016 OR (status = 10015 AND sprint in openSprints()))'
+      'key in (CONC-5,CONC-6) AND assignee = "acc-archon" AND (status = 10016 OR (status in (10057, 10059) AND sprint in openSprints()))'
     );
     expect(writableJql([], CFG)).toBeNull();
     expect(writableJql(['VAULT-3'], CFG)).toBeNull();

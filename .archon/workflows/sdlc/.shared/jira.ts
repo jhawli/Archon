@@ -20,14 +20,23 @@ export interface TrackerConfig {
   readonly keychain: string;
   readonly assignee: string;
   readonly owner: string;
+  /**
+   * Status ids. Two queues: a bug waits on `todoBug`, anything else on `todo`; a lap works on
+   * `progress`. `taskDone` and `taskDropped` end the tasks of a slice (VAULT-28).
+   */
   readonly status: {
     readonly todo: string;
+    readonly todoBug: string;
     readonly progress: string;
     readonly review: string;
     readonly staging: string;
     readonly live: string;
     readonly canceled: string;
+    readonly taskDone: string;
+    readonly taskDropped: string;
   };
+  /** Issue type ids: a bug, a slice (child of a feature), and the plain type a new ticket is filed as. */
+  readonly types: { readonly bug: string; readonly slice: string; readonly filing: string };
   readonly flagField: string;
   readonly flagOn: string;
   readonly sprintField: string;
@@ -39,6 +48,16 @@ export interface TrackerConfig {
  */
 export function doneStatuses(s: TrackerConfig['status']): ReadonlySet<string> {
   return new Set([s.staging, s.live, s.canceled]);
+}
+
+/** Where a ticket of this type waits for the loop: a bug on its own start status, anything else on todo. */
+export function todoFor(typeId: string, c: Pick<TrackerConfig, 'status' | 'types'>): string {
+  return typeId === c.types.bug ? c.status.todoBug : c.status.todo;
+}
+
+/** The loop's queues: the statuses a ticket waits on until a lap claims it. */
+export function todoStatuses(s: TrackerConfig['status']): string[] {
+  return [...new Set([s.todo, s.todoBug])];
 }
 
 type Json = Record<string, unknown>;
@@ -66,7 +85,8 @@ export function repoRoot(cwd = process.cwd()): string {
   return result.stdout.toString().trim();
 }
 
-const STATUS_KEYS = ['todo', 'progress', 'review', 'staging', 'live', 'canceled'] as const;
+const STATUS_KEYS = ['todo', 'todoBug', 'progress', 'review', 'staging', 'live', 'canceled', 'taskDone', 'taskDropped'] as const;
+const TYPE_KEYS = ['bug', 'slice', 'filing'] as const;
 
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
 
@@ -147,6 +167,10 @@ function parseTracker(raw: Json): TrackerConfig {
   if (!STATUS_KEYS.every(id => /^\d+$/.test(str(status[id])))) {
     throw new Error(`.archon/tracker.json: status needs numeric ids for ${STATUS_KEYS.join(', ')}`);
   }
+  const types = obj(raw.types);
+  if (!TYPE_KEYS.every(id => /^\d+$/.test(str(types[id])))) {
+    throw new Error(`.archon/tracker.json: types needs numeric ids for ${TYPE_KEYS.join(', ')}`);
+  }
   if (typeof raw.board !== 'number' || !Number.isInteger(raw.board)) {
     throw new Error('.archon/tracker.json: board must be a board id');
   }
@@ -158,14 +182,8 @@ function parseTracker(raw: Json): TrackerConfig {
     keychain: text('keychain'),
     assignee: text('assignee'),
     owner: text('owner'),
-    status: {
-      todo: str(status.todo),
-      progress: str(status.progress),
-      review: str(status.review),
-      staging: str(status.staging),
-      live: str(status.live),
-      canceled: str(status.canceled),
-    },
+    status: Object.fromEntries(STATUS_KEYS.map(id => [id, str(status[id])])) as TrackerConfig['status'],
+    types: Object.fromEntries(TYPE_KEYS.map(id => [id, str(types[id])])) as TrackerConfig['types'],
     flagField: text('flagField'),
     flagOn: text('flagOn'),
     sprintField: text('sprintField'),
@@ -366,6 +384,8 @@ export interface Ticket {
   readonly title: string;
   readonly body: string;
   readonly status: string;
+  /** Issue type id. */
+  readonly type: string;
   readonly labels: readonly string[];
   readonly flagged: boolean;
   readonly assignee: string | null;
@@ -377,6 +397,7 @@ export const TICKET_FIELDS: readonly string[] = [
   'summary',
   'description',
   'status',
+  'issuetype',
   'labels',
   'assignee',
   'updated',
@@ -386,6 +407,8 @@ export const TICKET_FIELDS: readonly string[] = [
 export interface Family {
   readonly key: string;
   readonly status: string;
+  /** Issue type id. */
+  readonly type: string;
   /** A Jira sub-task: it cannot have sub-tasks of its own. */
   readonly subtask: boolean;
   /** The parent's key, for a sub-task (and for a ticket under an epic). */
@@ -478,6 +501,7 @@ export class Jira {
       title: str(fields.summary),
       body: plain(fields.description),
       status: str(obj(fields.status).id),
+      type: str(obj(fields.issuetype).id),
       labels: list(fields.labels).map(str),
       flagged: list(fields[this.config.flagField]).length > 0,
       assignee: assignee === '' ? null : assignee,
@@ -518,6 +542,7 @@ export class Jira {
     return {
       key,
       status: str(obj(fields.status).id),
+      type: str(obj(fields.issuetype).id),
       subtask: obj(fields.issuetype).subtask === true,
       parent: parent === '' ? null : parent,
       activeSprint: list(fields[this.config.sprintField]).some(sprint => str(obj(sprint).state) === 'active'),

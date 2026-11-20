@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { authorName, statusName } from './claims.ts';
 import { note } from './io.ts';
-import type { Jira, Ticket, TicketComment, TrackerConfig } from './jira.ts';
+import { type Jira, type Ticket, type TicketComment, todoStatuses, type TrackerConfig } from './jira.ts';
 import { defaultDue, lastQuestion, type Question } from './questions.ts';
 
 /** Past this the board still goes out, with a note: 200 tickets are about 260 KB. */
@@ -42,9 +42,9 @@ export async function loadBoardAll(jira: Jira): Promise<BoardAll> {
 
 export type Rights = 'alles' | 'review' | 'kommentar';
 
-/** AK18i: To Do everything, Review sharpen and send back, every other status comment and ask. */
+/** AK18i: a queue (Startklar, Gemeldet) everything, Review sharpen and send back, every other status comment and ask. */
 export function rights(status: string, s: TrackerConfig['status']): Rights {
-  if (status === s.todo) return 'alles';
+  if (todoStatuses(s).includes(status)) return 'alles';
   if (status === s.review) return 'review';
   return 'kommentar';
 }
@@ -76,7 +76,7 @@ function questionLine(q: Question | null, now: number, flagged: boolean): string
 
 /** AK18l: a flagged ticket on To Do or Review whose latest question the owner answered. */
 function owed(t: Ticket, all: BoardAll, config: TrackerConfig): boolean {
-  if (!t.flagged || (t.status !== config.status.todo && t.status !== config.status.review)) return false;
+  if (!t.flagged || (!todoStatuses(config.status).includes(t.status) && t.status !== config.status.review)) return false;
   const q = lastQuestion(all.comments.get(t.key) ?? [], config);
   // Flagged again after the answer without a new question: that flag is someone else's hold.
   if (q === null) return false;
