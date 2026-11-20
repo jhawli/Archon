@@ -37,6 +37,21 @@ describe('AK18h: the merge queue moves tickets like the loop, after one rollout'
     expect(r?.status).toBe(CFG.status.staging);
     expect(r?.ask).toBeNull();
   });
+  it('a ticket on its queue moves only for a pull request that says it delivers it (title or Closes), not one that refers to it', () => {
+    const onQueue = new Map([['CONC-12', CFG.status.todo], ['CONC-40', CFG.status.todo], ['CONC-41', CFG.status.todoBug]]);
+    const v = view({ body: 'Closes CONC-41. Refs CONC-40, relates to CONC-40' });
+    const moves = queueStatus([{ url: PR }], true, new Map([[PR, v]]), onQueue, START, CFG);
+    expect(moves.map(m => [m.key, m.status, m.ask])).toEqual([
+      ['CONC-12', CFG.status.staging, null],
+      ['CONC-41', CFG.status.staging, null],
+      ['CONC-40', null, null],
+    ]);
+  });
+  it('a ticket on its queue with a merge GitHub does not confirm stays there, with a question', () => {
+    const r = queueStatus([{ url: PR }], true, new Map([[PR, view({ mergedAt: '2026-11-20T09:00:00Z' })]]), new Map([['CONC-12', CFG.status.todo]]), START, CFG)[0];
+    expect(r?.status).toBeNull();
+    expect(r?.ask).toContain('bestätigt');
+  });
   it('a ticket on any other status (Bereit, a feature) is listed, not moved', () => {
     const r = queueStatus([{ url: PR }], true, new Map([[PR, view()]]), new Map([['CONC-12', '10053']]), START, CFG)[0];
     expect(r?.key).toBe('CONC-12');

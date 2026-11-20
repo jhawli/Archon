@@ -58,8 +58,21 @@ export function referencedKeys(body: string, project: string): string[] {
  * through here or through `namesTicket`.
  */
 export function prKeys(pr: { readonly title: string; readonly body: string }, project: string): string[] {
-  const lead = new RegExp(`^\\[?(${project}-[1-9]\\d*)\\b`).exec(pr.title.trim())?.[1];
-  return [...new Set([...(lead === undefined ? [] : [lead]), ...referencedKeys(pr.body, project)])];
+  return [...new Set([...leadKey(pr.title, project), ...referencedKeys(pr.body, project)])];
+}
+
+/**
+ * The tickets a pull request says it delivers: the key its title opens with and the ones its body
+ * closes. A ticket it only references (`Refs`, `relates to`) is not among them.
+ */
+export function deliveredKeys(pr: { readonly title: string; readonly body: string }, project: string): string[] {
+  return [...new Set([...leadKey(pr.title, project), ...closedKeys(pr.body, project)])];
+}
+
+/** The key a pull request's title opens with (AK6), as a list of none or one. */
+function leadKey(title: string, project: string): string[] {
+  const lead = new RegExp(`^\\[?(${project}-[1-9]\\d*)\\b`).exec(title.trim())?.[1];
+  return lead === undefined ? [] : [lead];
 }
 
 /** Whether a pull request is the work for the ticket `key` (`prKeys`). */

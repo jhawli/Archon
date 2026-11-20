@@ -3,13 +3,14 @@
  * the whole stack, then the loop's own rule (`finalStatus`) for every ticket a merged pull
  * request names, with this run's start as the anchor a claim gives the loop. A merge counts only
  * if GitHub reports it merged after the run started and naming the ticket (`confirmMerge`); one
- * it does not confirm leaves the ticket on Review with a question, as release.ts does.
+ * it does not confirm leaves the ticket on Review (or its queue) with a question, as release.ts
+ * does. A ticket on its queue moves only for a pull request that says it delivers it.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { confirmMerge, finalStatus, type PrView } from './claims.ts';
-import type { TrackerConfig } from './jira.ts';
-import { prKeys } from './tickets.ts';
+import { todoStatuses, type TrackerConfig } from './jira.ts';
+import { deliveredKeys, prKeys } from './tickets.ts';
 
 export interface MergeRecord { readonly url: string; readonly mergedAt: string; readonly mergeCommit: string }
 
@@ -63,15 +64,24 @@ export function queueStatus(
   const now = new Map(tickets);
   for (const { url } of merges) {
     const view = views.get(url) ?? null;
+    const delivered = view === null ? [] : deliveredKeys(view, config.project);
     for (const key of view === null ? [] : prKeys(view, config.project)) {
       const current = now.get(key);
       if (current === undefined) continue;
+      const queued = todoStatuses(config.status).includes(current);
+      // A ticket on its queue moves only for a pull request that says it delivers it (title,
+      // Closes): one that only refers to it is part of the work and leaves it where it is.
+      if (queued && !delivered.includes(key)) {
+        moves.push({ key, pr: url, status: null, ask: null });
+        continue;
+      }
       // The queue merges what a review approved: a merge it does not confirm waits on Review.
       const lap = { pr: url, landed: 'merged', deployed: deployed ? 'true' : 'false', delivers: 'all', tasks: [], reviewed: 'approved', created: {} };
       const confirmed = confirmMerge(lap, view, key, startedAt, config.project);
       // A merge always names its pull request, so a queue is never the answer here.
       const decided = finalStatus(key, current, confirmed, config.status, config.status.todo);
-      const doubt = confirmed.landed !== 'merged' && decided.status !== null;
+      // A merge GitHub does not confirm: Review stays, a queue ticket stays too; both get the question.
+      const doubt = confirmed.landed !== 'merged' && (decided.status !== null || queued);
       if (decided.status !== null) now.set(key, decided.status);
       moves.push({
         key,

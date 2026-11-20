@@ -299,6 +299,13 @@ describe('settling the tasks and moving after a lap (release, merge queue)', () 
     expect(book.get('CONC-41')?.status).toBe(S.progress);
     expect(moves(calls).filter(move => move.startsWith('CONC-41 '))).toEqual([]);
   });
+  it('from its queue too: open tasks keep the slice where it is (its way passes Review)', async () => {
+    const { jira, book } = fakeJira({ tickets: { ...slice(), 'CONC-41': { ...SLICE, status: S.todo, children: TASKS.map(t => t.key) } } });
+    const result = await settleAndMove(jira, 'CONC-41', S.todo, S.staging, { delivers: 'part', tasks: [2] }, null);
+    expect(result.status).toBe(S.todo);
+    expect(result.left).toEqual(['CONC-44', 'CONC-45']);
+    expect(book.get('CONC-41')?.status).toBe(S.todo);
+  });
   it('the fake bars Review for a slice with an open task, as Jira does (else the case above proves nothing)', async () => {
     const { jira } = fakeJira({ tickets: slice() });
     expect(jira.moveTo('CONC-41', S.review)).rejects.toThrow('no transition');

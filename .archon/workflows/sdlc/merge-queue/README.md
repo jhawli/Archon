@@ -55,7 +55,10 @@ Review or Entwicklung to Staging (through Review) when the rollout is confirmed,
 with a question; a merge GitHub does not confirm as merged after the run started
 leaves the ticket on Review with a question. A ticket on Startklar or Gemeldet (a loop lap
 gave it back there with its pull request) goes to Staging the same way, through Entwicklung
-and Review; its open tasks are closed first. A ticket on any other status is only
+and Review, but only when the pull request says it delivers it (its title opens with the key,
+or the body says `Closes`); its open tasks are closed first. A merge GitHub does not confirm
+leaves such a ticket on its queue with a question, and one the pull request only references
+(`Refs`, `relates to`) stays there. A ticket on any other status is only
 commented. Each ticket gets one `Merge-Queue: Lauf …` comment per run and pull request.
 
 A hold a PR's own next commit can fix may be published on that PR as one comment

@@ -21,6 +21,10 @@ const tickets = (status: string = S.progress, type: string = TYPES.slice): Recor
 });
 const posted = (calls: Call[]): string[] =>
   calls.filter(call => call.method === 'POST' && call.path === '/rest/api/3/issue/CONC-41/comment').map(call => JSON.stringify(call.body));
+const moves = (calls: Call[]): string[] =>
+  calls
+    .filter(call => call.method === 'POST' && call.path.endsWith('/transitions'))
+    .map(call => `${call.path.split('/')[5]} ${(call.body as { transition: { id: string } }).transition.id.slice(1)}`);
 const flagged = (calls: Call[]): boolean => calls.some(call => call.method === 'PUT' && call.path === '/rest/api/3/issue/CONC-41');
 const release = async (jira: Parameters<typeof releaseTicket>[0], lap: LapResult, view: PrView | null, all: ItemComment[] = []): Promise<Released> =>
   releaseTicket(jira, 'CONC-41', { recorded: lap, lap, view }, 'run-1', LINE, all);
@@ -60,6 +64,21 @@ describe('release: the ticket after a lap (VAULT-28, Julian 2026-11-20)', () => 
     expect(question).toContain('Rest-Ticket');
     expect(question).toContain('Offene Tasks (CONC-43)');
     expect(flagged(calls)).toBe(true);
+  });
+  it('a ticket on its queue whose pull request land merged: tasks done first, then Entwicklung, Review, Staging', async () => {
+    const { jira, calls } = fakeJira({ tickets: tickets(S.todo) });
+    const lap = lapOf({ reviewed: 'merge', landed: 'merged', deployed: 'true', delivers: 'all' });
+    expect((await release(jira, lap, MERGED)).name).toBe('Staging');
+    expect(moves(calls)).toEqual([
+      `CONC-42 ${S.taskDone}`, `CONC-43 ${S.taskDone}`, `CONC-41 ${S.progress}`, `CONC-41 ${S.review}`, `CONC-41 ${S.staging}`,
+    ]);
+  });
+  it('a merge land recorded that GitHub does not confirm: Review and the question about it', async () => {
+    const { jira, calls } = fakeJira({ tickets: tickets() });
+    const recorded = lapOf({ reviewed: 'merge', landed: 'merged', deployed: 'true', delivers: 'all' });
+    const result = await releaseTicket(jira, 'CONC-41', { recorded, lap: { ...recorded, landed: '' }, view: OPEN }, 'run-1', LINE, []);
+    expect(result).toMatchObject({ name: 'Review', asked: true, unconfirmed: true });
+    expect(posted(calls)[1]).toContain('GitHub bestätigt das');
   });
   it('a second run of the node writes no second result comment', async () => {
     const { jira, calls } = fakeJira({ tickets: tickets() });
