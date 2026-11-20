@@ -11,9 +11,11 @@
  * in the state directory. If a write fails the node fails and the file stays; a rerun goes on
  * behind the last write that worked (`applyOutbox`).
  *
- * For the review it first records the review's word in the lap record (`addToLap`): its outcome,
- * whether the change delivers the work item, and the tasks it finishes. Release settles the
- * slice's tasks and picks the status by it, also when land never runs (VAULT-28).
+ * For the review, once its writes are applied, it records the review's word in the lap record
+ * (`addToLap`): its outcome, whether the change delivers the work item, and the tasks it
+ * finishes. Release settles the slice's tasks and picks the status by it, also when land never
+ * runs (VAULT-28). A refused or failed write records nothing: nothing merges then, and release
+ * gives the ticket back to its queue.
  */
 
 import { rmSync, writeFileSync } from 'node:fs';
@@ -33,13 +35,6 @@ if (writer !== 'pick' && writer !== 'build' && writer !== 'review') {
 
 const config = requireTracker();
 const state = runState();
-if (writer === 'review') {
-  addToLap(state, {
-    reviewed: trimmed(process.env.INPUTS_OUTCOME),
-    delivers: trimmed(process.env.INPUTS_DELIVERS),
-    tasks: trimmed(process.env.INPUTS_TASKS),
-  });
-}
 const file = outboxFile(artifactsDir(), writer);
 const raw = readOutbox(file);
 let jira: Jira | undefined;
@@ -62,4 +57,11 @@ const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(confi
   }, writer === 'pick' ? null : targetKey);
 if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
 rmSync(file, { force: true });
+if (writer === 'review') {
+  addToLap(state, {
+    reviewed: trimmed(process.env.INPUTS_OUTCOME),
+    delivers: trimmed(process.env.INPUTS_DELIVERS),
+    tasks: trimmed(process.env.INPUTS_TASKS),
+  });
+}
 emit({ applied: String(ops.length), created: JSON.stringify(created) });

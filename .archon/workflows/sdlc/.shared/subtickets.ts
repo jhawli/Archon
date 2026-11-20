@@ -12,7 +12,7 @@
  * old one (Entfällt). A lap that delivered nothing finishes none. `settleAndMove` does both
  * steps for release and the merge queue.
  */
-import type { Jira, TaskRef, TrackerConfig } from './jira.ts';
+import { type Jira, movePath, type TaskRef, type TrackerConfig } from './jira.ts';
 
 /** The feature a rest of `key` goes under: the parent of a slice. Null for anything else. */
 export async function restFeature(jira: Jira, key: string): Promise<string | null> {
@@ -121,7 +121,7 @@ export async function closeTasks(
 /**
  * After a lap (release) or a merge (merge queue): settle the tasks when the ticket goes on to
  * Review or Staging, then move it along the lifecycle (`moveTo`). A slice whose tasks stay open
- * cannot pass Entwicklung → Review, so it stays where it is: the result names its status and
+ * cannot pass Entwicklung → Review, so when its way leads there it stays where it is: the result names its status and
  * the open tasks (`left`), and the caller still writes its comment and asks the owner. A move
  * Jira refuses otherwise throws, with the notes of what was already settled.
  */
@@ -136,7 +136,7 @@ export async function settleAndMove(
   const s = jira.config.status;
   const onward = to === s.review || to === s.staging;
   const { notes, left } = onward ? await closeTasks(jira, key, lap, restKey) : { notes: [], left: [] };
-  if (left.length > 0 && current === s.progress) {
+  if (left.length > 0 && movePath(current, to, s).includes(s.review)) {
     notes.push('Mit offenen Tasks lässt Jira die Scheibe nicht auf Review: sie bleibt, wo sie ist.');
     return { status: current, notes, left };
   }

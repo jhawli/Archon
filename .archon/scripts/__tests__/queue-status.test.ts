@@ -32,8 +32,13 @@ describe('AK18h: the merge queue moves tickets like the loop, after one rollout'
     const moves = queueStatus([{ url: PR }, { url: PR2 }], true, new Map([[PR, view()], [PR2, view({ title: 'CONC-12 Rest', mergedAt: '2026-11-20T10:07:00Z' })]]), onReview, START, CFG);
     expect(moves.map(m => [m.key, m.status])).toEqual([['CONC-12', CFG.status.staging], ['CONC-12', null]]);
   });
-  it('a ticket on Startklar (a session’s) is listed, not moved', () => {
+  it('a ticket on its queue (a lap gave it back with its pull request) goes to Staging with the merge', () => {
     const r = queueStatus([{ url: PR }], true, new Map([[PR, view()]]), new Map([['CONC-12', CFG.status.todo]]), START, CFG)[0];
+    expect(r?.status).toBe(CFG.status.staging);
+    expect(r?.ask).toBeNull();
+  });
+  it('a ticket on any other status (Bereit, a feature) is listed, not moved', () => {
+    const r = queueStatus([{ url: PR }], true, new Map([[PR, view()]]), new Map([['CONC-12', '10053']]), START, CFG)[0];
     expect(r?.key).toBe('CONC-12');
     expect(r?.status).toBeNull();
   });

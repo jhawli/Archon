@@ -173,7 +173,9 @@ export function finalStatus(
   s: TrackerConfig['status'],
   todo: string
 ): { status: string | null; ask: string | null } {
-  if (current !== s.progress && current !== s.review) return { status: null, ask: null };
+  // A merge delivers a ticket on its queue too: a lap gave it back there with its pull request.
+  const queued = todoStatuses(s).includes(current) && lap.landed === 'merged';
+  if (current !== s.progress && current !== s.review && !queued) return { status: null, ask: null };
   if (lap.landed === 'merged') {
     if (lap.deployed !== 'true') {
       return {

@@ -383,7 +383,7 @@ export async function createTicket(
       ? Object.keys(created).find(part => part.startsWith(`${op.marker}-`) && created[part] === key)
       : undefined) ?? op.marker;
   // Found in this run's records or by its remote link: filed before, not by this call.
-  const existed = key !== undefined;
+  let existed = key !== undefined;
   if (key !== undefined && readFinished(state)[op.marker] === key) return { key, existed };
   if (key === undefined) {
     for (let n = 1; ; n += 1) {
@@ -400,6 +400,7 @@ export async function createTicket(
       }
       key = String(found[0]?.key);
       recordCreated(state, op.marker, key, marker !== op.marker ? marker : undefined);
+      existed = true;
       // An earlier run filed it and broke before the move: still the plain type, so it is finished below.
       if (link.feature !== undefined && fields.issuetype?.id === c.types.filing) break;
       // Linked by an earlier run, so set up by it; where it stands by now is not this run's to change.

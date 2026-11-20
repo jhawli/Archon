@@ -63,9 +63,12 @@ export function todoStatuses(s: TrackerConfig['status']): string[] {
 /**
  * The statuses a move from `from` to `to` passes, the target last. The lifecycle has no
  * shortcut (VAULT-28): a delivery reaches Staging only through Review, where Jira checks a
- * slice's tasks, and a ticket goes back to its queue only through progress.
+ * slice's tasks, and a ticket goes back to its queue only through progress. A ticket a lap gave
+ * back to its queue with its pull request, merged after all, walks from there.
  */
 export function movePath(from: string, to: string, s: TrackerConfig['status']): string[] {
+  if (todoStatuses(s).includes(from) && to === s.review) return [s.progress, s.review];
+  if (todoStatuses(s).includes(from) && to === s.staging) return [s.progress, s.review, s.staging];
   if (to === s.staging && from === s.progress) return [s.review, s.staging];
   if (todoStatuses(s).includes(to) && from === s.review) return [s.progress, to];
   return [to];
@@ -657,10 +660,11 @@ export class Jira {
    * (a slice's open task before Review) hides the way, and the error names where it stuck.
    */
   async moveTo(key: string, statusId: string): Promise<void> {
-    // Two steps at most; the third only catches a Jira that does not move.
-    for (let step = 0; step < 3; step += 1) {
+    // Three steps at most (a ticket on its queue to Staging); a Jira that does not move ends it.
+    for (let step = 0; ; step += 1) {
       const now = await this.status(key);
       if (now === statusId) return;
+      if (step === 3) break;
       const next = movePath(now, statusId, this.config.status)[0] ?? statusId;
       try {
         await this.move(key, next);

@@ -5,9 +5,9 @@
  * broke part-way still frees the ticket for the next lap. Only this run's own live claim
  * is touched; a claim another run holds is never edited here.
  *
- * It then sets the status the lap earned (AK18, `finalStatus`), leaves a
- * `Loop result:` comment that pick counts among its attempts, and asks the owner where the
- * lap could not decide (AK18a). The lap's facts come from the run's state records and the
+ * It then sets the status the lap earned, leaves a `Loop result:` comment that pick counts
+ * among its attempts, and asks the owner where the lap could not decide (AK18a): all of it in
+ * `releaseTicket`. The lap's facts come from the run's state records and the
  * deploy block's `deployment.md`, not from bindings: a failed rollout fails the deploy
  * block, and a binding to a failed node fails the node that reads it (see `readLap`). A
  * merge GitHub does not confirm leaves the ticket on Review with a question; a slice whose tasks
@@ -21,21 +21,17 @@ import {
   comments,
   confirmMerge,
   editComment,
-  finalStatus,
   type ItemComment,
   type PrView,
   readClaimedAt,
   readLap,
-  restMarker,
   runState,
-  statusName,
-  unnamedPrAsk,
   workItem,
 } from '../../.shared/claims.ts';
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
-import { askedBefore, runLine } from '../../.shared/questions.ts';
-import { Jira, requireTracker, todoFor } from '../../.shared/jira.ts';
-import { settleAndMove } from '../../.shared/subtickets.ts';
+import { runLine } from '../../.shared/questions.ts';
+import { Jira, requireTracker } from '../../.shared/jira.ts';
+import { releaseTicket } from '../../.shared/release-ticket.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
@@ -92,50 +88,9 @@ try {
   const claimedAt = Number.isNaN(kept) && own.length > 0 ? Math.min(...own.map(comment => comment.createdAt)) : kept;
   const view = prView(recorded.pr);
   const lap = confirmMerge(recorded, view, item.key, claimedAt, config.project);
-  const ticket = await jira.ticket(item.key);
-  const doubt = recorded.landed === 'merged' && lap.landed !== 'merged';
-  // A lap without a pull request gives the ticket back to its own queue: a bug to its start status.
-  const decided = finalStatus(item.key, ticket.status, lap, config.status, todoFor(ticket.type, config));
-  const doubted =
-    doubt && decided.status !== null && decided.ask === null
-      ? {
-          ...decided,
-          ask: `Der Merge-Schritt meldet ${lap.pr} als gemergt, GitHub bestätigt das für dieses Ticket nicht (gemergt nach dem Claim, Schlüssel im PR). Bitte PR und Status prüfen.`,
-        }
-      : decided;
-  // A pull request without the ticket's key leaves both out of the loop's sight: ask.
-  const result =
-    doubted.status !== null && doubted.ask === null
-      ? { ...doubted, ask: unnamedPrAsk(lap, view, item.key, config.project) }
-      : doubted;
-  // Jira lets a slice onto Review only without open tasks: the lap settles them first (VAULT-28,
-  // decision 5), the rest's tasks under the rest slice review filed; then the move goes along the
-  // lifecycle (a delivery from progress passes Review, a way back from Review passes progress).
-  const goal = result.status ?? ticket.status;
-  const settled =
-    goal !== ticket.status
-      ? await settleAndMove(jira, item.key, ticket.status, goal, lap, lap.created[restMarker(item.key)] ?? null)
-      : { status: goal, notes: [], left: [] };
-  const notes = settled.notes;
-  // Tasks the review did not settle keep the slice in progress: the owner says what is missing.
-  const leftAsk =
-    settled.left.length > 0
-      ? `Offene Tasks (${settled.left.join(', ')}): Jira lässt die Scheibe so nicht auf ${statusName(goal, config.status)}. Was fehlt noch?`
-      : null;
-  const ask = result.ask !== null && leftAsk !== null ? `${result.ask}\n\n${leftAsk}` : (leftAsk ?? result.ask);
-  const name = statusName(settled.status, config.status);
-  // Once per run: pick counts these lines as attempts, and this node may run again.
-  const said = all.some(comment => comment.body.startsWith(`Loop result: run ${run}.`));
-  if (!said) {
-    const tasks = notes.length > 0 ? `\n\n${notes.join('\n')}` : '';
-    await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.${tasks}\n\n${line}`);
-  }
-  // Once per run as well: a second `@` mention would mail the owner twice.
-  if (ask !== null && !askedBefore(await jira.comments(item.key), ask, line, config)) {
-    await jira.ask(item.key, `${ask}\n\n${line}`);
-  }
-  const unconfirmed = doubt ? ', merge not confirmed by GitHub' : '';
-  lines.push(`${item.key}: ${name}${ask !== null ? ', asked the owner' : ''}${unconfirmed}`, ...notes);
+  const done = await releaseTicket(jira, item.key, { recorded, lap, view }, run, line, all);
+  const unconfirmed = done.unconfirmed ? ', merge not confirmed by GitHub' : '';
+  lines.push(`${item.key}: ${done.name}${done.asked ? ', asked the owner' : ''}${unconfirmed}`, ...done.notes);
   if (freeError !== undefined) throw freeError;
 } catch (error) {
   // Flag the ticket so it does not sit there unseen, whatever part of the release failed.

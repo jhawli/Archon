@@ -97,7 +97,7 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
       try {
         await client.moveTo(key, status);
       } catch (error) {
-        // Jira keeps it in progress (an open task of a slice bars Review, VAULT-28). The owner
+        // Jira keeps it in progress (no way to its queue from where it stands). The owner
         // decides; the claims go anyway, so the ticket does not come back at every gate.
         moved = false;
         const why = error instanceof Error ? error.message : String(error);

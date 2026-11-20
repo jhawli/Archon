@@ -207,7 +207,12 @@ describe('status after the lap', () => {
   const merged = { pr: 'https://github.com/o/r/pull/9', landed: 'merged', deployed: 'true' };
   it('leaves a ticket alone that is not in progress or on Review (the pick canceled it)', () => {
     expect(finalStatus('CONC-5', S.canceled, lap(merged), S, S.todo)).toEqual({ status: null, ask: null });
-    expect(finalStatus('CONC-5', S.todo, lap(merged), S, S.todo)).toEqual({ status: null, ask: null });
+    expect(finalStatus('CONC-5', S.todo, lap({ pr: merged.pr }), S, S.todo)).toEqual({ status: null, ask: null });
+  });
+  it('a merge delivers a ticket on its queue too (a lap gave it back with its pull request)', () => {
+    expect(finalStatus('CONC-5', S.todo, lap({ ...merged, delivers: 'all' }), S, S.todo)).toEqual({ status: S.staging, ask: null });
+    expect(finalStatus('CONC-5', S.todoBug, lap({ ...merged, delivers: 'all' }), S, S.todoBug).status).toBe(S.staging);
+    expect(finalStatus('CONC-5', '10053', lap({ ...merged, delivers: 'all' }), S, S.todo).status).toBeNull();
   });
   it('merged, rollout not confirmed: Review and a question', () => {
     for (const deployed of ['', 'false']) {

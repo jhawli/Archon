@@ -558,6 +558,14 @@ describe('moves along the lifecycle (VAULT-28)', () => {
     expect(movePath(S.progress, S.todo, S)).toEqual([S.todo]);
     expect(movePath(S.todo, S.progress, S)).toEqual([S.progress]);
     expect(movePath(S.progress, S.canceled, S)).toEqual([S.canceled]);
+    // A merged pull request of a ticket a lap gave back to its queue (VAULT-28 review).
+    expect(movePath(S.todo, S.staging, S)).toEqual([S.progress, S.review, S.staging]);
+    expect(movePath(S.todoBug, S.review, S)).toEqual([S.progress, S.review]);
+  });
+  it('a slice on Startklar whose pull request was merged goes through Entwicklung and Review to Staging', async () => {
+    const { jira, posts } = lifecycleJira({ 'CONC-5': { type: TYPES.slice, status: S.todo } });
+    await jira.moveTo('CONC-5', S.staging);
+    expect(posts).toEqual([`CONC-5 ${S.todo}->${S.progress}`, `CONC-5 ${S.progress}->${S.review}`, `CONC-5 ${S.review}->${S.staging}`]);
   });
   it('a slice delivered from Entwicklung goes through Review to Staging', async () => {
     const { jira, posts } = lifecycleJira({ 'CONC-5': { type: TYPES.slice, status: S.progress } });
