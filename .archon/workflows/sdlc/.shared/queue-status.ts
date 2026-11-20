@@ -8,8 +8,10 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { confirmMerge, finalStatus, type PrView } from './claims.ts';
-import { todoStatuses, type TrackerConfig } from './jira.ts';
+import { confirmMerge, finalStatus, type PrView, statusName } from './claims.ts';
+import { type Jira, todoStatuses, type TrackerConfig } from './jira.ts';
+import { askedBefore } from './questions.ts';
+import { settleAndMove } from './subtickets.ts';
 import { deliveredKeys, prKeys } from './tickets.ts';
 
 export interface MergeRecord { readonly url: string; readonly mergedAt: string; readonly mergeCommit: string }
@@ -96,4 +98,36 @@ export function queueStatus(
     }
   }
   return moves;
+}
+
+/**
+ * Sets one ticket as `queueStatus` decided, with one comment per run and pull request and the
+ * question once per run (this node may run again). A merge does not say which of a slice's
+ * tasks are done, only a review does (VAULT-28): none is closed here, so a slice with open tasks
+ * stays where it is, and the owner is asked.
+ */
+export async function applyQueueMove(
+  jira: Jira,
+  move: QueueMove,
+  current: string,
+  run: string,
+  line: string
+): Promise<{ status: string; asked: boolean; notes: string[] }> {
+  const s = jira.config.status;
+  const settled =
+    move.status !== null && move.status !== current
+      ? await settleAndMove(jira, move.key, current, move.status, { delivers: 'none', tasks: [] }, null)
+      : { status: current, notes: [], left: [] };
+  const leftAsk =
+    settled.left.length > 0 && move.status !== null
+      ? `Offene Tasks (${settled.left.join(', ')}): Die Merge-Queue hat ${move.pr} gemergt, schließt aber keine Tasks, das sagt nur ein Review. Jira lässt die Scheibe so nicht auf ${statusName(move.status, s)}. Welche sind erledigt?`
+      : null;
+  const ask = move.ask !== null && leftAsk !== null ? `${move.ask}\n\n${leftAsk}` : (leftAsk ?? move.ask);
+  const comments = await jira.comments(move.key);
+  const head = `Merge-Queue: Lauf ${run}. PR: ${move.pr}.`;
+  if (!comments.some(comment => comment.body.startsWith(head))) {
+    await jira.comment(move.key, `${head} Status: ${statusName(settled.status, s)}.\n\n${line}`);
+  }
+  if (ask !== null && !askedBefore(comments, ask, line, jira.config)) await jira.ask(move.key, `${ask}\n\n${line}`);
+  return { status: settled.status, asked: ask !== null, notes: settled.notes };
 }

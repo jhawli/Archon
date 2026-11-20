@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { PrView } from '../../workflows/sdlc/.shared/claims';
-import { queueStatus } from '../../workflows/sdlc/.shared/queue-status';
-import { CFG } from './jira-fixtures';
+import { applyQueueMove, type QueueMove, queueStatus } from '../../workflows/sdlc/.shared/queue-status';
+import { type Call, CFG, type FakeTicket, fakeJira, SUBTASK_TYPE, TYPES } from './jira-fixtures';
 
 const START = Date.parse('2026-11-20T10:00:00Z');
 const PR = 'https://github.com/jhawli/concairge/pull/120';
@@ -65,5 +65,62 @@ describe('AK18h: the merge queue moves tickets like the loop, after one rollout'
     const r = queueStatus([{ url: PR }], true, new Map([[PR, view()]]), new Map([['CONC-12', '10053']]), START, CFG)[0];
     expect(r?.key).toBe('CONC-12');
     expect(r?.status).toBeNull();
+  });
+});
+
+describe('AK18h: the merge queue sets a ticket, closes no task (VAULT-28: only a review says which are done)', () => {
+  const S = CFG.status;
+  const LINE = 'Lauf: archon-merge-queue mq-1';
+  /** A slice CONC-41 with two tasks, open unless `done`. */
+  const slice = (status: string, done = false, type: string = TYPES.slice): Record<string, FakeTicket> => ({
+    'CONC-40': { status: '10055', type: '10000', children: ['CONC-41'] },
+    'CONC-41': { status, type, parent: 'CONC-40', sprint: 'active', children: ['CONC-42', 'CONC-43'] },
+    'CONC-42': { status: done ? S.taskDone : '10060', type: SUBTASK_TYPE, title: 'Task 1: A', parent: 'CONC-41' },
+    'CONC-43': { status: done ? S.taskDone : '10060', type: SUBTASK_TYPE, title: 'Task 2: B', parent: 'CONC-41' },
+  });
+  const to = (status: string | null, ask: string | null = null): QueueMove => ({ key: 'CONC-41', pr: PR, status, ask });
+  const posted = (calls: Call[]): string[] =>
+    calls.filter(call => call.method === 'POST' && call.path === '/rest/api/3/issue/CONC-41/comment').map(call => JSON.stringify(call.body));
+  const moved = (calls: Call[]): string[] =>
+    calls
+      .filter(call => call.method === 'POST' && call.path.endsWith('/transitions'))
+      .map(call => `${call.path.split('/')[5]} ${(call.body as { transition: { id: string } }).transition.id.slice(1)}`);
+
+  it('a slice in progress with open tasks (a part the review let through without a rest) stays there, its tasks open, with a question', async () => {
+    const { jira, calls, book } = fakeJira({ tickets: slice(S.progress) });
+    const result = await applyQueueMove(jira, to(S.staging), S.progress, 'mq-1', LINE);
+    expect(result).toMatchObject({ status: S.progress, asked: true });
+    expect([book.get('CONC-42')?.status, book.get('CONC-43')?.status]).toEqual(['10060', '10060']);
+    expect(moved(calls)).toEqual([]);
+    expect(posted(calls)[0]).toContain(`Merge-Queue: Lauf mq-1. PR: ${PR}. Status: Entwicklung.`);
+    expect(posted(calls)[1]).toContain('Offene Tasks (CONC-42, CONC-43)');
+  });
+  it('a slice on its queue with open tasks stays there too, with the question', async () => {
+    const { jira, book } = fakeJira({ tickets: slice(S.todo) });
+    expect(await applyQueueMove(jira, to(S.staging), S.todo, 'mq-1', LINE)).toMatchObject({ status: S.todo, asked: true });
+    expect(book.get('CONC-41')?.status).toBe(S.todo);
+  });
+  it('a slice whose tasks are all done goes from its queue through Entwicklung and Review to Staging, no question', async () => {
+    const { jira, calls } = fakeJira({ tickets: slice(S.todo, true) });
+    expect(await applyQueueMove(jira, to(S.staging), S.todo, 'mq-1', LINE)).toMatchObject({ status: S.staging, asked: false });
+    expect(moved(calls)).toEqual([`CONC-41 ${S.progress}`, `CONC-41 ${S.review}`, `CONC-41 ${S.staging}`]);
+    expect(posted(calls)).toHaveLength(1);
+  });
+  it('from Review: Staging, and a second run of the node writes no second comment', async () => {
+    const { jira, book } = fakeJira({ tickets: slice(S.review, true) });
+    await applyQueueMove(jira, to(S.staging), S.review, 'mq-1', LINE);
+    expect(book.get('CONC-41')?.status).toBe(S.staging);
+    const said = { id: 7, author: 'archon', body: `Merge-Queue: Lauf mq-1. PR: ${PR}. Status: Staging.`, created: '2026-11-20T10:06:00Z' };
+    const seen = slice(S.staging, true);
+    const again = fakeJira({ tickets: { ...seen, 'CONC-41': { ...seen['CONC-41'], status: S.staging, comments: [said] } } });
+    await applyQueueMove(again.jira, to(S.staging), S.staging, 'mq-1', LINE);
+    expect(posted(again.calls)).toEqual([]);
+  });
+  it('the question queueStatus decided comes once, with the open tasks after it', async () => {
+    const { jira, calls } = fakeJira({ tickets: slice(S.progress) });
+    await applyQueueMove(jira, to(S.review, 'Rollout nicht bestätigt.'), S.progress, 'mq-1', LINE);
+    const question = posted(calls)[1] ?? '';
+    expect(question).toContain('Rollout nicht bestätigt.');
+    expect(question).toContain('Offene Tasks (CONC-42, CONC-43)');
   });
 });

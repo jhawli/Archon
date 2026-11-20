@@ -1,7 +1,8 @@
 /**
  * The tickets this batch's merges name, after the one rollout (AK18h, Grill G5): each moved as
- * the loop's release moves its ticket (`queueStatus`), with one comment per run and pull request
- * and a question where the rollout or the merge is not confirmed. The facts come from the run's
+ * the loop's release moves its ticket (`queueStatus`, `applyQueueMove`), with one comment per run
+ * and pull request and a question where the rollout or the merge is not confirmed, or where a
+ * slice still has open tasks (a merge closes none). The facts come from the run's
  * records (merges, start) and the deploy block's `deployment.md`, never from node outputs: a
  * failed rollout fails the deploy block, and a binding to a failed node fails its reader. A
  * ticket that fails is flagged with a question and the others still run; the node fails at the end.
@@ -9,9 +10,8 @@
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
 import { deployedFact, type PrView, runState, statusName } from '../../.shared/claims.ts';
 import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
-import { queueStatus, readMerges, readStart } from '../../.shared/queue-status.ts';
-import { askedBefore, runLine } from '../../.shared/questions.ts';
-import { settleAndMove } from '../../.shared/subtickets.ts';
+import { applyQueueMove, queueStatus, readMerges, readStart } from '../../.shared/queue-status.ts';
+import { runLine } from '../../.shared/questions.ts';
 import { prKeys } from '../../.shared/tickets.ts';
 
 const run = trimmed(process.env.WORKFLOW_ID);
@@ -49,22 +49,9 @@ if (merges.length === 0) {
   }
   for (const move of queueStatus(merges, deployed, views, tickets, readStart(state), config)) {
     try {
-      const current = tickets.get(move.key) ?? '';
-      // A merge delivers the slice: its open tasks are done before Review (VAULT-28).
-      const now =
-        move.status !== null && move.status !== current
-          ? (await settleAndMove(jira, move.key, current, move.status, { delivers: 'all', tasks: [] }, null)).status
-          : current;
-      tickets.set(move.key, now);
-      const name = statusName(now, config.status);
-      // Once per run and pull request, the question once per run: this node may run again.
-      const comments = await jira.comments(move.key);
-      const head = `Merge-Queue: Lauf ${run}. PR: ${move.pr}.`;
-      if (!comments.some(comment => comment.body.startsWith(head))) {
-        await jira.comment(move.key, `${head} Status: ${name}.\n\n${line}`);
-      }
-      if (move.ask !== null && !askedBefore(comments, move.ask, line, config)) await jira.ask(move.key, `${move.ask}\n\n${line}`);
-      lines.push(`${move.key}: ${name}${move.ask !== null ? ', asked the owner' : ''}`);
+      const done = await applyQueueMove(jira, move, tickets.get(move.key) ?? '', run, line);
+      tickets.set(move.key, done.status);
+      lines.push(`${move.key}: ${statusName(done.status, config.status)}${done.asked ? ', asked the owner' : ''}`, ...done.notes);
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       failures.push(`${move.key}: ${why}`);
