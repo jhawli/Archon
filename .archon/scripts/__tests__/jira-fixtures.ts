@@ -71,6 +71,9 @@ export function fakeJira(
   const calls: Call[] = [];
   let next = 50;
   let failed = false;
+  // Where each ticket stands now: a transition moves it, as Jira does.
+  const moved = new Map<string, string>();
+  const statusOf = (key: string): string => moved.get(key) ?? opts.tickets?.[key]?.status ?? '';
   const ok = (value: unknown, status = 200): { status: number; text: string } => ({
     status,
     text: value === undefined ? '' : JSON.stringify(value),
@@ -81,12 +84,12 @@ export function fakeJira(
     return {
       summary: key,
       description: adf(t.body ?? ''),
-      status: { id: t.status },
+      status: { id: statusOf(key) },
       labels: [],
       [CFG.flagField]: t.flagged ? [{ id: CFG.flagOn }] : [],
       issuetype: { id: t.type ?? (t.parent !== undefined ? SUBTASK_TYPE : TYPES.slice), subtask: t.parent !== undefined },
       ...(t.parent !== undefined ? { parent: { key: t.parent } } : {}),
-      subtasks: (t.children ?? []).map(child => ({ key: child, fields: { status: { id: opts.tickets?.[child]?.status ?? '' } } })),
+      subtasks: (t.children ?? []).map(child => ({ key: child, fields: { status: { id: statusOf(child) } } })),
       [CFG.sprintField]: t.sprint === undefined ? null : [{ id: 7, state: t.sprint }],
       issuelinks: (t.relates ?? []).map(other => ({ type: { name: 'Relates' }, outwardIssue: { key: other } })),
     };
@@ -123,6 +126,13 @@ export function fakeJira(
     if (method === 'GET' && issue !== null && opts.tickets?.[issue[1] ?? ''] !== undefined) return ok({ key: issue[1], fields: fields(issue[1] ?? '') });
     if (method === 'GET' && bare.endsWith('/transitions')) {
       return ok({ transitions: Object.values(CFG.status).map(id => ({ id: `t${id}`, to: { id } })) });
+    }
+    const moving = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(bare);
+    if (method === 'POST' && moving !== null) {
+      const id = (body as { transition?: { id?: unknown } } | undefined)?.transition?.id;
+      const to = typeof id === 'string' ? id.slice(1) : '';
+      if (opts.tickets?.[moving[1] ?? ''] !== undefined) moved.set(moving[1] ?? '', to);
+      return ok(undefined, 204);
     }
     if (method === 'GET' && bare === '/rest/api/3/project/CONC') {
       return ok({

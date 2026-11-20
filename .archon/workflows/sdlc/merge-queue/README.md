@@ -51,7 +51,7 @@ After the merge group, `merged-any` counts them, and with a `deploy` command one
 rollout follows the whole batch (`archon-deploy`, as the loop does after its merge).
 `ticket-status` then moves every Jira ticket a merged pull request names (the key its
 title starts with, `Refs`, `Closes`) the way the loop's release moves its own: from
-Review or In Progress to Staging when the rollout is confirmed, otherwise to Review
+Review or Entwicklung to Staging (through Review) when the rollout is confirmed, otherwise to Review
 with a question; a merge GitHub does not confirm as merged after the run started
 leaves the ticket on Review with a question. A ticket on any other status is only
 commented. Each ticket gets one `Merge-Queue: Lauf …` comment per run and pull request.

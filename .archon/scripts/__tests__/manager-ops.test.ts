@@ -6,7 +6,7 @@ const S = CFG.status;
 const NOW = Date.parse('2026-11-18T12:00:00Z');
 const KONZEPT = 'Konzept: https://github.com/jhawli/projektkoordination/blob/main/Clusters/Wohnung/Ideas/einkaufsliste.md';
 function live(status: string, extra: Partial<Live> = {}): Live {
-  return { status, flagged: false, own: false, body: `${KONZEPT}\n\nText`, question: null, prOpen: false, ...extra };
+  return { status, queue: S.todo, flagged: false, own: false, body: `${KONZEPT}\n\nText`, question: null, prOpen: false, ...extra };
 }
 function check(raw: unknown[], board: Record<string, Live>): void {
   checkManagerOps(parseManagerOutbox(raw, 'CONC').ops, new Map(Object.entries(board)), S, NOW);
@@ -17,18 +17,18 @@ const fails = (raw: unknown[], board: Record<string, Live>): string => {
 };
 
 describe('AK18i: rights by status', () => {
-  it('CONC-9 (Julian’s, To Do) doubles CONC-4: cancel', () => {
+  it('CONC-9 (Julian’s, Startklar) doubles CONC-4: cancel', () => {
     check([{ op: 'cancel', key: 'CONC-9', text: 'Doppel von CONC-4' }], { 'CONC-9': live(S.todo) });
   });
   it('CONC-20 on Review: sharpen with a comment, but no cancel straight away', () => {
     check([{ op: 'rewrite', key: 'CONC-20', text: `${KONZEPT}\n\nSchärfer`, reason: 'dreimal am selben Kriterium zurückgewiesen' }], { 'CONC-20': live(S.review) });
     expect(fails([{ op: 'cancel', key: 'CONC-20', text: 'x' }], { 'CONC-20': live(S.review) })).toContain('erst');
   });
-  it('Review back to To Do only with the PR closed; then cancel in the same pass', () => {
+  it('Review back to the queue only with the PR closed; then cancel in the same pass', () => {
     expect(fails([{ op: 'todo', key: 'CONC-20', text: 'PR nicht zu retten' }], { 'CONC-20': live(S.review, { prOpen: true }) })).toContain('PR');
     check([{ op: 'todo', key: 'CONC-20', text: 'PR geschlossen' }, { op: 'cancel', key: 'CONC-20', text: 'überholt durch CONC-21' }], { 'CONC-20': live(S.review) });
   });
-  it('In Progress, Staging, New: comment and ask only', () => {
+  it('Entwicklung, Staging, an unknown status: comment and ask only', () => {
     for (const s of [S.progress, S.staging, '10014']) {
       check([{ op: 'comment', key: 'CONC-15', text: 'Hinweis' }], { 'CONC-15': live(s) });
       expect(fails([{ op: 'rewrite', key: 'CONC-15', text: `${KONZEPT}\nneu`, reason: 'r' }], { 'CONC-15': live(s) })).toContain('nur kommentieren');
@@ -137,10 +137,21 @@ describe('AK18i to AK18m: what the manager writes, and in which order', () => {
     body: '@Julian Frage (technisch, Vorgabe ab 2026-11-17 11:00 UTC): Ausblenden?\nVorgabe: Hinweis zeigen\n\nLauf: archon archon-manager run-1',
   });
 
-  it('a rewrite of a ticket on In Progress refuses the list before any write', async () => {
+  it('a rewrite of a ticket in Entwicklung refuses the list before any write', async () => {
     const { calls, error } = await pass([{ op: 'rewrite', key: 'CONC-15', text: 'neu', reason: 'unklar' }], { 'CONC-15': { status: S.progress } });
     expect(error ?? '').toContain('nur kommentieren');
     expect(writes(calls)).toHaveLength(0);
+  });
+  it('back from Review: a bug to Gemeldet, a slice to Startklar, each through Entwicklung (VAULT-28)', async () => {
+    const tickets = { 'CONC-20': { status: S.review, type: CFG.types.bug }, 'CONC-21': { status: S.review, type: CFG.types.slice } };
+    const { calls, error } = await pass([
+      { op: 'todo', key: 'CONC-20', text: 'PR geschlossen' },
+      { op: 'todo', key: 'CONC-21', text: 'PR geschlossen' },
+    ], tickets);
+    expect(error).toBeNull();
+    const moves = calls.filter(c => c.method === 'POST' && c.path.endsWith('/transitions'))
+      .map(c => `${c.path.split('/')[5]} ${(c.body as { transition: { id: string } }).transition.id}`);
+    expect(moves).toEqual([`CONC-20 t${S.progress}`, `CONC-20 t${S.todoBug}`, `CONC-21 t${S.progress}`, `CONC-21 t${S.todo}`]);
   });
   it('a key the board did not show is not looked up, and refuses the list', async () => {
     const { calls, error } = await pass([{ op: 'comment', key: 'CONC-999', text: 'x' }], {});

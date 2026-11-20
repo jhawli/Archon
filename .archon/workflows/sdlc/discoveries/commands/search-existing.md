@@ -9,7 +9,7 @@ and evidence-check.json under the same artifact root.
 Board read: $tracker-read.output.checked
 
 The work items are Jira tickets, all of them in `$ARTIFACTS_DIR/tracker/board-all.md`:
-every ticket of the project in every status (Live and Canceled included), each with its
+every ticket of the project in every status (Live and Verworfen included), each with its
 `URL:`, its comments and where it came from (`Herkunft: eigen (<marker>)` for a ticket
 this pack filed). You hold no Jira token: never call Jira yourself (no curl, no acli).
 If the board read above is `false`, the board is missing: return

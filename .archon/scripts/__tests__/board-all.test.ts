@@ -35,8 +35,8 @@ describe('board-all.md', () => {
     }
     expect(md.split('## CONC-12 ')[1]).toContain('Manager darf: nur kommentieren und fragen');
   });
-  it('shows New by name', () => {
-    expect(md.split('## CONC-3 ')[1]).toContain('Status: New oder anderer (10014)');
+  it('shows a status the tracker does not name by its id', () => {
+    expect(md.split('## CONC-3 ')[1]).toContain('Status: anderer Status (10014)');
   });
   it('records keys and statuses where agents cannot write', () => {
     const state = mkdtempSync(join(tmpdir(), 'state-'));
@@ -46,7 +46,7 @@ describe('board-all.md', () => {
     expect(kept['CONC-40']).toEqual({ status: CFG.status.live, title: 'Titel CONC-40', own: 'disc-0123456789abcdef' });
     expect(kept['CONC-5'].own).toBe('');
   });
-  it('marks answered questions the manager owes this pass (AK18l), only on To Do and Review', () => {
+  it('marks answered questions the manager owes this pass (AK18l), only on a queue and Review', () => {
     const at = (iso: string): { created: string; createdAt: number } => ({ created: iso, createdAt: Date.parse(iso) });
     const q = (key: string): TicketComment => ({ id: 1, body: '@Julian Frage (Produkt): A oder B?', ...at('2026-11-17T10:00:00.000Z'), author: CFG.assignee, url: `u/${key}` });
     const a = (key: string): TicketComment => ({ id: 2, body: 'B', ...at('2026-11-17T11:00:00.000Z'), author: CFG.owner, url: `u/${key}` });

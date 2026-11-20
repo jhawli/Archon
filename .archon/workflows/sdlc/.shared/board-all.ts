@@ -1,6 +1,6 @@
 /**
  * Every ticket of the project for the agents that look across the board (manager, backlog,
- * discoveries): all statuses, Live and Canceled included, with comments, origin, the open
+ * discoveries): all statuses, Live and Verworfen included, with comments, origin, the open
  * question and what the manager may do. Keys and statuses also go to the run's state
  * directory (`keys-all.json`, where agents cannot write): the allowlist the script publishers
  * check agent-written targets against.
@@ -51,13 +51,13 @@ export function rights(status: string, s: TrackerConfig['status']): Rights {
 
 const RIGHTS_TEXT: Record<Rights, string> = {
   alles: 'alles (umschreiben, verwerfen, Rang, fragen, fällige Vorgabe anwenden; Markierung heben nur bei beantworteter Frage oder Lauf-Frage ohne Art)',
-  review: 'Review (kommentieren, fragen, Kriterien schärfen, fällige Vorgabe anwenden, Markierung heben wie bei To Do, nach geschlossenem PR zurück auf To Do)',
+  review: 'Review (kommentieren, fragen, Kriterien schärfen, fällige Vorgabe anwenden, Markierung heben wie in der Schlange, nach geschlossenem PR zurück in die Schlange)',
   kommentar: 'nur kommentieren und fragen',
 };
 
 function status(id: string, config: TrackerConfig): string {
   const name = statusName(id, config.status);
-  return name.startsWith('status ') ? `New oder anderer (${id})` : name;
+  return name.startsWith('status ') ? `anderer Status (${id})` : name;
 }
 
 function questionLine(q: Question | null, now: number, flagged: boolean): string {
@@ -74,7 +74,7 @@ function questionLine(q: Question | null, now: number, flagged: boolean): string
   return `Kommentar ${q.comment.id}, ${q.kind === 'ohne' ? 'ohne Art' : q.kind}, von ${q.byRun ? 'einem Lauf' : 'einer Session'}, ${state}`;
 }
 
-/** AK18l: a flagged ticket on To Do or Review whose latest question the owner answered. */
+/** AK18l: a flagged ticket on a queue or Review whose latest question the owner answered. */
 function owed(t: Ticket, all: BoardAll, config: TrackerConfig): boolean {
   if (!t.flagged || (!todoStatuses(config.status).includes(t.status) && t.status !== config.status.review)) return false;
   const q = lastQuestion(all.comments.get(t.key) ?? [], config);
@@ -135,7 +135,7 @@ export interface Snapshot {
   readonly status: string;
   readonly title: string;
   readonly own: string;
-  /** AK18l: flagged on To Do or Review, and the owner answered its latest question; the manager owes it this pass. */
+  /** AK18l: flagged on a queue or Review, and the owner answered its latest question; the manager owes it this pass. */
   readonly answered?: true;
 }
 

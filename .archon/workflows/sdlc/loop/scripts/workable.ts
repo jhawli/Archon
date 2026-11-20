@@ -9,7 +9,8 @@
  * scheduler names runs it knows have ended (`INPUTS_ENDED_RUNS`, comma-separated), and
  * a claim one of them still holds is released the way the run's own release step would
  * have, because a run killed before that step never frees its item. It also puts a ticket
- * such a run left on In Progress back where a lap can take it (`recoverOrphans`).
+ * such a run left in progress back where a lap can take it (`recoverOrphans`): Review with a
+ * pull request, else its own queue, and a question when Jira refuses the way.
  * And a parent waiting for sub-tasks that are all done by now goes to Staging (`sweepWaiting`).
  *
  * Output: `{ "workable": [ref], "claims": [ticket + run], "ended": [...], "waiting": [...],
@@ -18,9 +19,9 @@
  * on the board.
  */
 
-import { deadClaims, expiryHours } from '../../.shared/claims.ts';
+import { deadClaims, expiryHours, statusName } from '../../.shared/claims.ts';
 import { trimmed } from '../../.shared/io.ts';
-import { Jira, requireTracker } from '../../.shared/jira.ts';
+import { Jira, requireTracker, todoFor } from '../../.shared/jira.ts';
 import { ticketPr, type PrRow } from '../../.shared/tickets.ts';
 import { trackerCheck } from '../../.shared/tracker-check.ts';
 import { loadJiraBoard, openPulls } from '../../.shared/tracker-board.ts';
@@ -52,11 +53,11 @@ const endedRuns = new Set(
 );
 
 /**
- * Tickets a dead run left on In Progress (a parent waiting for its sub-tasks is there on purpose
- * and stays, `waiting`). Nothing else finds them: the board holds To Do
- * tickets and the ones pull requests name, and pick may not write to In Progress. A ticket
+ * Tickets a dead run left in progress (a parent waiting for its sub-tasks is there on purpose
+ * and stays, `waiting`). Nothing else finds them: the board holds the queues' tickets and the
+ * ones pull requests name, and pick may not write to a ticket in progress. A ticket
  * the loop itself started (`deadClaims`) whose every claim is dead goes back where a lap can
- * take it: Review when an open pull request names it, else To Do, with the `Loop result:`
+ * take it: Review when an open pull request names it, else its own queue, with the `Loop result:`
  * line the run never wrote, so pick counts the attempt. A ticket without such a claim is a
  * session's and stays. One ticket failing does not stop the gate; it is reported and tried
  * again next time.
@@ -66,7 +67,7 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
   const lines: string[] = [];
   const stuck = await client.search(
     `project = ${c.project} AND status = ${c.status.progress} AND assignee = "${c.assignee}"`,
-    ['status', 'statuscategorychangedate']
+    ['status', 'issuetype', 'statuscategorychangedate']
   );
   let rows: PrRow[] | undefined;
   for (const row of stuck) {
@@ -83,9 +84,11 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
       if (holder === undefined) continue;
       rows ??= gh(['pr', 'list', '--state', 'open', '--limit', '100', '--json', 'url,title,body,updatedAt,isCrossRepository']) as PrRow[];
       const pr = ticketPr(rows, key, c.project);
-      const status = pr !== '' ? c.status.review : c.status.todo;
-      const name = pr !== '' ? 'Review' : 'To Do';
-      // In an order a failure can be picked up from: while the ticket is In Progress with its
+      const typeId = ((fields.issuetype ?? {}) as Record<string, unknown>).id;
+      const type = typeof typeId === 'string' ? typeId : '';
+      const status = pr !== '' ? c.status.review : todoFor(type, c);
+      const name = statusName(status, c.status);
+      // In an order a failure can be picked up from: while the ticket is in progress with its
       // claims on it, the next gate finds it again, so the move comes after the line pick
       // counts (written once) and the claims go last.
       if (!all.some(comment => comment.body.startsWith(`Loop result: run ${holder.run}.`))) {
@@ -94,9 +97,22 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
           `Loop result: run ${holder.run}. PR: ${pr !== '' ? pr : 'kein PR'}. Status: ${name}. (Vom Scheduler: der Lauf endete ohne Abschluss.)`
         );
       }
-      await client.move(key, status);
+      let moved = true;
+      try {
+        await client.moveTo(key, status);
+      } catch (error) {
+        // Jira keeps it in progress (an open task of a slice bars Review, VAULT-28). The owner
+        // decides; the claims go anyway, so the ticket does not come back at every gate.
+        moved = false;
+        const why = error instanceof Error ? error.message : String(error);
+        await client.ask(
+          key,
+          `Lauf ${holder.run} endete ohne Abschluss, und das Ticket kommt nicht auf ${name} (${why.slice(0, 300)}). Bitte Tasks und Status prüfen.\n\n${runLine('archon-loop', 'scheduler')}`
+        );
+      }
       for (const claim of dead) await client.editComment(key, claim.id, released(claim.run));
-      lines.push(`${key}: back to ${name}, ${dead.length} dead claim(s) released`);
+      const outcome = moved ? `back to ${name}` : 'stays in progress, asked the owner';
+      lines.push(`${key}: ${outcome}, ${dead.length} dead claim(s) released`);
     } catch (error) {
       lines.push(`${key}: could not recover (${error instanceof Error ? error.message : String(error)})`);
     }

@@ -32,8 +32,8 @@ import {
 } from '../../.shared/claims.ts';
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
 import { askedBefore, runLine } from '../../.shared/questions.ts';
-import { Jira, requireTracker } from '../../.shared/jira.ts';
-import { openChildren, promoteParent, WAIT_PREFIX, waitText } from '../../.shared/subtickets.ts';
+import { Jira, requireTracker, todoFor } from '../../.shared/jira.ts';
+import { promoteParent } from '../../.shared/subtickets.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
@@ -49,7 +49,7 @@ const prefix = `${CLAIM_PREFIX}${run}`;
 const line = runLine('archon-loop', run);
 
 // Free the claim. A failure here is kept for the end: the status and the flag below are
-// still tried, so the ticket does not sit on In Progress with nothing said.
+// still tried, so the ticket does not sit in progress with nothing said.
 let all: ItemComment[] = [];
 let own: ItemComment[] = [];
 let freeError: Error | undefined;
@@ -91,10 +91,10 @@ try {
   const view = prView(recorded.pr);
   const lap = confirmMerge(recorded, view, item.key, claimedAt, config.project);
   const ticket = await jira.ticket(item.key);
-  // Read after review filed this lap's rest: an open sub-task keeps the ticket off Staging (VAULT-22).
   const family = await jira.family(item.key);
   const doubt = recorded.landed === 'merged' && lap.landed !== 'merged';
-  const decided = finalStatus(item.key, ticket.status, lap, config.status, openChildren(family, config.status));
+  // A lap without a pull request gives the ticket back to its own queue: a bug to its start status.
+  const decided = finalStatus(item.key, ticket.status, lap, config.status, todoFor(ticket.type, config));
   const doubted =
     doubt && decided.status !== null && decided.ask === null
       ? {
@@ -107,24 +107,20 @@ try {
     doubted.status !== null && doubted.ask === null
       ? { ...doubted, ask: unnamedPrAsk(lap, view, item.key, config.project) }
       : doubted;
-  if (result.status !== null && result.status !== ticket.status) await jira.move(item.key, result.status);
+  // Along the lifecycle: a delivery from progress passes Review, a way back from Review passes progress.
+  if (result.status !== null && result.status !== ticket.status) await jira.moveTo(item.key, result.status);
   const name = statusName(result.status ?? ticket.status, config.status);
   // Once per run: pick counts these lines as attempts, and this node may run again.
   const said = all.some(comment => comment.body.startsWith(`Loop result: run ${run}.`));
   if (!said) {
     await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.\n\n${line}`);
   }
-  // Delivered but waiting for sub-tasks: the record the sweep reads, once per run.
-  if (result.waitingOn.length > 0 && !all.some(comment => comment.body.startsWith(WAIT_PREFIX) && comment.body.includes(line))) {
-    await jira.comment(item.key, `${waitText(result.waitingOn)}\n\n${line}`);
-  }
   // Once per run as well: a second `@` mention would mail the owner twice.
   if (result.ask !== null && !askedBefore(await jira.comments(item.key), result.ask, line, config)) {
     await jira.ask(item.key, `${result.ask}\n\n${line}`);
   }
   const unconfirmed = doubt ? ', merge not confirmed by GitHub' : '';
-  const waits = result.waitingOn.length > 0 ? `, waits for ${result.waitingOn.join(', ')}` : '';
-  lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}${waits}`);
+  lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}`);
   // This sub-task may have been the last open one: its parent goes on. A failure here is the
   // parent's, not this ticket's; the next lap's sweep tries again.
   if (family.subtask && family.parent !== null) {

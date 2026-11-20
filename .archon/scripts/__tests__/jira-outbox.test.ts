@@ -188,7 +188,7 @@ const ticket = (key: string, over: Partial<Ticket> = {}): Ticket => ({
 });
 
 describe('which tickets pick may write to', () => {
-  it('Archon’s tickets in the sprint on To Do, and Archon’s on Review; never Julian’s, never one In Progress', () => {
+  it('Archon’s tickets in the sprint on a queue (Startklar, Gemeldet), and Archon’s on Review; never Julian’s, never one in progress', () => {
     const tickets = [
       ticket('CONC-1'),
       ticket('CONC-2', { flagged: true }),
@@ -466,7 +466,7 @@ describe('the board snapshot for pick', () => {
         '## CONC-5 Titel CONC-5',
         '',
         'URL: https://example.atlassian.net/browse/CONC-5',
-        'Status: To Do',
+        'Status: Startklar',
         'Rang: 1',
         'Labels: route:simple',
         'Flagged: nein',

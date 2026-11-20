@@ -66,7 +66,7 @@ Rules that make the backlog buildable in dependency order:
 6. **A phase too vague to decompose is a document gap.** Say so in the summary
    instead of inventing requirements.
 7. **Nothing new is a valid slice.** Read `$ARTIFACTS_DIR/tracker/board-all.md`: a
-   ticket that is already there (any status, Live and Canceled included) is not
+   ticket that is already there (any status, Live and Verworfen included) is not
    sliced again. Keep the `key` of a ticket you sliced from this document before
    (its marker `backlog-<document>-<key>` is on the board as `Herkunft: eigen (…)`).
    When every ticket the document yields is already there (or code already does

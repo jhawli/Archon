@@ -174,7 +174,7 @@ export interface TrackingReaders {
 /**
  * The references among `refs` that track something open, resolved before the gate (whose
  * `issueExists` is synchronous). `CONC-n` (or its URL) is a ticket that is not Staging, Live
- * or Canceled, and `new:<marker>` is the ticket this run filed for that marker; anything else
+ * or Verworfen, and `new:<marker>` is the ticket this run filed for that marker; anything else
  * (a `#n`, another project) tracks nothing. The lap's own ticket tracks nothing: it moves on
  * with the merge. A ticket Jira cannot read is untracked; its reason goes to `problems`.
  */

@@ -57,7 +57,7 @@ const reason = (error: unknown): string => (error instanceof Error ? error.messa
 async function refusal(key: string): Promise<string | null> {
   const state = runState();
   if (!(await writableNow(jira, state, key)).has(key)) {
-    return `${key} is not on this lap's board, or no longer assigned to the loop on To Do or Review`;
+    return `${key} is not on this lap's board, or no longer assigned to the loop on its queue (Startklar, Gemeldet) or Review`;
   }
   // The launch rule leaves a flagged ticket alone; a flag pick lifted this lap is already off.
   if ((await jira.ticket(key)).flagged) return `${key} is flagged: a question to the owner is open`;

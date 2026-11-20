@@ -11,7 +11,7 @@ import { deployedFact, type PrView, runState, statusName } from '../../.shared/c
 import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
 import { queueStatus, readMerges, readStart } from '../../.shared/queue-status.ts';
 import { askedBefore, runLine } from '../../.shared/questions.ts';
-import { openChildren, promoteParent, WAIT_PREFIX, waitText } from '../../.shared/subtickets.ts';
+import { promoteParent } from '../../.shared/subtickets.ts';
 import { prKeys } from '../../.shared/tickets.ts';
 
 const run = trimmed(process.env.WORKFLOW_ID);
@@ -39,23 +39,21 @@ if (merges.length === 0) {
     else views.set(url, view);
   }
   const tickets = new Map<string, string>();
-  // Open sub-tasks keep a ticket off Staging (VAULT-22); a sub-task's parent may go on after it.
-  const children = new Map<string, readonly string[]>();
+  // A sub-task's parent may go on after it (VAULT-22).
   const parents = new Map<string, string>();
   for (const key of new Set([...views.values()].flatMap(view => prKeys(view, config.project)))) {
     try {
       const family = await jira.family(key);
       tickets.set(key, family.status);
-      children.set(key, openChildren(family, config.status));
       if (family.subtask && family.parent !== null) parents.set(key, family.parent);
     } catch (error) {
       failures.push(`${key}: could not be read (${error instanceof Error ? error.message : String(error)})`);
     }
   }
-  for (const move of queueStatus(merges, deployed, views, tickets, readStart(state), config, children)) {
+  for (const move of queueStatus(merges, deployed, views, tickets, readStart(state), config)) {
     try {
       const current = tickets.get(move.key) ?? '';
-      if (move.status !== null && move.status !== current) await jira.move(move.key, move.status);
+      if (move.status !== null && move.status !== current) await jira.moveTo(move.key, move.status);
       if (move.status !== null) tickets.set(move.key, move.status);
       const name = statusName(move.status ?? current, config.status);
       // Once per run and pull request, the question once per run: this node may run again.
@@ -63,10 +61,6 @@ if (merges.length === 0) {
       const head = `Merge-Queue: Lauf ${run}. PR: ${move.pr}.`;
       if (!comments.some(comment => comment.body.startsWith(head))) {
         await jira.comment(move.key, `${head} Status: ${name}.\n\n${line}`);
-      }
-      // Delivered but waiting for sub-tasks: the record the sweep reads, once per run.
-      if (move.waitingOn.length > 0 && !comments.some(comment => comment.body.startsWith(WAIT_PREFIX) && comment.body.includes(line))) {
-        await jira.comment(move.key, `${waitText(move.waitingOn)}\n\n${line}`);
       }
       if (move.ask !== null && !askedBefore(comments, move.ask, line, config)) await jira.ask(move.key, `${move.ask}\n\n${line}`);
       lines.push(`${move.key}: ${name}${move.ask !== null ? ', asked the owner' : ''}`);

@@ -86,16 +86,16 @@ export async function liveClaims(
   return claims.sort((left, right) => left.id - right.id);
 }
 
-/** A holding run moves its ticket to In Progress this soon after its claim: 5 s to settle, a few reads, one move. */
+/** A holding run moves its ticket to progress this soon after its claim: 5 s to settle, a few reads, one move. */
 const CLAIM_TO_START_MS = 10 * 60_000;
 
 /**
- * The claims on a ticket In Progress that no run stands behind any more, newest first, or
+ * The claims on a ticket in progress that no run stands behind any more, newest first, or
  * none: a claim is dead once the scheduler names its run as ended or it is past the expiry,
  * and one claim that may still be worked on keeps them all. Released and withdrawn claims are
  * not claims (their text was edited).
  *
- * `startedAt` is when the ticket went to In Progress. Only a ticket a claiming run put there
+ * `startedAt` is when the ticket went to progress. Only a ticket a claiming run put there
  * is the loop's to take back: the newest claim must sit just before that moment. A stale
  * claim on a ticket a session started hours later proves nothing about who works on it.
  */
@@ -150,28 +150,17 @@ export interface LapResult {
 export const restMarker = (key: string): string => `rest-${key.toLowerCase()}`;
 
 /**
- * The ticket's status after a lap (AK18). Null leaves it as it is. A ticket that would go to
- * Staging while `openChildren` (its sub-tasks not yet on Staging, Live or Canceled) are left
- * stays In Progress and waits for them (`waitingOn`, VAULT-22): Jira's workflow refuses that
- * move too, and a parent on Staging with open parts tears the delivery apart.
+ * The ticket's status after a lap (AK18). Null leaves it as it is. `todo` is the ticket's own
+ * queue (`todoFor`): a lap without a pull request gives a bug back to its queue, a slice to
+ * its own. A delivery goes to Staging whatever the slice's tasks; the lap settles them first
+ * (VAULT-28, no waiting for parts any more).
  */
 export function finalStatus(
   key: string,
   current: string,
   lap: LapResult,
   s: TrackerConfig['status'],
-  openChildren: readonly string[] = []
-): { status: string | null; ask: string | null; waitingOn: readonly string[] } {
-  const decided = lapStatus(key, current, lap, s);
-  if (decided.status !== s.staging || openChildren.length === 0) return { ...decided, waitingOn: [] };
-  return { status: s.progress, ask: decided.ask, waitingOn: openChildren };
-}
-
-function lapStatus(
-  key: string,
-  current: string,
-  lap: LapResult,
-  s: TrackerConfig['status']
+  todo: string
 ): { status: string | null; ask: string | null } {
   if (current !== s.progress && current !== s.review) return { status: null, ask: null };
   if (lap.landed === 'merged') {
@@ -190,7 +179,7 @@ function lapStatus(
     return { status: s.staging, ask: null };
   }
   if (lap.pr !== '') return { status: s.review, ask: null };
-  return { status: s.todo, ask: null };
+  return { status: todo, ask: null };
 }
 
 /*
@@ -355,14 +344,15 @@ export function unnamedPrAsk(lap: LapResult, view: PrView | null, key: string, p
 
 // --- The ticket as the agents read it ---
 
+/** The lifecycle's names (VAULT-28): the agents and the comments speak the board's language. */
 const STATUS_NAMES: Record<keyof TrackerConfig['status'], string> = {
-  todo: 'To Do',
-  progress: 'In Progress',
+  todo: 'Startklar',
+  todoBug: 'Gemeldet',
+  progress: 'Entwicklung',
   review: 'Review',
   staging: 'Staging',
   live: 'Live',
-  canceled: 'Canceled',
-  todoBug: 'Gemeldet',
+  canceled: 'Verworfen',
   taskDone: 'Erledigt',
   taskDropped: 'Entfällt',
 };

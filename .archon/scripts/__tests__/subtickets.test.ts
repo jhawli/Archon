@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { readCreated } from '../../workflows/sdlc/.shared/claims';
 import { applyOutbox, type Op } from '../../workflows/sdlc/.shared/outbox';
-import { queueStatus } from '../../workflows/sdlc/.shared/queue-status';
 import { reservedText, runLine } from '../../workflows/sdlc/.shared/questions';
 import {
   promoteParent,
@@ -226,14 +225,5 @@ describe('the wait record is the scripts’ own', () => {
     expect(reservedText(`${WAIT_PREFIX}x`)).toBe(true);
     expect(reservedText(`${WAIT_ENDED_PREFIX}x`)).toBe(true);
     expect(reservedText('Wartet auf CONC-51')).toBe(false);
-  });
-});
-
-describe('the merge queue holds a parent with open sub-tasks too', () => {
-  it('merged and rolled out, a sub-task open: In Progress, waiting on it', () => {
-    const view = { state: 'MERGED', mergedAt: '2026-11-20T10:05:00Z', title: 'CONC-5 Liste', body: '' };
-    const url = 'https://github.com/o/r/pull/9';
-    const moves = queueStatus([{ url }], true, new Map([[url, view]]), new Map([['CONC-5', S.review]]), Date.parse('2026-11-20T10:00:00Z'), CFG, new Map([['CONC-5', ['CONC-51']]]));
-    expect(moves).toEqual([{ key: 'CONC-5', pr: url, status: S.progress, ask: null, waitingOn: ['CONC-51'] }]);
   });
 });

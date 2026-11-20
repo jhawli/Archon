@@ -7,7 +7,7 @@
  */
 import { rights, type Snapshot } from './board-all.ts';
 import { readCreated, statusName } from './claims.ts';
-import { adf, type Jira, type TrackerConfig } from './jira.ts';
+import { adf, type Jira, todoFor, type TrackerConfig } from './jira.ts';
 import { createTicket, outboxCursor, outboxProgress, type PrText } from './outbox.ts';
 import { defaultDue, lastQuestion, mayUnflag, type Question, type QuestionKind, questionText, reservedQuestion, reservedText } from './questions.ts';
 import { MAX_RESUMES, type RunOp } from './run-ops.ts';
@@ -40,6 +40,8 @@ export type ManagerOp =
 
 export interface Live {
   readonly status: string;
+  /** The queue the ticket goes back to (`todoFor`): Gemeldet for a bug, Startklar for anything else. */
+  readonly queue: string;
   readonly flagged: boolean;
   /** Filed by this pack (remote link `archon:<PROJECT>:…`). */
   readonly own: boolean;
@@ -160,12 +162,12 @@ export function refusal(op: ManagerOp, l: Live, s: TrackerConfig['status'], now:
   if (r === 'kommentar') return `${op.key} steht auf ${statusName(l.status, s)}: der Manager darf hier nur kommentieren und fragen (AK18i)`;
   switch (op.op) {
     case 'cancel':
-      return r === 'alles' ? null : `${op.key} steht auf Review: erst den PR schließen und zurück auf To Do, dann verwerfen (AK18i)`;
+      return r === 'alles' ? null : `${op.key} steht auf Review: erst den PR schließen und zurück in die Schlange, dann verwerfen (AK18i)`;
     case 'rank':
-      return r === 'alles' ? null : `${op.key}: den Rang ändert der Manager nur auf To Do (AK18i)`;
+      return r === 'alles' ? null : `${op.key}: den Rang ändert der Manager nur in der Schlange, auf Startklar oder Gemeldet (AK18i)`;
     case 'todo':
-      if (r !== 'review') return `${op.key}: zurück auf To Do geht nur von Review`;
-      return l.prOpen ? `${op.key}: der PR ist noch offen; erst schließen, dann zurück auf To Do (AK18i)` : null;
+      if (r !== 'review') return `${op.key}: zurück in die Schlange geht nur von Review`;
+      return l.prOpen ? `${op.key}: der PR ist noch offen; erst schließen, dann zurück in die Schlange (AK18i)` : null;
     case 'unflag':
       if (!l.flagged) return `${op.key} ist nicht markiert`;
       return mayUnflag(l.question) ? null : `${op.key}: die Markierung bleibt bis zu Julians Antwort oder zur fälligen Vorgabe (AK18i, AK18k)`;
@@ -179,6 +181,13 @@ export function refusal(op: ManagerOp, l: Live, s: TrackerConfig['status'], now:
       return null;
     }
   }
+}
+
+/** The queue a ticket on the board goes back to; `checkManagerOps` has refused any key not on it. */
+function queueOf(board: ReadonlyMap<string, Live>, key: string): string {
+  const queue = board.get(key)?.queue;
+  if (queue === undefined) throw new Error(`${key} is not on the board`);
+  return queue;
 }
 
 /** The whole list against the tickets as Jira has them, each entry's effect carried to the next. */
@@ -195,7 +204,7 @@ export function checkManagerOps(ops: readonly ManagerOp[], board: ReadonlyMap<st
     }
     const why = refusal(op, l, s, now);
     if (why !== null) throw new Error(`manager outbox entry ${i}: ${why}`);
-    if (op.op === 'todo') sim.set(op.key, { ...l, status: s.todo });
+    if (op.op === 'todo') sim.set(op.key, { ...l, status: l.queue });
     if (op.op === 'cancel') sim.set(op.key, { ...l, status: s.canceled });
     if (op.op === 'unflag' || op.op === 'default') sim.set(op.key, { ...l, flagged: false });
     if (op.op === 'ask') sim.set(op.key, { ...l, flagged: true, question: null });
@@ -230,6 +239,7 @@ export async function liveTickets(
     const t = jira.toTicket(row, false);
     board.set(t.key, {
       status: t.status,
+      queue: todoFor(t.type, c),
       flagged: t.flagged,
       own: (known[t.key]?.own ?? '') !== '',
       body: t.body,
@@ -306,7 +316,8 @@ export async function applyManagerOps(
     else {
       if (!changed) {
         if (op.op === 'cancel') await jira.move(op.key, c.status.canceled);
-        else if (op.op === 'todo') await jira.move(op.key, c.status.todo);
+        // Back to its own queue; the lifecycle's way from Review passes Entwicklung (`moveTo`).
+        else if (op.op === 'todo') await jira.moveTo(op.key, queueOf(board, op.key));
         else if (op.op === 'rank') await rankPlace(jira, op.key, op);
         else if (op.op === 'rewrite') await jira.call('PUT', jira.issue(op.key), { fields: { description: adf(op.text) } });
         else await jira.call('PUT', jira.issue(op.key), { fields: { [c.flagField]: null } }); // unflag, default
@@ -343,7 +354,7 @@ export async function managerPass(
   boardUrl: string
 ): Promise<{ ops: ManagerOp[]; dropped: string[]; created: Record<string, string> }> {
   const { ops, dropped } = parseManagerOutbox(raw, jira.config.project);
-  // AK18l: every answered question the board showed (To Do or Review, flagged) is acted on in
+  // AK18l: every answered question the board showed (a queue or Review, flagged) is acted on in
   // this very list: rewritten to the answer and unflagged, or canceled. Checked before any read.
   const owed = Object.entries(known).filter(([, s]) => s.answered === true).map(([key]) => key);
   const missing = owed.filter(key => !ops.some(op => 'key' in op && op.key === key && (op.op === 'unflag' || op.op === 'cancel')));

@@ -60,6 +60,17 @@ export function todoStatuses(s: TrackerConfig['status']): string[] {
   return [...new Set([s.todo, s.todoBug])];
 }
 
+/**
+ * The statuses a move from `from` to `to` passes, the target last. The lifecycle has no
+ * shortcut (VAULT-28): a delivery reaches Staging only through Review, where Jira checks a
+ * slice's tasks, and a ticket goes back to its queue only through progress.
+ */
+export function movePath(from: string, to: string, s: TrackerConfig['status']): string[] {
+  if (to === s.staging && from === s.progress) return [s.review, s.staging];
+  if (todoStatuses(s).includes(to) && from === s.review) return [s.progress, to];
+  return [to];
+}
+
 type Json = Record<string, unknown>;
 
 function obj(value: unknown): Json {
@@ -615,6 +626,7 @@ export class Jira {
     await this.call('PUT', `${this.issue(key)}/comment/${id}`, { body: adf(text) });
   }
 
+  /** One step: the transition Jira offers to `statusId` from where the ticket stands. */
   async move(key: string, statusId: string): Promise<void> {
     const listed = obj(await this.call('GET', `${this.issue(key)}/transitions`));
     const hit = list(listed.transitions)
@@ -622,6 +634,33 @@ export class Jira {
       .find(transition => str(obj(transition.to).id) === statusId);
     if (hit === undefined) throw new Error(`${key}: no transition to status ${statusId}`);
     await this.call('POST', `${this.issue(key)}/transitions`, { transition: { id: str(hit.id) } });
+  }
+
+  /**
+   * To `statusId` along `movePath`, reading where the ticket stands before each step, so a walk
+   * cut short finishes on the next call. Jira decides each step: a condition it does not meet
+   * (a slice's open task before Review) hides the way, and the error names where it stuck.
+   */
+  async moveTo(key: string, statusId: string): Promise<void> {
+    // Two steps at most; the third only catches a Jira that does not move.
+    for (let step = 0; step < 3; step += 1) {
+      const now = await this.status(key);
+      if (now === statusId) return;
+      const next = movePath(now, statusId, this.config.status)[0] ?? statusId;
+      try {
+        await this.move(key, next);
+      } catch (error) {
+        const why = error instanceof Error ? error.message : String(error);
+        const short = why.startsWith(`${key}: no transition to status `) ? `no transition to ${next}` : why;
+        throw new Error(`${key}: stuck on ${now} on the way to ${statusId}: ${short}`);
+      }
+    }
+    throw new Error(`${key}: not on ${statusId} after three moves`);
+  }
+
+  /** The ticket's status id, read straight from the issue. */
+  async status(key: string): Promise<string> {
+    return str(obj(obj(obj(await this.call('GET', `${this.issue(key)}?fields=status`)).fields).status).id);
   }
 
   /**

@@ -18,7 +18,7 @@ How the board reads:
 
 - A work item is a ticket key like `CONC-5`, its URL `https://<site>/browse/CONC-5`. `#n` is always a pull request.
 - The file lists the open sprint's tickets in sprint order (`Rang`) and after them the tickets open pull requests name. A ticket the file marks `Wartet:` is not startable; the line says why (a claim, a dependency, the owner, a delivering pull request).
-- `Depends on: CONC-3` waits until CONC-3 is on Staging, Live or Canceled; the file says which ones still block.
+- `Depends on: CONC-3` waits until CONC-3 is on Staging, Live or Verworfen; the file says which ones still block.
 - `Flagged: ja` waits for the owner (a ticket labelled `needs-owner` too). Where "Bookkeeping is not an owner decision" below lets you lift a park, lift the flag with `{"op": "unflag", "key": "CONC-5", "text": "<why this was only bookkeeping>"}`. Never lift a flag whose comment asks the owner a product question.
 - You cannot write to Jira. Put every write in `$ARTIFACTS_DIR/tracker/outbox/pick.json` as one JSON list (at most 20 entries); the loop checks the whole list and applies it after you:
   - `{"op": "comment", "key": "CONC-5", "text": "Contract\n\n..."}` for a `Contract` comment or a note;

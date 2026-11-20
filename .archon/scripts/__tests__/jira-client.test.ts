@@ -7,6 +7,7 @@ import {
   NEEDS_TRACKER,
   adf,
   plain,
+  movePath,
   pinTrackerConfig,
   todoFor,
   todoStatuses,
@@ -492,5 +493,106 @@ describe('the tracker config a run pins', () => {
     pinTrackerConfig(stateOf(stateDir), repoWith({ ...CFG, project: 'PIN' }));
     expect(withRun(stateDir, () => trackerConfig())?.project).toBe('PIN');
     expect(withRun(stateDir, () => trackerConfig(repoWith(CFG)))?.project).toBe('CONC');
+  });
+});
+
+/**
+ * A Jira that offers only the lifecycle's ways (VAULT-28), per type, and remembers where each
+ * ticket stands. A slice reaches Review only without an open task, as the CHILD condition hides
+ * that way. `stuck` refuses one POST to the named status, like a passing failure.
+ */
+interface LifecycleTicket { type: string; status: string; openTasks?: boolean }
+
+function lifecycleJira(
+  tickets: Record<string, LifecycleTicket>,
+  stuck?: string
+): { jira: Jira; posts: string[]; tickets: Record<string, LifecycleTicket> } {
+  const S = STATUS;
+  const ways: Record<string, Record<string, string[]>> = {
+    [TYPES.slice]: {
+      [S.todo]: [S.progress, S.canceled],
+      [S.progress]: [S.review, S.todo, S.canceled],
+      [S.review]: [S.progress, S.staging, S.canceled],
+      [S.staging]: [S.live, S.canceled],
+    },
+    [TYPES.bug]: {
+      [S.todoBug]: [S.progress, S.canceled],
+      [S.progress]: [S.review, S.todoBug, S.canceled],
+      [S.review]: [S.progress, S.staging, S.canceled],
+      [S.staging]: [S.live, S.canceled],
+    },
+  };
+  const posts: string[] = [];
+  let refused = false;
+  const send: Transport = async (method, path, body) => {
+    const key = /\/issue\/([A-Z]+-\d+)/.exec(path)?.[1] ?? '';
+    const t = tickets[key];
+    if (t === undefined) return { status: 404, text: '{}' };
+    if (method === 'GET' && path.includes('/transitions')) {
+      const open = (ways[t.type]?.[t.status] ?? []).filter(to => !(to === S.review && t.type === TYPES.slice && t.openTasks === true));
+      return { status: 200, text: JSON.stringify({ transitions: open.map(to => ({ id: `t${to}`, to: { id: to } })) }) };
+    }
+    if (method === 'POST' && path.endsWith('/transitions')) {
+      const to = (body as { transition: { id: string } }).transition.id.slice(1);
+      if (to === stuck && !refused) {
+        refused = true;
+        return { status: 500, text: '{"errorMessages":["boom"]}' };
+      }
+      posts.push(`${key} ${t.status}->${to}`);
+      t.status = to;
+      return { status: 204, text: '' };
+    }
+    if (method === 'GET') return { status: 200, text: JSON.stringify({ key, fields: { status: { id: t.status }, issuetype: { id: t.type } } }) };
+    return { status: 404, text: '{}' };
+  };
+  return { jira: new Jira(CFG, send, () => Promise.resolve()), posts, tickets };
+}
+
+describe('moves along the lifecycle (VAULT-28)', () => {
+  const S = STATUS;
+  it('the path: delivery through Review, back to a queue through progress, anything else straight', () => {
+    expect(movePath(S.progress, S.staging, S)).toEqual([S.review, S.staging]);
+    expect(movePath(S.review, S.todo, S)).toEqual([S.progress, S.todo]);
+    expect(movePath(S.review, S.todoBug, S)).toEqual([S.progress, S.todoBug]);
+    expect(movePath(S.review, S.staging, S)).toEqual([S.staging]);
+    expect(movePath(S.progress, S.todo, S)).toEqual([S.todo]);
+    expect(movePath(S.todo, S.progress, S)).toEqual([S.progress]);
+    expect(movePath(S.progress, S.canceled, S)).toEqual([S.canceled]);
+  });
+  it('a slice delivered from Entwicklung goes through Review to Staging', async () => {
+    const { jira, posts } = lifecycleJira({ 'CONC-5': { type: TYPES.slice, status: S.progress } });
+    await jira.moveTo('CONC-5', S.staging);
+    expect(posts).toEqual([`CONC-5 ${S.progress}->${S.review}`, `CONC-5 ${S.review}->${S.staging}`]);
+  });
+  it('a bug and a slice on Review go back to their queues through Entwicklung', async () => {
+    const { jira, posts } = lifecycleJira({
+      'CONC-5': { type: TYPES.slice, status: S.review },
+      'CONC-6': { type: TYPES.bug, status: S.review },
+    });
+    await jira.moveTo('CONC-5', S.todo);
+    await jira.moveTo('CONC-6', S.todoBug);
+    expect(posts).toEqual([
+      `CONC-5 ${S.review}->${S.progress}`, `CONC-5 ${S.progress}->${S.todo}`,
+      `CONC-6 ${S.review}->${S.progress}`, `CONC-6 ${S.progress}->${S.todoBug}`,
+    ]);
+  });
+  it('a ticket already there is not moved', async () => {
+    const { jira, posts } = lifecycleJira({ 'CONC-5': { type: TYPES.slice, status: S.review } });
+    await jira.moveTo('CONC-5', S.review);
+    expect(posts).toEqual([]);
+  });
+  it('a walk cut short on Review finishes on the next call', async () => {
+    const { jira, posts, tickets } = lifecycleJira({ 'CONC-5': { type: TYPES.bug, status: S.progress } }, S.staging);
+    expect(await failure(jira.moveTo('CONC-5', S.staging))).toContain(`CONC-5: stuck on ${S.review} on the way to ${S.staging}`);
+    expect(tickets['CONC-5']?.status).toBe(S.review);
+    await jira.moveTo('CONC-5', S.staging);
+    expect(posts).toEqual([`CONC-5 ${S.progress}->${S.review}`, `CONC-5 ${S.review}->${S.staging}`]);
+  });
+  it('a slice with an open task stays in Entwicklung and the error names the step', async () => {
+    const { jira, posts } = lifecycleJira({ 'CONC-5': { type: TYPES.slice, status: S.progress, openTasks: true } });
+    expect(await failure(jira.moveTo('CONC-5', S.staging))).toBe(
+      `CONC-5: stuck on ${S.progress} on the way to ${S.staging}: no transition to ${S.review}`
+    );
+    expect(posts).toEqual([]);
   });
 });
