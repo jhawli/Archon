@@ -52,6 +52,15 @@ describe('AK18h: the merge queue moves tickets like the loop, after one rollout'
     expect(r?.status).toBeNull();
     expect(r?.ask).toContain('bestätigt');
   });
+  it('a ticket in progress moves only for a pull request that delivers it: a reference leaves it and its open tasks alone', () => {
+    const inProgress = new Map([['CONC-41', CFG.status.progress], ['CONC-40', CFG.status.progress]]);
+    const v = view({ title: 'CONC-39 Andere Arbeit', body: 'Closes CONC-41. Refs CONC-40' });
+    const moves = queueStatus([{ url: PR }], true, new Map([[PR, v]]), inProgress, START, CFG);
+    expect(moves.map(m => [m.key, m.status, m.ask])).toEqual([
+      ['CONC-41', CFG.status.staging, null],
+      ['CONC-40', null, null],
+    ]);
+  });
   it('a ticket on any other status (Bereit, a feature) is listed, not moved', () => {
     const r = queueStatus([{ url: PR }], true, new Map([[PR, view()]]), new Map([['CONC-12', '10053']]), START, CFG)[0];
     expect(r?.key).toBe('CONC-12');

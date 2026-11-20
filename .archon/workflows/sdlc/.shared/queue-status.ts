@@ -4,7 +4,7 @@
  * request names, with this run's start as the anchor a claim gives the loop. A merge counts only
  * if GitHub reports it merged after the run started and naming the ticket (`confirmMerge`); one
  * it does not confirm leaves the ticket on Review (or its queue) with a question, as release.ts
- * does. A ticket on its queue moves only for a pull request that says it delivers it.
+ * does. A ticket on its queue or in progress moves only for a pull request that says it delivers it.
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -69,13 +69,15 @@ export function queueStatus(
       const current = now.get(key);
       if (current === undefined) continue;
       const queued = todoStatuses(config.status).includes(current);
-      // A ticket on its queue moves only for a pull request that says it delivers it (title,
-      // Closes): one that only refers to it is part of the work and leaves it where it is.
-      if (queued && !delivered.includes(key)) {
+      // A ticket on its queue or in progress may have open tasks, and moving it closes them: it
+      // moves only for a pull request that says it delivers it (title, Closes, Fixes, Resolves).
+      // One that only refers to it is part of the work and leaves it where it is.
+      if ((queued || current === config.status.progress) && !delivered.includes(key)) {
         moves.push({ key, pr: url, status: null, ask: null });
         continue;
       }
-      // The queue merges what a review approved: a merge it does not confirm waits on Review.
+      // The queue merges what a review approved: a merge it does not confirm waits on Review
+      // (a ticket on its queue stays there, see `doubt`).
       const lap = { pr: url, landed: 'merged', deployed: deployed ? 'true' : 'false', delivers: 'all', tasks: [], reviewed: 'approved', created: {} };
       const confirmed = confirmMerge(lap, view, key, startedAt, config.project);
       // A merge always names its pull request, so a queue is never the answer here.

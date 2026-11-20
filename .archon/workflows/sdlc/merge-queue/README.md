@@ -51,15 +51,16 @@ After the merge group, `merged-any` counts them, and with a `deploy` command one
 rollout follows the whole batch (`archon-deploy`, as the loop does after its merge).
 `ticket-status` then moves every Jira ticket a merged pull request names (the key its
 title starts with, `Refs`, `Closes`) the way the loop's release moves its own: from
-Review or Entwicklung to Staging (through Review) when the rollout is confirmed, otherwise to Review
-with a question; a merge GitHub does not confirm as merged after the run started
-leaves the ticket on Review with a question. A ticket on Startklar or Gemeldet (a loop lap
-gave it back there with its pull request) goes to Staging the same way, through Entwicklung
-and Review, but only when the pull request says it delivers it (its title opens with the key,
-or the body says `Closes`); its open tasks are closed first. A merge GitHub does not confirm
-leaves such a ticket on its queue with a question, and one the pull request only references
-(`Refs`, `relates to`) stays there. A ticket on any other status is only
-commented. Each ticket gets one `Merge-Queue: Lauf …` comment per run and pull request.
+Review to Staging when the rollout is confirmed, otherwise to Review with a question;
+a merge GitHub does not confirm as merged after the run started leaves the ticket on
+Review with a question. A ticket in Entwicklung, or on Startklar or Gemeldet (a loop lap
+gave it back there with its pull request), may have open tasks, and the move closes them
+first: it goes to Staging the same way, through Entwicklung and Review, only when the pull
+request says it delivers the ticket (its title opens with the key, or the body says
+`Closes`, `Fixes` or `Resolves`). One the pull request only references (`Refs`,
+`relates to`) stays where it is. A merge GitHub does not confirm leaves a queue ticket on
+its queue with a question. A ticket on any other status is only commented. Each ticket
+gets one `Merge-Queue: Lauf …` comment per run and pull request.
 
 A hold a PR's own next commit can fix may be published on that PR as one comment
 beginning `<!-- archon-merge-hold -->` (edited in place, cleared when the PR
