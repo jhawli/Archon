@@ -50,7 +50,8 @@ merge GitHub confirms in the run's state (a pull request only queued is not merg
 After the merge group, `merged-any` counts them, and with a `deploy` command one
 rollout follows the whole batch (`archon-deploy`, as the loop does after its merge).
 `ticket-status` then moves every Jira ticket a merged pull request names (the key its
-title starts with, `Refs`, `Closes`) the way the loop's release moves its own: from
+title starts with, or one its body names after `Closes`, `Fixes`, `Resolves`, `Refs`,
+`relates to` or `references`) the way the loop's release moves its own: from
 Review to Staging when the rollout is confirmed, otherwise to Review with a question;
 a merge GitHub does not confirm as merged after the run started leaves the ticket on
 Review with a question. A ticket in Entwicklung, or on Startklar or Gemeldet (a loop lap

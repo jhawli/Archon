@@ -81,6 +81,7 @@ describe('AK18h: the merge queue sets a ticket, closes no task (VAULT-28: only a
   const to = (status: string | null, ask: string | null = null): QueueMove => ({ key: 'CONC-41', pr: PR, status, ask });
   const posted = (calls: Call[]): string[] =>
     calls.filter(call => call.method === 'POST' && call.path === '/rest/api/3/issue/CONC-41/comment').map(call => JSON.stringify(call.body));
+  const flags = (calls: Call[]): number => calls.filter(call => call.method === 'PUT' && call.path === '/rest/api/3/issue/CONC-41').length;
   const moved = (calls: Call[]): string[] =>
     calls
       .filter(call => call.method === 'POST' && call.path.endsWith('/transitions'))
@@ -116,11 +117,27 @@ describe('AK18h: the merge queue sets a ticket, closes no task (VAULT-28: only a
     await applyQueueMove(again.jira, to(S.staging), S.staging, 'mq-1', LINE);
     expect(posted(again.calls)).toEqual([]);
   });
-  it('the question queueStatus decided comes once, with the open tasks after it', async () => {
+  it('the question queueStatus decided comes once, with the open tasks after it; a second run asks nothing', async () => {
     const { jira, calls } = fakeJira({ tickets: slice(S.progress) });
     await applyQueueMove(jira, to(S.review, 'Rollout nicht bestätigt.'), S.progress, 'mq-1', LINE);
+    expect(posted(calls)).toHaveLength(2);
+    expect(flags(calls)).toBe(1);
     const question = posted(calls)[1] ?? '';
     expect(question).toContain('Rollout nicht bestätigt.');
     expect(question).toContain('Offene Tasks (CONC-42, CONC-43)');
+    const said = [
+      { id: 7, author: CFG.assignee, body: `Merge-Queue: Lauf mq-1. PR: ${PR}. Status: Entwicklung.`, created: '2026-11-20T10:06:00Z' },
+      { id: 8, author: CFG.assignee, body: `@Julian Rollout nicht bestätigt.\n\nOffene Tasks (CONC-42, CONC-43): …\n\n${LINE}`, created: '2026-11-20T10:06:01Z' },
+    ];
+    const seen = slice(S.progress);
+    const again = fakeJira({ tickets: { ...seen, 'CONC-41': { ...seen['CONC-41'], status: S.progress, comments: said } } });
+    expect(await applyQueueMove(again.jira, to(S.review, 'Rollout nicht bestätigt.'), S.progress, 'mq-1', LINE)).toMatchObject({ status: S.progress });
+    expect(posted(again.calls)).toEqual([]);
+    expect(flags(again.calls)).toBe(0);
+  });
+  it('a bug without tasks goes from Gemeldet through Entwicklung and Review to Staging', async () => {
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-41': { status: S.todoBug, type: TYPES.bug, sprint: 'active' } } });
+    expect(await applyQueueMove(jira, to(S.staging), S.todoBug, 'mq-1', LINE)).toMatchObject({ status: S.staging, asked: false });
+    expect(moved(calls)).toEqual([`CONC-41 ${S.progress}`, `CONC-41 ${S.review}`, `CONC-41 ${S.staging}`]);
   });
 });

@@ -62,7 +62,8 @@ export function queueStatus(
   config: TrackerConfig
 ): QueueMove[] {
   const moves: QueueMove[] = [];
-  // Each move carries forward: a second pull request naming the same ticket sees it where the first left it.
+  // Each move carries forward: a second pull request naming the same ticket sees it where the first
+  // meant to leave it (`applyQueueMove` may still hold a slice with open tasks back).
   const now = new Map(tickets);
   for (const { url } of merges) {
     const view = views.get(url) ?? null;
@@ -71,15 +72,17 @@ export function queueStatus(
       const current = now.get(key);
       if (current === undefined) continue;
       const queued = todoStatuses(config.status).includes(current);
-      // A ticket on its queue or in progress may have open tasks, and moving it closes them: it
-      // moves only for a pull request that says it delivers it (title, Closes, Fixes, Resolves).
-      // One that only refers to it is part of the work and leaves it where it is.
+      // A ticket on its queue or in progress is not finished yet: moving it says it is delivered,
+      // so it moves only for a pull request that says so (title, Closes, Fixes, Resolves). One
+      // that only refers to it is part of the work and leaves it where it is.
       if ((queued || current === config.status.progress) && !delivered.includes(key)) {
         moves.push({ key, pr: url, status: null, ask: null });
         continue;
       }
       // The queue merges what a review approved: a merge it does not confirm waits on Review
-      // (a ticket on its queue stays there, see `doubt`).
+      // (a ticket on its queue stays there, see `doubt`). `delivers` here only keeps
+      // `finalStatus` from asking about a rest; which tasks are done is no merge's word
+      // (`applyQueueMove` closes none).
       const lap = { pr: url, landed: 'merged', deployed: deployed ? 'true' : 'false', delivers: 'all', tasks: [], reviewed: 'approved', created: {} };
       const confirmed = confirmMerge(lap, view, key, startedAt, config.project);
       // A merge always names its pull request, so a queue is never the answer here.
@@ -120,7 +123,7 @@ export async function applyQueueMove(
       : { status: current, notes: [], left: [] };
   const leftAsk =
     settled.left.length > 0 && move.status !== null
-      ? `Offene Tasks (${settled.left.join(', ')}): Die Merge-Queue hat ${move.pr} gemergt, schließt aber keine Tasks, das sagt nur ein Review. Jira lässt die Scheibe so nicht auf ${statusName(move.status, s)}. Welche sind erledigt?`
+      ? `Offene Tasks (${settled.left.join(', ')}): Die Merge-Queue hat ${move.pr} gemergt, schließt aber keine Tasks, das sagt nur ein Review. Jira lässt das Ticket so nicht auf ${statusName(move.status, s)}. Welche sind erledigt?`
       : null;
   const ask = move.ask !== null && leftAsk !== null ? `${move.ask}\n\n${leftAsk}` : (leftAsk ?? move.ask);
   const comments = await jira.comments(move.key);

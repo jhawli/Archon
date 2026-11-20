@@ -10,7 +10,7 @@
  * delivery finishes every open one; a partial one finishes the tasks the review named
  * (`Tasks done: 1, 2`), and files the others again under the rest slice, dropping them on the
  * old one (Entfällt). A lap that delivered nothing finishes none. `settleAndMove` does both
- * steps for release and the merge queue.
+ * steps for release; the merge queue calls it with nothing delivered, so it closes no task.
  */
 import { type Jira, movePath, type TaskRef, type TrackerConfig } from './jira.ts';
 
@@ -119,8 +119,9 @@ export async function closeTasks(
 }
 
 /**
- * After a lap (release) or a merge (merge queue): settle the tasks when the ticket goes on to
- * Review or Staging, then move it along the lifecycle (`moveTo`). A slice whose tasks stay open
+ * After a lap (release) or a merge (merge queue): settle the tasks the review's word names when
+ * the ticket goes on to Review or Staging (the merge queue passes none), then move it along the
+ * lifecycle (`moveTo`). A slice whose tasks stay open
  * cannot pass Entwicklung → Review, so when its way leads there it stays where it is: the result names its status and
  * the open tasks (`left`), and the caller still writes its comment and asks the owner. A move
  * Jira refuses otherwise throws, with the notes of what was already settled.
