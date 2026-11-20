@@ -165,7 +165,15 @@ export function fakeJira(
     const issue = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)$/.exec(bare);
     if (method === 'GET' && issue !== null && book.has(issue[1] ?? '')) return ok({ key: issue[1], fields: fields(issue[1] ?? '') });
     if (method === 'GET' && bare.endsWith('/transitions')) {
-      return ok({ transitions: Object.values(CFG.status).map(id => ({ id: `t${id}`, to: { id } })) });
+      // Jira's condition on a slice (VAULT-26 AK7): no way from Entwicklung to Review while a task is open.
+      const t = book.get(bare.split('/')[5] ?? '');
+      const done: string[] = [STATUS.taskDone, STATUS.taskDropped];
+      const barred =
+        t?.type === TYPES.slice &&
+        t.status === STATUS.progress &&
+        t.children.some(child => !done.includes(book.get(child)?.status ?? ''));
+      const to = Object.values(CFG.status).filter(id => !(barred && id === STATUS.review));
+      return ok({ transitions: to.map(id => ({ id: `t${id}`, to: { id } })) });
     }
     const moving = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(bare);
     if (method === 'POST' && moving !== null) {

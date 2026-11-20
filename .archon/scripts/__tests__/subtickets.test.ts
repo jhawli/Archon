@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { readCreated } from '../../workflows/sdlc/.shared/claims';
 import { applyOutbox, type Op } from '../../workflows/sdlc/.shared/outbox';
 import { reservedText, runLine } from '../../workflows/sdlc/.shared/questions';
-import { closeTasks, restFeature, splitTasks, tasksDone } from '../../workflows/sdlc/.shared/subtickets';
+import { closeTasks, restFeature, settleAndMove, splitTasks, tasksDone } from '../../workflows/sdlc/.shared/subtickets';
 import { type Call, CFG, type FakeTicket, fakeJira, state, SUBTASK_TYPE, TYPES } from './jira-fixtures';
 
 const S = CFG.status;
@@ -67,6 +67,14 @@ describe('a rest is a new slice under the same feature, on Startklar (AK17, VAUL
     await applyOutbox(jira, raw, RUN, LINE, dir, { writer: 'review', raw }, 'CONC-41').catch(() => undefined);
     await applyOutbox(jira, raw, RUN, LINE, dir, { writer: 'review', raw }, 'CONC-41');
     expect(bulkMoves).toHaveLength(1);
+  });
+  it('a rest an earlier run filed but never moved (still the plain type) is moved now, not taken as done', async () => {
+    const tickets = { 'CONC-40': FEATURE, 'CONC-41': SLICE, 'CONC-60': { status: '10060', type: TYPES.filing } };
+    const { jira, calls, bulkMoves, book } = fakeJira({ sprint: 7, tickets, linked: { 'archon:CONC:rest-conc-41': 'CONC-60' } });
+    expect(await applyOutbox(jira, [rest('CONC-41')], RUN, LINE, state(), undefined, 'CONC-41')).toEqual({ 'rest-conc-41': 'CONC-60' });
+    expect(calls.some(call => call.method === 'POST' && call.path === '/rest/api/3/issue')).toBe(false);
+    expect(bulkMoves).toHaveLength(1);
+    expect(book.get('CONC-60')).toMatchObject({ type: TYPES.slice, parent: 'CONC-40', status: S.todo });
   });
   it('a bulk move that ends on another status fails loudly', async () => {
     const { jira } = fakeJira({ sprint: 7, tickets: { 'CONC-40': FEATURE, 'CONC-41': SLICE }, bulkStatus: '10060' });
@@ -171,7 +179,11 @@ const TASKS = [
 describe('the tasks of a slice after a lap (VAULT-28, decision 5)', () => {
   it('a whole delivery finishes every open task', () => {
     expect(splitTasks(TASKS, [], 'all', S)).toEqual({ done: ['CONC-43', 'CONC-44', 'CONC-45'], rest: [], unknown: [] });
-    expect(splitTasks(TASKS, [], '', S).done).toEqual(['CONC-43', 'CONC-44', 'CONC-45']);
+  });
+  it('a lap the review did not call a delivery finishes no task, whatever it names', () => {
+    for (const delivers of ['', 'none']) {
+      expect(splitTasks(TASKS, [2], delivers, S)).toEqual({ done: [], rest: [], unknown: [] });
+    }
   });
   it('a part finishes the named tasks, the others go to the rest', () => {
     expect(splitTasks(TASKS, [2], 'part', S)).toEqual({ done: ['CONC-43'], rest: ['CONC-44', 'CONC-45'], unknown: [] });
@@ -210,7 +222,8 @@ describe('closing the tasks before Review (VAULT-28, AK17)', () => {
       .map(call => (call.body as { fields: { parent: { key: string }; summary: string; issuetype: unknown } }).fields);
   it('the tasks left over are filed again under the rest slice and dropped on the old one', async () => {
     const { jira, calls } = fakeJira({ tickets: slice() });
-    const notes = await closeTasks(jira, 'CONC-41', { delivers: 'part', tasks: [2] }, 'CONC-90');
+    const { notes, left } = await closeTasks(jira, 'CONC-41', { delivers: 'part', tasks: [2] }, 'CONC-90');
+    expect(left).toEqual([]);
     expect(moves(calls)).toEqual(['CONC-43 10061', 'CONC-44 10062', 'CONC-45 10062']);
     expect(made(calls).map(f => [f.parent.key, f.summary])).toEqual([['CONC-90', 'Task 3: C'], ['CONC-90', 'Aufräumen']]);
     expect(made(calls)[0]?.issuetype).toEqual({ id: SUBTASK_TYPE });
@@ -225,14 +238,15 @@ describe('closing the tasks before Review (VAULT-28, AK17)', () => {
   });
   it('a whole delivery closes every open task and files nothing', async () => {
     const { jira, calls } = fakeJira({ tickets: slice() });
-    expect(await closeTasks(jira, 'CONC-41', { delivers: 'all', tasks: [] }, null)).toEqual(['Tasks erledigt: CONC-43, CONC-44, CONC-45.']);
+    expect(await closeTasks(jira, 'CONC-41', { delivers: 'all', tasks: [] }, null)).toEqual({ notes: ['Tasks erledigt: CONC-43, CONC-44, CONC-45.'], left: [] });
     expect(moves(calls)).toEqual(['CONC-43 10061', 'CONC-44 10061', 'CONC-45 10061']);
     expect(made(calls)).toEqual([]);
   });
   it('a part without a rest ticket leaves the other tasks open and says so', async () => {
     const { jira, calls } = fakeJira({ tickets: slice() });
-    const notes = await closeTasks(jira, 'CONC-41', { delivers: 'part', tasks: [2, 7] }, null);
+    const { notes, left } = await closeTasks(jira, 'CONC-41', { delivers: 'part', tasks: [2, 7] }, null);
     expect(moves(calls)).toEqual(['CONC-43 10061']);
+    expect(left).toEqual(['CONC-44', 'CONC-45']);
     expect(notes).toEqual([
       'Tasks erledigt: CONC-43.',
       'Offen ohne Rest-Ticket: CONC-44, CONC-45.',
@@ -241,8 +255,59 @@ describe('closing the tasks before Review (VAULT-28, AK17)', () => {
   });
   it('a ticket without tasks (a bug) is left alone', async () => {
     const { jira, calls } = fakeJira({ tickets: { 'CONC-50': BUG } });
-    expect(await closeTasks(jira, 'CONC-50', { delivers: 'all', tasks: [] }, null)).toEqual([]);
+    expect(await closeTasks(jira, 'CONC-50', { delivers: 'all', tasks: [] }, null)).toEqual({ notes: [], left: [] });
     expect(calls.filter(call => call.method === 'POST')).toEqual([]);
+  });
+});
+
+describe('settling the tasks and moving after a lap (release, merge queue)', () => {
+  const slice = (): Record<string, FakeTicket> => ({
+    'CONC-40': FEATURE,
+    'CONC-41': { ...SLICE, children: TASKS.map(t => t.key) },
+    ...Object.fromEntries(TASKS.map(t => [t.key, { status: t.status, type: SUBTASK_TYPE, title: t.title, parent: 'CONC-41' }])),
+    'CONC-90': { status: S.todo, type: TYPES.slice, parent: 'CONC-40' },
+  });
+  const taskMoves = (calls: Call[]): string[] => moves(calls).filter(move => !move.startsWith('CONC-41 '));
+  it('a lap sent back goes to its queue and leaves the tasks as they are', async () => {
+    const { jira, calls, book } = fakeJira({ tickets: slice() });
+    const result = await settleAndMove(jira, 'CONC-41', S.progress, S.todo, { delivers: 'none', tasks: [] }, null);
+    expect(result).toEqual({ status: S.todo, notes: [], left: [] });
+    expect(book.get('CONC-41')?.status).toBe(S.todo);
+    expect(taskMoves(calls)).toEqual([]);
+  });
+  it('approved with a part and its rest: the named task done, the others to the rest, then Review', async () => {
+    const { jira, book } = fakeJira({ tickets: slice() });
+    const result = await settleAndMove(jira, 'CONC-41', S.progress, S.review, { delivers: 'part', tasks: [2] }, 'CONC-90');
+    expect(result.status).toBe(S.review);
+    expect(result.left).toEqual([]);
+    expect(book.get('CONC-41')?.status).toBe(S.review);
+    expect(book.get('CONC-43')?.status).toBe(S.taskDone);
+    expect(book.get('CONC-44')?.status).toBe(S.taskDropped);
+  });
+  it('merged with a part and no rest: Jira bars Review, so the slice stays in progress and says which tasks are open', async () => {
+    const { jira, calls, book } = fakeJira({ tickets: slice() });
+    const result = await settleAndMove(jira, 'CONC-41', S.progress, S.staging, { delivers: 'part', tasks: [2] }, null);
+    expect(result).toEqual({
+      status: S.progress,
+      notes: [
+        'Tasks erledigt: CONC-43.',
+        'Offen ohne Rest-Ticket: CONC-44, CONC-45.',
+        'Mit offenen Tasks lässt Jira die Scheibe nicht auf Review: sie bleibt, wo sie ist.',
+      ],
+      left: ['CONC-44', 'CONC-45'],
+    });
+    expect(book.get('CONC-41')?.status).toBe(S.progress);
+    expect(moves(calls).filter(move => move.startsWith('CONC-41 '))).toEqual([]);
+  });
+  it('the fake bars Review for a slice with an open task, as Jira does (else the case above proves nothing)', async () => {
+    const { jira } = fakeJira({ tickets: slice() });
+    expect(jira.moveTo('CONC-41', S.review)).rejects.toThrow('no transition');
+  });
+  it('a whole delivery from progress reaches Staging over Review', async () => {
+    const { jira, book } = fakeJira({ tickets: slice() });
+    const result = await settleAndMove(jira, 'CONC-41', S.progress, S.staging, { delivers: 'all', tasks: [] }, null);
+    expect(result.status).toBe(S.staging);
+    expect(book.get('CONC-41')?.status).toBe(S.staging);
   });
 });
 

@@ -113,6 +113,10 @@ nodes:
     with:
       writer: pick
       target: "$pick.output.target"
+      # Only the review's writer records its word in the lap record (tracker-write).
+      outcome: ""
+      delivers: ""
+      tasks: ""
     output_format: &tracker-write-output
       type: object
       properties:
@@ -179,6 +183,10 @@ nodes:
     with:
       writer: build
       target: "$pick.output.target"
+      # Only the review's writer records its word in the lap record (tracker-write).
+      outcome: ""
+      delivers: ""
+      tasks: ""
     output_format: *tracker-write-output
 
   # What the app check tests, as facts: the pull request, its head, its base and the
@@ -361,6 +369,9 @@ nodes:
     with:
       writer: review
       target: "$pick.output.target"
+      outcome: "$review.output.outcome"
+      delivers: "$review.output.delivers"
+      tasks: "$review.output.tasks_done"
     output_format: *tracker-write-output
 
   # The merge gate (no model). Merges the reviewed commit only when the evidence held,

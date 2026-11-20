@@ -23,6 +23,7 @@ import {
   recordCreated,
   recordLanding,
   recordLap,
+  addToLap,
   runState,
   restMarker,
   statusName,
@@ -80,6 +81,7 @@ const lap = (over: Partial<LapResult> = {}): LapResult => ({
   deployed: '',
   delivers: '',
   tasks: [],
+  reviewed: '',
   created: {},
   ...over,
 });
@@ -230,10 +232,19 @@ describe('status after the lap', () => {
     const created = { [restMarker('CONC-5')]: 'CONC-51' };
     expect(finalStatus('CONC-5', S.progress, lap({ ...merged, delivers: 'part', created }), S, S.todo)).toEqual({ status: '10017', ask: null });
   });
-  it('an open pull request that was not merged: Review', () => {
-    for (const landed of ['', 'refused']) {
-      expect(finalStatus('CONC-5', S.progress, lap({ pr: merged.pr, landed }), S, S.todo)).toEqual({ status: S.review, ask: null });
+  it('an open pull request the review approved for a person to merge: Review', () => {
+    expect(finalStatus('CONC-5', S.progress, lap({ pr: merged.pr, reviewed: 'approved' }), S, S.todo)).toEqual({ status: S.review, ask: null });
+  });
+  it('a merge the review ordered that land did not confirm (land broke, GitHub doubts it): Review', () => {
+    expect(finalStatus('CONC-5', S.progress, lap({ pr: merged.pr, reviewed: 'merge' }), S, S.todo)).toEqual({ status: S.review, ask: null });
+  });
+  it('any other open pull request goes back to the queue with it, and the next lap continues it (Julian 2026-11-20)', () => {
+    for (const reviewed of ['sent-back', 'needs-owner', 'nothing', '']) {
+      expect(finalStatus('CONC-5', S.progress, lap({ pr: merged.pr, reviewed }), S, S.todo)).toEqual({ status: S.todo, ask: null });
+      expect(finalStatus('CONC-5', S.review, lap({ pr: merged.pr, reviewed }), S, S.todoBug)).toEqual({ status: S.todoBug, ask: null });
     }
+    // The merge gate refused it: the pull request needs more work, not a person's merge.
+    expect(finalStatus('CONC-5', S.progress, lap({ pr: merged.pr, reviewed: 'merge', landed: 'refused' }), S, S.todo).status).toBe(S.todo);
   });
   it('a lap without a pull request gives a bug back to Gemeldet, a slice to Startklar', () => {
     expect(finalStatus('CONC-5', S.progress, lap(), S, S.todoBug).status).toBe('10059');
@@ -268,7 +279,8 @@ describe('lap facts', () => {
   it('reads what land, the outbox writer and deploy left, even when deploy failed', () => {
     const { state, artifacts } = run();
     recordLap(state, { pr: 'https://github.com/o/r/pull/9' });
-    recordLanding(state, artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged', delivers: 'part', tasks: 'Tasks done: 1, 3' });
+    addToLap(state, { reviewed: 'merge', delivers: 'part', tasks: 'Tasks done: 1, 3' });
+    recordLanding(state, artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'merged' });
     recordCreated(state, 'rest-conc-5', 'CONC-40');
     writeFileSync(join(artifacts, 'deployment.md'), '# Deployment\n\n- deployed: False\n- revision: abc\n');
     expect(readLap(state, artifacts, '')).toEqual({
@@ -277,6 +289,7 @@ describe('lap facts', () => {
       deployed: 'false',
       delivers: 'part',
       tasks: [1, 3],
+      reviewed: 'merge',
       created: { 'rest-conc-5': 'CONC-40' },
     });
   });
@@ -289,11 +302,14 @@ describe('lap facts', () => {
     expect(() => runState(root, '../x')).toThrow('not a run id');
     expect(() => runState('', 'run-1')).toThrow('STATE_DIR');
   });
-  it('each lap writer replaces the record', () => {
+  it('the lap start (subject) replaces an older record; the review and land add to it', () => {
     const { state, artifacts } = run();
     recordLanding(state, artifacts, { pr: 'https://github.com/o/r/pull/9', landed: 'refused', delivers: 'all' });
     recordLap(state, { pr: 'https://github.com/o/r/pull/10' });
     expect(readLap(state, artifacts, '')).toEqual(lap({ pr: 'https://github.com/o/r/pull/10' }));
+    // The review's word reaches release without land (sent back, approved for a manual merge).
+    addToLap(state, { reviewed: 'sent-back', delivers: 'none', tasks: 'Tasks done: none' });
+    expect(readLap(state, artifacts, '')).toEqual(lap({ pr: 'https://github.com/o/r/pull/10', reviewed: 'sent-back', delivers: 'none' }));
   });
   it('created tickets add up across writers', () => {
     const { state } = run();

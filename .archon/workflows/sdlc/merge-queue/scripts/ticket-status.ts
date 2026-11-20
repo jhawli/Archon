@@ -11,7 +11,7 @@ import { deployedFact, type PrView, runState, statusName } from '../../.shared/c
 import { Jira, pinTrackerConfig } from '../../.shared/jira.ts';
 import { queueStatus, readMerges, readStart } from '../../.shared/queue-status.ts';
 import { askedBefore, runLine } from '../../.shared/questions.ts';
-import { closeTasks } from '../../.shared/subtickets.ts';
+import { settleAndMove } from '../../.shared/subtickets.ts';
 import { prKeys } from '../../.shared/tickets.ts';
 
 const run = trimmed(process.env.WORKFLOW_ID);
@@ -50,15 +50,13 @@ if (merges.length === 0) {
   for (const move of queueStatus(merges, deployed, views, tickets, readStart(state), config)) {
     try {
       const current = tickets.get(move.key) ?? '';
-      if (move.status !== null && move.status !== current) {
-        // A merge delivers the slice: its open tasks are done before Review (VAULT-28).
-        if (move.status === config.status.review || move.status === config.status.staging) {
-          await closeTasks(jira, move.key, { delivers: '', tasks: [] }, null);
-        }
-        await jira.moveTo(move.key, move.status);
-      }
-      if (move.status !== null) tickets.set(move.key, move.status);
-      const name = statusName(move.status ?? current, config.status);
+      // A merge delivers the slice: its open tasks are done before Review (VAULT-28).
+      const now =
+        move.status !== null && move.status !== current
+          ? (await settleAndMove(jira, move.key, current, move.status, { delivers: 'all', tasks: [] }, null)).status
+          : current;
+      tickets.set(move.key, now);
+      const name = statusName(now, config.status);
       // Once per run and pull request, the question once per run: this node may run again.
       const comments = await jira.comments(move.key);
       const head = `Merge-Queue: Lauf ${run}. PR: ${move.pr}.`;

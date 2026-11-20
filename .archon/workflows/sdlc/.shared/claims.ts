@@ -146,6 +146,8 @@ export interface LapResult {
   readonly delivers: string;
   /** The task numbers the review says this change fully delivers (`Tasks done: 1, 2`, VAULT-28). */
   readonly tasks: readonly number[];
+  /** The review's outcome (`merge`, `approved`, `sent-back`, …), '' when the review did not finish. */
+  readonly reviewed: string;
   /** Markers the review filed tickets for (`write-review` output). */
   readonly created: Readonly<Record<string, string>>;
 }
@@ -154,9 +156,15 @@ export const restMarker = (key: string): string => `rest-${key.toLowerCase()}`;
 
 /**
  * The ticket's status after a lap (AK18). Null leaves it as it is. `todo` is the ticket's own
- * queue (`todoFor`): a lap without a pull request gives a bug back to its queue, a slice to
- * its own. A delivery goes to Staging whatever the slice's tasks; the lap settles them first
- * (VAULT-28, no waiting for parts any more).
+ * queue (`todoFor`): Gemeldet for a bug, Startklar for a slice. A delivery goes to Staging; the
+ * lap settles the slice's tasks first (VAULT-28, no waiting for parts any more).
+ *
+ * Review means the change is done and waits for a merge: the review approved it for a person to
+ * merge, or ordered a merge that land did not confirm. Any other lap with an open pull request
+ * (sent back, waiting for the owner, refused by the merge gate, a review that never finished)
+ * gives the ticket back to its queue with the pull request, and the next lap continues it
+ * (Julian 2026-11-20): Jira lets a slice onto Review only once its tasks are settled, and only
+ * the review's word settles them.
  */
 export function finalStatus(
   key: string,
@@ -181,7 +189,8 @@ export function finalStatus(
     }
     return { status: s.staging, ask: null };
   }
-  if (lap.pr !== '') return { status: s.review, ask: null };
+  const approved = lap.reviewed === 'approved' || (lap.reviewed === 'merge' && lap.landed !== 'refused');
+  if (lap.pr !== '' && approved) return { status: s.review, ask: null };
   return { status: todo, ask: null };
 }
 
@@ -200,7 +209,7 @@ export function finalStatus(
  * GitHub reports (`confirmMerge`).
  */
 
-type LapFacts = Partial<Record<'pr' | 'landed' | 'delivers' | 'tasks', string>>;
+type LapFacts = Partial<Record<'pr' | 'landed' | 'delivers' | 'tasks' | 'reviewed', string>>;
 
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const PR_URL = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/pull\/\d+$/;
@@ -247,9 +256,14 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-/** Replace this run's lap record with what the calling node knows. */
+/** Start this run's lap record (subject, before the review): whatever an earlier try left goes. */
 export function recordLap(state: string, facts: LapFacts): void {
   writeJson(join(state, 'lap.json'), facts);
+}
+
+/** Add to this run's lap record (the review's word, land's outcome), keeping what is there. */
+export function addToLap(state: string, facts: LapFacts): void {
+  writeJson(join(state, 'lap.json'), { ...strings(readObject(join(state, 'lap.json'))), ...facts });
 }
 
 /** Removes a `deployment.md` an agent may have left: only the deploy block after the caller writes one. */
@@ -260,7 +274,7 @@ export function clearDeployment(artifacts: string): void {
 /** land's record: after it no agent runs, so it also clears a `deployment.md` an agent may have left. */
 export function recordLanding(state: string, artifacts: string, facts: LapFacts): void {
   clearDeployment(artifacts);
-  recordLap(state, facts);
+  addToLap(state, facts);
 }
 
 /** When this run's claim on its ticket was posted (claim records it once it holds the ticket). */
@@ -310,6 +324,7 @@ export function readLap(state: string, artifacts: string, pickedPr: string): Lap
     deployed: deployedFact(artifacts),
     delivers: facts.delivers ?? '',
     tasks: tasksDone(facts.tasks ?? ''),
+    reviewed: facts.reviewed ?? '',
     created: readCreated(state),
   };
 }
@@ -325,7 +340,7 @@ export interface PrView {
 /**
  * `merged` stands only if GitHub agrees: the pull request is merged, after this run claimed
  * the ticket, and it names the ticket in its title or as `Refs`/`Closes`. Anything else is
- * read as not merged, which leaves the ticket on Review for a person to look at.
+ * read as not merged: the ticket waits on Review (the review ordered the merge) with a question.
  */
 export function confirmMerge(lap: LapResult, view: PrView | null, key: string, claimedAt: number, project: string): LapResult {
   if (lap.landed !== 'merged') return lap;
@@ -336,10 +351,11 @@ export function confirmMerge(lap: LapResult, view: PrView | null, key: string, c
 }
 
 /**
- * A question for the owner when the lap's pull request does not name its ticket, or null. The
- * ticket goes to Review, and the board finds a ticket there only through a pull request that
- * names it: without the key neither would come back to the loop. GitHub showing no pull
- * request asks nothing here; `confirmMerge` already doubts a merge it cannot see.
+ * A question for the owner when the lap's pull request does not name its ticket, or null.
+ * Without the key the loop loses the pull request: on Review the board finds a ticket only
+ * through a pull request that names it, and on its queue the next lap would start the ticket
+ * afresh beside it. GitHub showing no pull request asks nothing here; `confirmMerge` already
+ * doubts a merge it cannot see.
  */
 export function unnamedPrAsk(lap: LapResult, view: PrView | null, key: string, project: string): string | null {
   if (lap.pr === '' || view === null || namesTicket(view, key, project)) return null;

@@ -9,7 +9,8 @@
  * only when no task is open, so before Review the lap settles them (`closeTasks`): a whole
  * delivery finishes every open one; a partial one finishes the tasks the review named
  * (`Tasks done: 1, 2`), and files the others again under the rest slice, dropping them on the
- * old one (Entfällt).
+ * old one (Entfällt). A lap that delivered nothing finishes none. `settleAndMove` does both
+ * steps for release and the merge queue.
  */
 import type { Jira, TaskRef, TrackerConfig } from './jira.ts';
 
@@ -33,7 +34,9 @@ export function splitTasks(
   const open = children.filter(child => child.status !== s.taskDone && child.status !== s.taskDropped);
   const numbers = new Set(children.map(child => taskNumber(child.title)).filter(n => !Number.isNaN(n)));
   const unknown = named.filter(n => !numbers.has(n));
-  if (delivers !== 'part') return { done: open.map(child => child.key), rest: [], unknown };
+  if (delivers === 'all') return { done: open.map(child => child.key), rest: [], unknown };
+  // Nothing delivered ('none', or no word from the review): no task is done, whatever it names.
+  if (delivers !== 'part') return { done: [], rest: [], unknown: [] };
   const isNamed = (title: string): boolean => named.includes(taskNumber(title));
   return {
     done: open.filter(child => isNamed(child.title)).map(child => child.key),
@@ -63,22 +66,27 @@ async function subtaskType(jira: Jira): Promise<string> {
 /**
  * Settles the tasks of `key` before it goes to Review or Staging (decision 5). `lap.delivers`
  * and `lap.tasks` are the review's word; `restKey` is the rest slice this lap filed, or null.
- * Returns lines for the lap's `Loop result:` comment. Every step may run twice: a task that
- * is already done is left alone, and one already filed under the rest (same title) is not
- * filed again. Without a rest the tasks left over stay open, and Jira keeps the slice off Review.
+ * Returns lines for the lap's `Loop result:` comment and the tasks still open (`left`). Every
+ * step may run twice: a task that is already done is left alone, and one already filed under
+ * the rest (same title) is not filed again. Without a rest the tasks left over stay open, and
+ * Jira keeps the slice off Review.
  */
 export async function closeTasks(
   jira: Jira,
   key: string,
   lap: { readonly delivers: string; readonly tasks: readonly number[] },
   restKey: string | null
-): Promise<string[]> {
+): Promise<{ notes: string[]; left: string[] }> {
   const s = jira.config.status;
   const own = await jira.family(key);
   const split = splitTasks(own.children, lap.tasks, lap.delivers, s);
   const notes: string[] = [];
   for (const task of split.done) await jira.move(task, s.taskDone);
   if (split.done.length > 0) notes.push(`Tasks erledigt: ${split.done.join(', ')}.`);
+  const settled = new Set([...split.done, ...(restKey === null ? [] : split.rest)]);
+  const left = own.children
+    .filter(child => child.status !== s.taskDone && child.status !== s.taskDropped && !settled.has(child.key))
+    .map(child => child.key);
   if (split.rest.length > 0 && restKey === null) {
     notes.push(`Offen ohne Rest-Ticket: ${split.rest.join(', ')}.`);
   } else if (split.rest.length > 0 && restKey !== null) {
@@ -107,5 +115,36 @@ export async function closeTasks(
   if (split.unknown.length > 0) {
     notes.push(`„Tasks done“ nennt ${split.unknown.join(', ')}: diese Nummer hat die Scheibe nicht, übergangen.`);
   }
-  return notes;
+  return { notes, left };
+}
+
+/**
+ * After a lap (release) or a merge (merge queue): settle the tasks when the ticket goes on to
+ * Review or Staging, then move it along the lifecycle (`moveTo`). A slice whose tasks stay open
+ * cannot pass Entwicklung → Review, so it stays where it is: the result names its status and
+ * the open tasks (`left`), and the caller still writes its comment and asks the owner. A move
+ * Jira refuses otherwise throws, with the notes of what was already settled.
+ */
+export async function settleAndMove(
+  jira: Jira,
+  key: string,
+  current: string,
+  to: string,
+  lap: { readonly delivers: string; readonly tasks: readonly number[] },
+  restKey: string | null
+): Promise<{ status: string; notes: string[]; left: string[] }> {
+  const s = jira.config.status;
+  const onward = to === s.review || to === s.staging;
+  const { notes, left } = onward ? await closeTasks(jira, key, lap, restKey) : { notes: [], left: [] };
+  if (left.length > 0 && current === s.progress) {
+    notes.push('Mit offenen Tasks lässt Jira die Scheibe nicht auf Review: sie bleibt, wo sie ist.');
+    return { status: current, notes, left };
+  }
+  try {
+    await jira.moveTo(key, to);
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    throw new Error(notes.length > 0 ? `${why} (${notes.join(' ')})` : why);
+  }
+  return { status: to, notes, left: [] };
 }

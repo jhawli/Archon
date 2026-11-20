@@ -10,11 +10,15 @@
  * this node. The outbox file is removed once applied, with a copy of what was written kept
  * in the state directory. If a write fails the node fails and the file stays; a rerun goes on
  * behind the last write that worked (`applyOutbox`).
+ *
+ * For the review it first records the review's word in the lap record (`addToLap`): its outcome,
+ * whether the change delivers the work item, and the tasks it finishes. Release settles the
+ * slice's tasks and picks the status by it, also when land never runs (VAULT-28).
  */
 
 import { rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runState } from '../../.shared/claims.ts';
+import { addToLap, runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { applyOutbox, checkOutbox, outboxFile, outboxProgress, readOutbox, writableNow } from '../../.shared/outbox.ts';
@@ -29,6 +33,13 @@ if (writer !== 'pick' && writer !== 'build' && writer !== 'review') {
 
 const config = requireTracker();
 const state = runState();
+if (writer === 'review') {
+  addToLap(state, {
+    reviewed: trimmed(process.env.INPUTS_OUTCOME),
+    delivers: trimmed(process.env.INPUTS_DELIVERS),
+    tasks: trimmed(process.env.INPUTS_TASKS),
+  });
+}
 const file = outboxFile(artifactsDir(), writer);
 const raw = readOutbox(file);
 let jira: Jira | undefined;

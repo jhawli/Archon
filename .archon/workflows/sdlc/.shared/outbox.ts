@@ -358,6 +358,9 @@ const markerPart = (marker: string, n: number): string => (n === 1 ? marker : `$
  * (VAULT-28, C4): a slice is filed as the plain type (`types.filing`) and then bulk-moved to a
  * slice on Startklar under its feature. A bug starts on its queue, Gemeldet, by itself.
  *
+ * A ticket found by its remote link is the earlier run's, set up by it, with one exception: a
+ * slice still on the plain type broke off before its move, and is moved here.
+ *
  * A rest (`rest-<key>`) is the one marker that may file again: a ticket delivered in part a
  * second time has a new rest, while the first is on Staging, Live or Verworfen by then. That
  * rest takes the marker's next part (`rest-conc-40-2`, VAULT-22); one still open is used again.
@@ -386,21 +389,25 @@ export async function createTicket(
     for (let n = 1; ; n += 1) {
       marker = markerPart(op.marker, n);
       const id = `archon:${c.project}:${marker}`;
-      const found = await jira.search(`issue in issuesWithRemoteLinksByGlobalId("${id}")`, ['status']);
+      const found = await jira.search(`issue in issuesWithRemoteLinksByGlobalId("${id}")`, ['status', 'issuetype']);
       if (found.length > 1) throw new Error(`more than one ticket carries ${id}`);
       if (found.length === 0) break;
-      const fields = (found[0]?.fields ?? {}) as { status?: { id?: string } };
+      const fields = (found[0]?.fields ?? {}) as { status?: { id?: string }; issuetype?: { id?: string } };
       const status = fields.status?.id ?? '';
       if (rest && doneStatuses(c.status).has(status)) {
         if (n >= MAX_REST_PARTS) throw new Error(`${op.marker}: ${MAX_REST_PARTS} rest tickets are filed already, no further one`);
         continue;
       }
-      // Linked by an earlier run, so set up by it; where it stands by now is not this run's to change.
       key = String(found[0]?.key);
-      recordCreated(state, op.marker, key);
+      recordCreated(state, op.marker, key, marker !== op.marker ? marker : undefined);
+      // An earlier run filed it and broke before the move: still the plain type, so it is finished below.
+      if (link.feature !== undefined && fields.issuetype?.id === c.types.filing) break;
+      // Linked by an earlier run, so set up by it; where it stands by now is not this run's to change.
       recordFinished(state, op.marker, key);
       return { key, existed: true };
     }
+  }
+  if (key === undefined) {
     if (link.feature !== undefined) jira.issue(link.feature);
     const project = await jira.call('GET', `/rest/api/3/project/${c.project}`);
     const issue = await jira.call('POST', '/rest/api/3/issue', {

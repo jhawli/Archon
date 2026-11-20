@@ -10,7 +10,8 @@
  * lap could not decide (AK18a). The lap's facts come from the run's state records and the
  * deploy block's `deployment.md`, not from bindings: a failed rollout fails the deploy
  * block, and a binding to a failed node fails the node that reads it (see `readLap`). A
- * merge GitHub does not confirm leaves the ticket on Review with a question. If any part of
+ * merge GitHub does not confirm leaves the ticket on Review with a question; a slice whose tasks
+ * the review left open stays in progress with one (`settleAndMove`). If any part of
  * this fails, freeing the claim included, the rest is still tried and the ticket is flagged
  * before the node fails.
  */
@@ -34,7 +35,7 @@ import {
 import { artifactsDir, report, trimmed } from '../../.shared/io.ts';
 import { askedBefore, runLine } from '../../.shared/questions.ts';
 import { Jira, requireTracker, todoFor } from '../../.shared/jira.ts';
-import { closeTasks } from '../../.shared/subtickets.ts';
+import { settleAndMove } from '../../.shared/subtickets.ts';
 
 const target = trimmed(process.env.INPUTS_TARGET);
 const pr = trimmed(process.env.INPUTS_PR);
@@ -107,21 +108,22 @@ try {
     doubted.status !== null && doubted.ask === null
       ? { ...doubted, ask: unnamedPrAsk(lap, view, item.key, config.project) }
       : doubted;
-  const moving = result.status !== null && result.status !== ticket.status;
   // Jira lets a slice onto Review only without open tasks: the lap settles them first (VAULT-28,
-  // decision 5), the rest's tasks under the rest slice review filed.
-  const onward = moving && (result.status === config.status.review || result.status === config.status.staging);
-  const notes = onward ? await closeTasks(jira, item.key, lap, lap.created[restMarker(item.key)] ?? null) : [];
-  // Along the lifecycle: a delivery from progress passes Review, a way back from Review passes progress.
-  if (moving && result.status !== null) {
-    try {
-      await jira.moveTo(item.key, result.status);
-    } catch (error) {
-      const why = error instanceof Error ? error.message : String(error);
-      throw new Error(notes.length > 0 ? `${why} (${notes.join(' ')})` : why);
-    }
-  }
-  const name = statusName(result.status ?? ticket.status, config.status);
+  // decision 5), the rest's tasks under the rest slice review filed; then the move goes along the
+  // lifecycle (a delivery from progress passes Review, a way back from Review passes progress).
+  const goal = result.status ?? ticket.status;
+  const settled =
+    goal !== ticket.status
+      ? await settleAndMove(jira, item.key, ticket.status, goal, lap, lap.created[restMarker(item.key)] ?? null)
+      : { status: goal, notes: [], left: [] };
+  const notes = settled.notes;
+  // Tasks the review did not settle keep the slice in progress: the owner says what is missing.
+  const leftAsk =
+    settled.left.length > 0
+      ? `Offene Tasks (${settled.left.join(', ')}): Jira lässt die Scheibe so nicht auf ${statusName(goal, config.status)}. Was fehlt noch?`
+      : null;
+  const ask = result.ask !== null && leftAsk !== null ? `${result.ask}\n\n${leftAsk}` : (leftAsk ?? result.ask);
+  const name = statusName(settled.status, config.status);
   // Once per run: pick counts these lines as attempts, and this node may run again.
   const said = all.some(comment => comment.body.startsWith(`Loop result: run ${run}.`));
   if (!said) {
@@ -129,11 +131,11 @@ try {
     await jira.comment(item.key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.${tasks}\n\n${line}`);
   }
   // Once per run as well: a second `@` mention would mail the owner twice.
-  if (result.ask !== null && !askedBefore(await jira.comments(item.key), result.ask, line, config)) {
-    await jira.ask(item.key, `${result.ask}\n\n${line}`);
+  if (ask !== null && !askedBefore(await jira.comments(item.key), ask, line, config)) {
+    await jira.ask(item.key, `${ask}\n\n${line}`);
   }
   const unconfirmed = doubt ? ', merge not confirmed by GitHub' : '';
-  lines.push(`${item.key}: ${name}${result.ask !== null ? ', asked the owner' : ''}${unconfirmed}`, ...notes);
+  lines.push(`${item.key}: ${name}${ask !== null ? ', asked the owner' : ''}${unconfirmed}`, ...notes);
   if (freeError !== undefined) throw freeError;
 } catch (error) {
   // Flag the ticket so it does not sit there unseen, whatever part of the release failed.

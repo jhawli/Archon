@@ -9,8 +9,8 @@
  * scheduler names runs it knows have ended (`INPUTS_ENDED_RUNS`, comma-separated), and
  * a claim one of them still holds is released the way the run's own release step would
  * have, because a run killed before that step never frees its item. It also puts a ticket
- * such a run left in progress back where a lap can take it (`recoverOrphans`): Review with a
- * pull request, else its own queue, and a question when Jira refuses the way.
+ * such a run left in progress back on its own queue (`recoverOrphans`), with its pull request
+ * open for the next lap, and a question when Jira refuses the way.
  *
  * Output: `{ "workable": [ref], "claims": [ticket + run], "ended": [...], "waiting": [...],
  * "updated" }`. A ref is `{kind: 'ticket', key}` for a Jira ticket and
@@ -54,8 +54,9 @@ const endedRuns = new Set(
  * Tickets a dead run left in progress. Nothing else finds them: the board holds the queues' tickets and the
  * ones pull requests name, and pick may not write to a ticket in progress. A ticket
  * the loop itself started (`deadClaims`) whose every claim is dead goes back where a lap can
- * take it: Review when an open pull request names it, else its own queue, with the `Loop result:`
- * line the run never wrote, so pick counts the attempt. A ticket without such a claim is a
+ * take it: its own queue, with the `Loop result:` line the run never wrote, so pick counts the
+ * attempt. An open pull request stays open and the next lap continues it: no review approved it,
+ * so it is not Review's (Julian 2026-11-20). A ticket without such a claim is a
  * session's and stays. One ticket failing does not stop the gate; it is reported and tried
  * again next time.
  */
@@ -81,7 +82,7 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
       const pr = ticketPr(rows, key, c.project);
       const typeId = ((fields.issuetype ?? {}) as Record<string, unknown>).id;
       const type = typeof typeId === 'string' ? typeId : '';
-      const status = pr !== '' ? c.status.review : todoFor(type, c);
+      const status = todoFor(type, c);
       const name = statusName(status, c.status);
       // In an order a failure can be picked up from: while the ticket is in progress with its
       // claims on it, the next gate finds it again, so the move comes after the line pick
