@@ -5,12 +5,14 @@
  * and starts one only when there is more workable work than laps already looking for
  * some (see `.shared/workable.ts` for the rules). It needs `.archon/tracker.json` (AK18e)
  * and reads Jira (startable tickets in the open sprint, the tickets open pull requests
- * name) and GitHub only for pull requests. Its one write: the
+ * name) and GitHub only for pull requests. Its writes: the
  * scheduler names runs it knows have ended (`INPUTS_ENDED_RUNS`, comma-separated), and
  * a claim one of them still holds is released the way the run's own release step would
  * have, because a run killed before that step never frees its item. It also puts a ticket
  * such a run left in progress back on its own queue (`recoverOrphans`), with its pull request
- * open for the next lap, and a question when Jira refuses the way.
+ * open for the next lap, and a question when Jira refuses the way. And it asks the owner once
+ * about a startable bug without its `Fehler:` and `Regressionstest:` lines (CONC-32 AK11): the
+ * flag holds it until he adds them.
  *
  * Output: `{ "workable": [ref], "claims": [ticket + run], "ended": [...], "waiting": [...],
  * "updated" }`. A ref is `{kind: 'ticket', key}` for a Jira ticket and
@@ -18,6 +20,7 @@
  * on the board.
  */
 
+import { askUnready } from '../../.shared/bug-ready.ts';
 import { deadClaims, expiryHours, statusName } from '../../.shared/claims.ts';
 import { trimmed } from '../../.shared/io.ts';
 import { Jira, requireTracker, todoFor } from '../../.shared/jira.ts';
@@ -118,6 +121,9 @@ async function recoverOrphans(client: Jira): Promise<string[]> {
 const jira = new Jira(config);
 for (const line of await recoverOrphans(jira)) console.error(`workable: ${line}`);
 const loaded = await loadJiraBoard(jira, pulls);
+for (const line of await askUnready(jira, loaded.unready, runLine('archon-loop', 'scheduler'))) {
+  console.error(`workable: ${line}`);
+}
 // An answer that lifts a park leaves the same items workable, and the scheduler must still
 // see the board as changed.
 const updated = new Date(loaded.updated).toISOString();

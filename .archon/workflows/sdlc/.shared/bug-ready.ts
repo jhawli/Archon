@@ -4,6 +4,8 @@
  * with text on the label's own line. A slice is held by its statuses instead (Freigabe Plan).
  * What the loop filed itself (`Loop finding:`, outbox.ts) is its own finding and stays ready.
  */
+import { questionText } from './questions.ts';
+
 const SECTIONS = ['Fehler', 'Regressionstest'] as const;
 
 function hasSection(body: string, name: string): boolean {
@@ -19,4 +21,29 @@ export function missingSections(ticket: { type: string; body: string }, bugType:
 
 export function bugReady(ticket: { type: string; body: string }, bugType: string): boolean {
   return missingSections(ticket, bugType).length === 0;
+}
+
+/**
+ * The launch gate's question for each unready bug (decision 5): the flag keeps the loop off it, and
+ * a flagged ticket is no longer listed as unready, so it is asked once. The kind is "Produkt": the
+ * manager lifts the flag of a run's question without a kind by itself (`mayUnflag`), and the gate
+ * would then ask again every lap. One ticket failing is reported and does not stop the gate.
+ */
+export async function askUnready(
+  client: { ask(key: string, text: string): Promise<void> },
+  unready: readonly { key: string; missing: string[] }[],
+  line: string
+): Promise<string[]> {
+  const out: string[] = [];
+  for (const { key, missing } of unready) {
+    try {
+      const want = missing.map(name => `\`${name}:\``).join(' und ');
+      const text = `Bug ohne ${want}. Bitte ergänzen und die Flagge wegnehmen, dann nimmt ihn der Loop.`;
+      await client.ask(key, `${questionText('produkt', text, '', Date.now())}\n\n${line}`);
+      out.push(`${key}: unready bug, asked the owner (${missing.join(', ')})`);
+    } catch (error) {
+      out.push(`${key}: could not ask (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  return out;
 }
