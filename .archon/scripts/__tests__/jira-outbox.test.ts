@@ -236,8 +236,25 @@ describe('outbox apply', () => {
   it('unflag: the flag off first, then the reason', async () => {
     const { jira, calls } = fakeJira();
     await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, LINE, state());
-    expect(steps(calls)).toEqual(['PUT /rest/api/3/issue/CONC-6', 'POST /rest/api/3/issue/CONC-6/comment']);
-    expect(calls[0]?.body).toEqual({ fields: { customfield_10021: null } });
+    expect(steps(calls)).toEqual([
+      'GET /rest/api/3/issue/CONC-6/comment',
+      'PUT /rest/api/3/issue/CONC-6',
+      'POST /rest/api/3/issue/CONC-6/comment',
+    ]);
+    expect(calls[1]?.body).toEqual({ fields: { customfield_10021: null } });
+  });
+  it('unflag: a flag on an unanswered product question stays, nothing is written (CONC-32 AK11)', async () => {
+    const asked = { id: 30, author: CFG.assignee, body: '@acc-julian Frage (Produkt): Bug ohne `Regressionstest:`.', created: '2026-11-21T10:00:00.000+0100' };
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-6': { status: STATUS.todoBug, type: TYPES.bug, flagged: true, comments: [asked] } } });
+    await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, LINE, state());
+    expect(steps(calls)).toEqual(['GET /rest/api/3/issue/CONC-6/comment']);
+  });
+  it('unflag: once the owner answered, pick may lift the flag', async () => {
+    const asked = { id: 30, author: CFG.assignee, body: '@acc-julian Frage (Produkt): Welche Farbe?', created: '2026-11-21T10:00:00.000+0100' };
+    const answer = { id: 31, author: CFG.owner, body: 'Blau', created: '2026-11-21T11:00:00.000+0100' };
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-6': { status: STATUS.todoBug, type: TYPES.bug, flagged: true, comments: [asked, answer] } } });
+    await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Beantwortet' }], RUN, LINE, state());
+    expect(steps(calls)).toContain('PUT /rest/api/3/issue/CONC-6');
   });
   it('cancel: Canceled first, then a comment that says why and from where', async () => {
     const { jira, calls } = fakeJira();
@@ -266,10 +283,18 @@ describe('outbox apply', () => {
       { op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' },
     ];
     await applyOutbox(jira, ops, RUN, LINE, dir, { writer: 'pick', raw: ops }).catch(() => undefined);
-    expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-5/comment', 'PUT /rest/api/3/issue/CONC-6']);
+    expect(steps(calls)).toEqual([
+      'POST /rest/api/3/issue/CONC-5/comment',
+      'GET /rest/api/3/issue/CONC-6/comment',
+      'PUT /rest/api/3/issue/CONC-6',
+    ]);
     calls.length = 0;
     await applyOutbox(jira, ops, RUN, LINE, dir, { writer: 'pick', raw: ops });
-    expect(steps(calls)).toEqual(['PUT /rest/api/3/issue/CONC-6', 'POST /rest/api/3/issue/CONC-6/comment']);
+    expect(steps(calls)).toEqual([
+      'GET /rest/api/3/issue/CONC-6/comment',
+      'PUT /rest/api/3/issue/CONC-6',
+      'POST /rest/api/3/issue/CONC-6/comment',
+    ]);
     expect(existsSync(join(dir, 'progress-pick.json'))).toBe(false);
   });
   it('progress counts only for the same list: another list starts at its first entry', async () => {

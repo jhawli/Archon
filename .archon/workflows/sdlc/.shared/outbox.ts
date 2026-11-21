@@ -13,9 +13,9 @@ import { join } from 'node:path';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, restMarker, statusName } from './claims.ts';
 import { note } from './io.ts';
 import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, todoFor, todoStatuses, type TrackerConfig } from './jira.ts';
-import { reservedQuestion, reservedText } from './questions.ts';
+import { lastQuestion, reservedQuestion, reservedText } from './questions.ts';
 import { restFeature } from './subtickets.ts';
-import { namesTicket, prKeys } from './tickets.ts';
+import { LOOP_FINDING, namesTicket, prKeys } from './tickets.ts';
 
 export type Op =
   | { readonly op: 'comment'; readonly key: string; readonly text: string }
@@ -313,7 +313,11 @@ export async function applyOutbox(
     } else if (index >= done) {
       if (op.op === 'comment') await jira.comment(op.key, `${op.text}\n\n${line}`);
       else if (op.op === 'ask') await jira.ask(op.key, `${op.text}\n\n${line}`);
-      else {
+      else if (op.op === 'unflag' && !(half && index === done) && (await ownersHold(jira, op.key))) {
+        // loop-pick.md: never lift a flag whose comment asks the owner a product question. The
+        // launch gate's question on an unready bug is one; lifted, it would be asked again each lap.
+        note(`outbox: ${op.key} keeps its flag: its latest question asks the owner about the product and is unanswered`);
+      } else {
         // The change first: a comment saying "canceled" on a ticket that is not would be worse
         // than the reverse. It is noted before the comment, so a rerun only adds the comment.
         if (!(half && index === done)) {
@@ -329,6 +333,12 @@ export async function applyOutbox(
   }
   if (progress !== null) rmSync(progress, { force: true });
   return created;
+}
+
+/** True when the ticket's latest question is an unanswered product question: only the owner lifts that flag. */
+async function ownersHold(jira: Jira, key: string): Promise<boolean> {
+  const q = lastQuestion(await jira.comments(key), jira.config);
+  return q !== null && q.kind === 'produkt' && q.answer === null;
 }
 
 /**
@@ -416,7 +426,7 @@ export async function createTicket(
         project: { id: String(project?.id) },
         issuetype: { id: link.feature !== undefined ? c.types.filing : c.types.bug },
         summary: op.title,
-        description: adf(`Loop finding: ${marker}\n\n${op.text}`),
+        description: adf(`${LOOP_FINDING} ${marker}\n\n${op.text}`),
         assignee: { accountId: c.assignee },
       },
     });
