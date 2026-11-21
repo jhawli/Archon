@@ -158,7 +158,8 @@ describe('loading the board from Jira', () => {
       ...fields,
     },
   });
-  function fakeJira(): { send: Transport; jql: string[]; comments: string[] } {
+  /** `extra`: more tickets in the open sprint, after CONC-5 and CONC-6. */
+  function fakeJira(extra: Record<string, unknown>[] = []): { send: Transport; jql: string[]; comments: string[] } {
     const jql: string[] = [];
     const comments: string[] = [];
     const send: Transport = async (method, path, body) => {
@@ -178,6 +179,7 @@ describe('loading the board from Jira', () => {
                 customfield_10021: [{ id: '10019' }],
                 updated: '2026-11-20T11:30:00.000+0100',
               }),
+              ...extra,
             ],
           });
         }
@@ -245,6 +247,37 @@ describe('loading the board from Jira', () => {
       { kind: 'ticket', key: 'CONC-6', why: 'needs-owner' },
       { kind: 'ticket', key: 'CONC-9', why: 'delivered by pull request #12' },
     ]);
+  });
+
+  it('a bug without its regression example is no candidate and is listed as unready', async () => {
+    const { send } = fakeJira([
+      issue('CONC-7', { issuetype: { id: TYPES.bug }, text: 'Fehler: x' }),
+      issue('CONC-8', { issuetype: { id: TYPES.bug }, text: 'Fehler: Gewicht springt\nRegressionstest: 72,5 → 72,5' }),
+    ]);
+    const loaded = await loadJiraBoard(new Jira(CFG, send), [pull]);
+    const candidate = (key: string): boolean | undefined => loaded.board.issues.find(item => item.id === key)?.candidate;
+    expect(candidate('CONC-7')).toBe(false);
+    expect(candidate('CONC-8')).toBe(true);
+    expect(loaded.unready).toEqual([{ key: 'CONC-7', missing: ['Regressionstest'] }]);
+    expect(workability(loaded.board, 6, now, new Set(), loaded.links).waiting).toContainEqual({
+      kind: 'ticket',
+      key: 'CONC-7',
+      why: 'not startable',
+    });
+  });
+
+  it('a flagged bug is not listed again: it was asked already', async () => {
+    const { send } = fakeJira([
+      issue('CONC-7', { issuetype: { id: TYPES.bug }, text: 'Fehler: x', customfield_10021: [{ id: '10019' }] }),
+    ]);
+    const loaded = await loadJiraBoard(new Jira(CFG, send), [pull]);
+    expect(loaded.board.issues.find(item => item.id === 'CONC-7')?.candidate).toBe(false);
+    expect(loaded.unready).toEqual([]);
+  });
+
+  it('the tickets of the shared board are no bugs: nothing is unready', async () => {
+    const { send } = fakeJira();
+    expect((await loadJiraBoard(new Jira(CFG, send), [pull])).unready).toEqual([]);
   });
 
   it('loads a ticket a pull request names only in its title', async () => {

@@ -3,6 +3,7 @@
  * and which `Depends on` targets still block. Used by the launch gate and by tracker-read,
  * so both see the same facts. Pull requests stay on GitHub and come in as `gh pr list` rows.
  */
+import { missingSections } from './bug-ready.ts';
 import { doneStatuses, type Jira, type Ticket, type TicketComment, todoStatuses } from './jira.ts';
 import { dependencyKeys, prKeys } from './tickets.ts';
 import { OWNER_LABEL, type Board, type BoardItem, type Links } from './workable.ts';
@@ -21,6 +22,8 @@ export interface JiraBoard {
   /** Newest change to any ticket or pull request on the board, in ms; 0 for an empty board. */
   readonly updated: number;
   readonly links: Links;
+  /** Startable bugs of the open sprint that lack a section (CONC-32 AK11), not flagged yet. */
+  readonly unready: readonly { key: string; missing: string[] }[];
 }
 
 export function jiraLinks(project: string): Links {
@@ -84,6 +87,12 @@ export async function loadJiraBoard(jira: Jira, pulls: readonly GithubItem[]): P
     )
   ).map(raw => jira.toTicket(raw, true));
   const have = new Set(startable.map(ticket => ticket.key));
+  // AK11: a bug without its two lines waits for the owner. A flagged one was asked already.
+  const unready = startable
+    .filter(ticket => !ticket.flagged)
+    .map(ticket => ({ key: ticket.key, missing: missingSections(ticket, c.types.bug) }))
+    .filter(row => row.missing.length > 0);
+  const held = new Set(unready.map(row => row.key));
   const named = [...new Set(pulls.flatMap(pull => links.pullKeys(pull)))].filter(key => !have.has(key));
   // `key in (...)` returns no row for a key Jira does not know, rather than failing the search.
   const linked =
@@ -123,7 +132,7 @@ export async function loadJiraBoard(jira: Jira, pulls: readonly GithubItem[]): P
       labels: ticket.labels,
       comments,
       owner: ticket.flagged || ticket.labels.includes(OWNER_LABEL),
-      candidate: have.has(ticket.key) && !ticket.flagged,
+      candidate: have.has(ticket.key) && !ticket.flagged && !held.has(ticket.key),
     });
   }
   const updated = Math.max(
@@ -131,5 +140,5 @@ export async function loadJiraBoard(jira: Jira, pulls: readonly GithubItem[]): P
     ...tickets.map(ticket => ticket.updated),
     ...pulls.map(pull => Date.parse(pull.updatedAt) || 0)
   );
-  return { board: { issues, pulls, open }, tickets, comments: read, updated, links };
+  return { board: { issues, pulls, open }, tickets, comments: read, updated, links, unready };
 }
