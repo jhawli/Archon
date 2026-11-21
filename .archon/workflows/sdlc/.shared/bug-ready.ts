@@ -4,7 +4,7 @@
  * with text on the label's own line. A slice is held by its statuses instead (Freigabe Plan).
  * What the loop filed itself (`LOOP_FINDING`, outbox.ts) is its own finding and stays ready.
  */
-import type { TrackerConfig } from './jira.ts';
+import { type TrackerConfig, todoStatuses } from './jira.ts';
 import { questionText } from './questions.ts';
 import { LOOP_FINDING } from './tickets.ts';
 
@@ -44,7 +44,7 @@ export function unreadyRefusal(
   ticket: { key: string; type: string; body: string; status: string },
   config: Pick<TrackerConfig, 'status' | 'types'>
 ): string | null {
-  if (ticket.status !== config.status.todoBug) return null;
+  if (!todoStatuses(config.status).includes(ticket.status)) return null; // as the gate: its queues only
   const missing = missingSections(ticket, config.types.bug);
   return missing.length === 0 ? null : `${ticket.key} is an unready bug: no ${missing.map(name => `${name}:`).join(' and no ')} line (CONC-32 AK11)`;
 }

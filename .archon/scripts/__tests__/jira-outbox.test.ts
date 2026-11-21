@@ -249,12 +249,35 @@ describe('outbox apply', () => {
     await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, LINE, state());
     expect(steps(calls)).toEqual(['GET /rest/api/3/issue/CONC-6/comment']);
   });
-  it('unflag: once the owner answered, pick may lift the flag', async () => {
+  it('unflag: an answered product question is the manager\u2019s (AK18l), pick leaves its flag too', async () => {
     const asked = { id: 30, author: CFG.assignee, body: '@acc-julian Frage (Produkt): Welche Farbe?', created: '2026-11-21T10:00:00.000+0100' };
     const answer = { id: 31, author: CFG.owner, body: 'Blau', created: '2026-11-21T11:00:00.000+0100' };
     const { jira, calls } = fakeJira({ tickets: { 'CONC-6': { status: STATUS.todoBug, type: TYPES.bug, flagged: true, comments: [asked, answer] } } });
     await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Beantwortet' }], RUN, LINE, state());
+    expect(steps(calls)).toEqual(['GET /rest/api/3/issue/CONC-6/comment']);
+  });
+  it('unflag: a technical question does not hold the flag', async () => {
+    const asked = { id: 30, author: CFG.assignee, body: '@acc-julian Frage (technisch, Vorgabe ab 2026-11-22 09:00 UTC): Port?\nVorgabe: 8080', created: '2026-11-21T10:00:00.000+0100' };
+    const { jira, calls } = fakeJira({ tickets: { 'CONC-6': { status: STATUS.todoBug, type: TYPES.bug, flagged: true, comments: [asked] } } });
+    await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, LINE, state());
     expect(steps(calls)).toContain('PUT /rest/api/3/issue/CONC-6');
+  });
+  it('unflag: a rerun after the flag came off only adds the comment, without reading the question again', async () => {
+    const { jira, calls } = fakeJira({
+      failOnce: 'POST /rest/api/3/issue/CONC-6/comment',
+      tickets: { 'CONC-6': { status: STATUS.todoBug, type: TYPES.bug, flagged: true } },
+    });
+    const dir = state();
+    const ops: Op[] = [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }];
+    await applyOutbox(jira, ops, RUN, LINE, dir, { writer: 'pick', raw: ops }).catch(() => undefined);
+    expect(steps(calls)).toEqual([
+      'GET /rest/api/3/issue/CONC-6/comment',
+      'PUT /rest/api/3/issue/CONC-6',
+      'POST /rest/api/3/issue/CONC-6/comment',
+    ]);
+    calls.length = 0;
+    await applyOutbox(jira, ops, RUN, LINE, dir, { writer: 'pick', raw: ops });
+    expect(steps(calls)).toEqual(['POST /rest/api/3/issue/CONC-6/comment']);
   });
   it('cancel: Canceled first, then a comment that says why and from where', async () => {
     const { jira, calls } = fakeJira();

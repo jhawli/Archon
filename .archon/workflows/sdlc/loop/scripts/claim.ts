@@ -15,8 +15,9 @@
  *
  * Pick is an agent, and the ticket it names is checked like its outbox writes (decision 11):
  * it must be a ticket at all (`targetRefusal`; a pull request is continued through the ticket
- * it names), on this lap's snapshot, still the loop's in Jira (`writableNow`), not flagged, not
- * a bug without its `Fehler:` and `Regressionstest:` lines (`unreadyRefusal`), and a pull request it names must not belong to a ticket that is someone else's (`prRefusal`).
+ * it names), on this lap's snapshot, still the loop's in Jira (`writableNow`), not flagged, on its
+ * queue not a bug without its `Fehler:` and `Regressionstest:` lines (`unreadyRefusal`), and a pull
+ * request it names must not belong to a ticket that is someone else's (`prRefusal`).
  * Anything else, the owner's or a session's, is not claimed and the lap does no work.
  */
 

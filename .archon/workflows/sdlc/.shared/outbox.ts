@@ -316,7 +316,7 @@ export async function applyOutbox(
       else if (op.op === 'unflag' && !(half && index === done) && (await ownersHold(jira, op.key))) {
         // loop-pick.md: never lift a flag whose comment asks the owner a product question. The
         // launch gate's question on an unready bug is one; lifted, it would be asked again each lap.
-        note(`outbox: ${op.key} keeps its flag: its latest question asks the owner about the product and is unanswered`);
+        note(`outbox: ${op.key} keeps its flag: its latest question asks the owner about the product`);
       } else {
         // The change first: a comment saying "canceled" on a ticket that is not would be worse
         // than the reverse. It is noted before the comment, so a rerun only adds the comment.
@@ -335,10 +335,13 @@ export async function applyOutbox(
   return created;
 }
 
-/** True when the ticket's latest question is an unanswered product question: only the owner lifts that flag. */
+/**
+ * True when the ticket's latest question is about the product: pick never lifts that flag. Unanswered,
+ * it waits for the owner; answered, it is the manager's (AK18l: take the answer into the text, then unflag).
+ */
 async function ownersHold(jira: Jira, key: string): Promise<boolean> {
   const q = lastQuestion(await jira.comments(key), jira.config);
-  return q !== null && q.kind === 'produkt' && q.answer === null;
+  return q !== null && q.kind === 'produkt';
 }
 
 /**
