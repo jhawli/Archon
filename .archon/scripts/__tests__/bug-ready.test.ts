@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { adf, plain } from '../../workflows/sdlc/.shared/jira';
-import { askUnready, bugReady, missingSections } from '../../workflows/sdlc/.shared/bug-ready';
+import { askUnready, bugReady, missingSections, unreadyRefusal } from '../../workflows/sdlc/.shared/bug-ready';
 import { lastQuestion, mayUnflag } from '../../workflows/sdlc/.shared/questions';
 import { CFG, fakeJira, TYPES } from './jira-fixtures';
 
@@ -122,5 +122,17 @@ describe('the launch gate asks for an unready bug (CONC-32 AK11)', () => {
         RUN
       )
     ).toEqual(['CONC-7: could not ask (403)', 'CONC-8: could not ask (403)']);
+  });
+});
+
+describe('claim refuses an unready bug pick chose anyway (CONC-32 AK11)', () => {
+  it('names the missing lines', () => {
+    expect(unreadyRefusal({ key: 'CONC-7', type: TYPES.bug, body: 'Gewicht springt' }, TYPES.bug)).toBe(
+      'CONC-7 is an unready bug: no Fehler: and no Regressionstest: line (CONC-32 AK11)'
+    );
+  });
+  it('lets a ready bug and a slice through', () => {
+    expect(unreadyRefusal({ key: 'CONC-8', type: TYPES.bug, body: 'Fehler: x\nRegressionstest: y' }, TYPES.bug)).toBeNull();
+    expect(unreadyRefusal({ key: 'CONC-9', type: TYPES.slice, body: '' }, TYPES.bug)).toBeNull();
   });
 });

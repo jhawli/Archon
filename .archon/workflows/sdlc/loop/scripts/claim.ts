@@ -15,8 +15,8 @@
  *
  * Pick is an agent, and the ticket it names is checked like its outbox writes (decision 11):
  * it must be a ticket at all (`targetRefusal`; a pull request is continued through the ticket
- * it names), on this lap's snapshot, still the loop's in Jira (`writableNow`) and not flagged,
- * and a pull request it names must not belong to a ticket that is someone else's (`prRefusal`).
+ * it names), on this lap's snapshot, still the loop's in Jira (`writableNow`), not flagged, not
+ * a bug without its `Fehler:` and `Regressionstest:` lines (`unreadyRefusal`), and a pull request it names must not belong to a ticket that is someone else's (`prRefusal`).
  * Anything else, the owner's or a session's, is not claimed and the lap does no work.
  */
 
@@ -36,6 +36,7 @@ import {
   type WorkItem,
   workItem,
 } from '../../.shared/claims.ts';
+import { unreadyRefusal } from '../../.shared/bug-ready.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { clearOutbox, type PrText, prAddressRefusal, prRefusal, writableNow } from '../../.shared/outbox.ts';
@@ -60,7 +61,10 @@ async function refusal(key: string): Promise<string | null> {
     return `${key} is not on this lap's board, or no longer assigned to the loop on its queue (Startklar, Gemeldet) or Review`;
   }
   // The launch rule leaves a flagged ticket alone; a flag pick lifted this lap is already off.
-  if ((await jira.ticket(key)).flagged) return `${key} is flagged: a question to the owner is open`;
+  const ticket = await jira.ticket(key);
+  if (ticket.flagged) return `${key} is flagged: a question to the owner is open`;
+  const unready = unreadyRefusal(ticket, config.types.bug);
+  if (unready !== null) return unready;
   if (pr === '') return null;
   const gh = (args: string[]): string => {
     const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
