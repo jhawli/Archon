@@ -7,6 +7,9 @@
  */
 import type { TrackerConfig } from './jira.ts';
 
+/** The first line of a ticket the loop filed itself (outbox `createTicket`); bug-ready exempts it, the manager keeps it. */
+export const LOOP_FINDING = 'Loop finding:';
+
 const KEY = /^[A-Z][A-Z0-9]+-[1-9]\d*$/;
 
 export function isTicketKey(value: string): boolean {

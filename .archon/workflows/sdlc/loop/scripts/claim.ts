@@ -63,7 +63,7 @@ async function refusal(key: string): Promise<string | null> {
   // The launch rule leaves a flagged ticket alone; a flag pick lifted this lap is already off.
   const ticket = await jira.ticket(key);
   if (ticket.flagged) return `${key} is flagged: a question to the owner is open`;
-  const unready = unreadyRefusal(ticket, config.types.bug);
+  const unready = unreadyRefusal(ticket, config);
   if (unready !== null) return unready;
   if (pr === '') return null;
   const gh = (args: string[]): string => {

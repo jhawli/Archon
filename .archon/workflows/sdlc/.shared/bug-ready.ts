@@ -2,21 +2,32 @@
  * CONC-32 AK11, fix part: a bug joins the loop's queue only with an error description and the
  * example for its regression test, each a line `Fehler: …` and `Regressionstest: …` (any case)
  * with text on the label's own line. A slice is held by its statuses instead (Freigabe Plan).
- * What the loop filed itself (`Loop finding:`, outbox.ts) is its own finding and stays ready.
+ * What the loop filed itself (`LOOP_FINDING`, outbox.ts) is its own finding and stays ready.
  */
+import type { TrackerConfig } from './jira.ts';
 import { questionText } from './questions.ts';
+import { LOOP_FINDING } from './tickets.ts';
 
 const SECTIONS = ['Fehler', 'Regressionstest'] as const;
 
+/**
+ * The text as the rule reads it: plain() keeps Jira's bold (`**`) and code (backticks) marks and
+ * its no-break spaces, which the editor puts around a label as often as not.
+ */
+function bare(body: string): string {
+  return body.replace(/\*\*|`/g, '').replace(/\u00a0/g, ' ');
+}
+
 function hasSection(body: string, name: string): boolean {
   // [ \t] instead of \s: the text must stand on the label's own line, not on the next one.
-  // A bullet (`- `) and a bold label (`**Fehler:**`) are how plain() renders Jira's editor.
-  return new RegExp(`^[ \\t]*(?:- )?(?:\\*\\*)?${name}[ \\t]*:(?:\\*\\*)?[ \\t]*[^\\s*]`, 'im').test(body);
+  // A list item (`- `, `1. `) is how plain() renders Jira's lists.
+  return new RegExp(`^[ \\t]*(?:- |\\d+\\. )?${name}[ \\t]*:[ \\t]*\\S`, 'im').test(body);
 }
 
 export function missingSections(ticket: { type: string; body: string }, bugType: string): string[] {
-  if (ticket.type !== bugType || /^\s*Loop finding:/.test(ticket.body)) return [];
-  return SECTIONS.filter(name => !hasSection(ticket.body, name));
+  if (ticket.type !== bugType || ticket.body.trimStart().startsWith(LOOP_FINDING)) return [];
+  const body = bare(ticket.body);
+  return SECTIONS.filter(name => !hasSection(body, name));
 }
 
 export function bugReady(ticket: { type: string; body: string }, bugType: string): boolean {
@@ -24,11 +35,17 @@ export function bugReady(ticket: { type: string; body: string }, bugType: string
 }
 
 /**
- * Claim's refusal for pick's ticket when it is an unready bug, or null. The gate holds such a bug
- * (no candidate, then the flag); this stops it too when the question failed and pick chose it anyway.
+ * Claim's refusal for pick's ticket when it is an unready bug on its queue, or null. The gate holds
+ * such a bug (no candidate, then the flag); this stops it too when the question failed and pick
+ * chose it anyway. A bug on Review is left alone: the gate never asks there, so a refusal would
+ * leave its pull request hanging without a word.
  */
-export function unreadyRefusal(ticket: { key: string; type: string; body: string }, bugType: string): string | null {
-  const missing = missingSections(ticket, bugType);
+export function unreadyRefusal(
+  ticket: { key: string; type: string; body: string; status: string },
+  config: Pick<TrackerConfig, 'status' | 'types'>
+): string | null {
+  if (ticket.status !== config.status.todoBug) return null;
+  const missing = missingSections(ticket, config.types.bug);
   return missing.length === 0 ? null : `${ticket.key} is an unready bug: no ${missing.map(name => `${name}:`).join(' and no ')} line (CONC-32 AK11)`;
 }
 

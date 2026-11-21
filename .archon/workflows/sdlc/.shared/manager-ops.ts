@@ -11,7 +11,7 @@ import { adf, type Jira, todoFor, type TrackerConfig } from './jira.ts';
 import { createTicket, outboxCursor, outboxProgress, type PrText } from './outbox.ts';
 import { defaultDue, lastQuestion, mayUnflag, type Question, type QuestionKind, questionText, reservedQuestion, reservedText } from './questions.ts';
 import { MAX_RESUMES, type RunOp } from './run-ops.ts';
-import { prKeys } from './tickets.ts';
+import { LOOP_FINDING, prKeys } from './tickets.ts';
 
 export const MANAGER_CAP = 5;
 const MAX_ENTRIES = 40;
@@ -102,11 +102,11 @@ export function parseManagerOutbox(raw: unknown, project: string): { ops: Manage
         const title = words(e, 'title', where, 200);
         // `createTicket` writes the line `Loop finding: <marker>` itself: an agent's copy of it goes,
         // and another marker's line refuses (it would make the ticket read as that marker's).
-        const own = `Loop finding: ${e.marker}`;
+        const own = `${LOOP_FINDING} ${e.marker}`;
         // Every leading copy goes, also with trailing blanks or `\r\n`.
         const copy = new RegExp(`^(?:\\s*${own}[ \\t]*(?:\\r?\\n|$))+`);
         const body = typeof e.text === 'string' ? e.text.replace(copy, '') : e.text;
-        if (typeof body === 'string' && body.trimStart().startsWith('Loop finding:')) throw new Error(`${where}: text opens with a Loop finding line; the script writes ${own} itself`);
+        if (typeof body === 'string' && body.trimStart().startsWith(LOOP_FINDING)) throw new Error(`${where}: text opens with a Loop finding line; the script writes ${own} itself`);
         const op = { op: 'create' as const, marker: e.marker, title, text: words({ text: body }, 'text', where), ask: e.ask === undefined ? null : askSpec(e.ask, where), top: e.top === true };
         if ((creates += 1) > MANAGER_CAP) dropped.push(`create ${op.marker} „${title}“`);
         else ops.push(op);
@@ -177,7 +177,7 @@ export function refusal(op: ManagerOp, l: Live, s: TrackerConfig['status'], now:
     case 'rewrite': {
       const lost = conceptLinks(l.body).find(link => !op.text.includes(link));
       if (lost !== undefined) return `${op.key}: der Konzept-Link fehlt im neuen Text (${lost})`;
-      if (l.own && !op.text.startsWith('Loop finding: ')) return `${op.key}: die erste Zeile „Loop finding: …“ bleibt`;
+      if (l.own && !op.text.startsWith(`${LOOP_FINDING} `)) return `${op.key}: die erste Zeile „Loop finding: …“ bleibt`;
       return null;
     }
   }

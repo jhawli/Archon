@@ -2,7 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import { adf, plain } from '../../workflows/sdlc/.shared/jira';
 import { askUnready, bugReady, missingSections, unreadyRefusal } from '../../workflows/sdlc/.shared/bug-ready';
 import { lastQuestion, mayUnflag } from '../../workflows/sdlc/.shared/questions';
-import { CFG, fakeJira, TYPES } from './jira-fixtures';
+import { applyOutbox } from '../../workflows/sdlc/.shared/outbox';
+import { CFG, fakeJira, state, STATUS, TYPES } from './jira-fixtures';
 
 const BUG = TYPES.bug;
 const ticket = (type: string, body: string): { type: string; body: string } => ({ type, body });
@@ -33,6 +34,34 @@ describe('bug readiness (CONC-32 AK11)', () => {
     expect(bugReady(ticket(BUG, '**Fehler:** Gewicht springt\n- Regressionstest: 72,5 → 72,5'), BUG)).toBe(true);
     expect(missingSections(ticket(BUG, '**Fehler:**\n**Regressionstest:** x'), BUG)).toEqual(['Fehler']);
   });
+  it('marks of the editor around a label count: bold with the colon inside or out, code, no-break space', () => {
+    for (const body of [
+      '**Fehler: **Gewicht springt\n**Regressionstest**: 72,5 → 72,5',
+      '`Fehler:` Gewicht springt\n`Regressionstest:` 72,5 → 72,5',
+      'Fehler:\u00a0Gewicht springt\nRegressionstest:\u00a072,5 → 72,5',
+    ]) {
+      expect(missingSections(ticket(BUG, body), BUG)).toEqual([]);
+    }
+  });
+  it('a numbered list item counts, as plain() renders an ordered list', () => {
+    const body = plain({
+      type: 'doc',
+      version: 1,
+      content: [
+        {
+          type: 'orderedList',
+          content: ['Fehler: Gewicht springt', 'Regressionstest: 72,5 → 72,5'].map(text => ({
+            type: 'listItem',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+          })),
+        },
+      ],
+    });
+    expect(missingSections(ticket(BUG, body), BUG)).toEqual([]);
+  });
+  it('a mark alone is no text', () => {
+    expect(missingSections(ticket(BUG, '**Fehler:**\n`Regressionstest:`'), BUG)).toEqual(['Fehler', 'Regressionstest']);
+  });
   it('reads the lines through Jira: one paragraph with breaks, or a paragraph per line', () => {
     const breaks = plain(adf('Fehler: Gewicht springt\nRegressionstest: 72,5 → 72,5'));
     const paragraphs = plain({
@@ -48,6 +77,15 @@ describe('bug readiness (CONC-32 AK11)', () => {
   });
   it('a finding the loop filed itself is ready (decision 6)', () => {
     expect(bugReady(ticket(BUG, 'Loop finding: r12-f1\n\nNull pointer in Sync'), BUG)).toBe(true);
+  });
+  it('a finding as the outbox files it reads back as ready (decision 6)', async () => {
+    const { jira, calls } = fakeJira({ sprint: 7 });
+    const op = { op: 'create', marker: 'finding-sync', title: 'Fund', text: 'Null pointer in Sync' } as const;
+    await applyOutbox(jira, [op], 'https://example.test/run/1', 'Lauf: archon archon-loop r1', state());
+    const filed = calls.find(call => call.method === 'POST' && call.path === '/rest/api/3/issue');
+    const fields = (filed?.body as { fields: { issuetype: { id: string }; description: unknown } }).fields;
+    expect(fields.issuetype.id).toBe(TYPES.bug);
+    expect(bugReady(ticket(fields.issuetype.id, plain(fields.description)), BUG)).toBe(true);
   });
   it('a slice is never held by this rule', () => {
     expect(bugReady(ticket(TYPES.slice, 'nichts'), BUG)).toBe(true);
@@ -126,13 +164,22 @@ describe('the launch gate asks for an unready bug (CONC-32 AK11)', () => {
 });
 
 describe('claim refuses an unready bug pick chose anyway (CONC-32 AK11)', () => {
-  it('names the missing lines', () => {
-    expect(unreadyRefusal({ key: 'CONC-7', type: TYPES.bug, body: 'Gewicht springt' }, TYPES.bug)).toBe(
+  const bug = (status: string, body: string): { key: string; type: string; body: string; status: string } => ({
+    key: 'CONC-7',
+    type: TYPES.bug,
+    body,
+    status,
+  });
+  it('names the missing lines of a bug on its queue', () => {
+    expect(unreadyRefusal(bug(STATUS.todoBug, 'Gewicht springt'), CFG)).toBe(
       'CONC-7 is an unready bug: no Fehler: and no Regressionstest: line (CONC-32 AK11)'
     );
   });
   it('lets a ready bug and a slice through', () => {
-    expect(unreadyRefusal({ key: 'CONC-8', type: TYPES.bug, body: 'Fehler: x\nRegressionstest: y' }, TYPES.bug)).toBeNull();
-    expect(unreadyRefusal({ key: 'CONC-9', type: TYPES.slice, body: '' }, TYPES.bug)).toBeNull();
+    expect(unreadyRefusal(bug(STATUS.todoBug, 'Fehler: x\nRegressionstest: y'), CFG)).toBeNull();
+    expect(unreadyRefusal({ key: 'CONC-9', type: TYPES.slice, body: '', status: STATUS.todo }, CFG)).toBeNull();
+  });
+  it('leaves a bug on Review alone: the gate never asks there, its pull request must not hang', () => {
+    expect(unreadyRefusal(bug(STATUS.review, 'Gewicht springt'), CFG)).toBeNull();
   });
 });
