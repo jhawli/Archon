@@ -14,7 +14,7 @@ Related work an earlier triage found, as `[{ "url", "relation" }]`: overlapping 
 
 $INPUTS.related
 
-When `$ARTIFACTS_DIR/tracker/item.md` exists, it is the work item in full (a Jira ticket with its comments); read it instead of the tracker, and write nothing to Jira.
+When `$ARTIFACTS_DIR/tracker/item.md` exists, it is the work item in full (a Jira ticket with its comments); read it instead of the tracker, and write nothing to Jira. Under `Freigegebener Plan` it may carry the plan the owner approved for this ticket: those are decided calls, so build your plan from it, step for step, and settle only what it leaves open. Where the code forces a different way, say so under **Approach** as a deviation with its reason. The feature and the other tickets under it are orientation, not scope.
 
 The operator's request — the message that started this run:
 

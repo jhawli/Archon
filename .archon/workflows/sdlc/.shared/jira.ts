@@ -434,6 +434,38 @@ export const TICKET_FIELDS: readonly string[] = [
   'subtasks',
 ];
 
+/**
+ * Any project's ticket key. The lap's ticket is always this project's (`Jira.issue`), but the
+ * feature above a slice and its other children may live in another project (a VAULT slice under a
+ * CONC feature); the client only reads those (CONC-146).
+ */
+export const ANY_KEY = /^[A-Z][A-Z0-9]*-[1-9]\d*$/;
+
+/** The longest attachment text taken into item.md; a longer one is cut there, with a note. */
+export const MAX_ATTACHMENT = 200_000;
+
+/** A ticket near the lap's: the feature above it or another child of that feature (CONC-146). */
+export interface Relative {
+  readonly key: string;
+  readonly title: string;
+  /** Status id and the name Jira gives it, for a status outside the loop's own. */
+  readonly status: string;
+  readonly statusLabel: string;
+  readonly assignee: string | null;
+  readonly assigneeName: string;
+}
+
+/**
+ * What the agents see beyond the ticket (CONC-146): the plan the owner approved for it (the
+ * `plan-<KEY>.md` attachment), and the feature above it with its approved concept and its other
+ * children. The Vault attaches both at approval (`board_jira.py`), since agents cannot read it.
+ */
+export interface ItemContext {
+  readonly plan: string | null;
+  readonly feature: (Relative & { readonly body: string; readonly concept: string | null }) | null;
+  readonly siblings: readonly Relative[];
+}
+
 /** A ticket's place in Jira's hierarchy, read straight from the issue (never through search). */
 export interface Family {
   readonly key: string;
@@ -484,6 +516,12 @@ export class Jira {
 
   /** The parsed answer in whatever shape Jira sends it (a remote-link listing is a list), or null when empty. */
   async request(method: string, path: string, body?: unknown, ok = [200, 201, 204]): Promise<unknown> {
+    const text = await this.raw(method, path, body, ok);
+    return text.trim() === '' ? null : (JSON.parse(text) as unknown);
+  }
+
+  /** The answer's text as Jira sends it, with the retries `request` describes. */
+  async raw(method: string, path: string, body?: unknown, ok = [200, 201, 204]): Promise<string> {
     const repeatable = method === 'GET' || method === 'PUT';
     for (let attempt = 1; ; attempt += 1) {
       const last = attempt >= ATTEMPTS;
@@ -496,7 +534,7 @@ export class Jira {
         continue;
       }
       const { status, text } = reply;
-      if (ok.includes(status)) return text.trim() === '' ? null : (JSON.parse(text) as unknown);
+      if (ok.includes(status)) return text;
       const again = status === 429 || (repeatable && BUSY.includes(status));
       if (!again || last) throw new Error(`Jira ${method} ${path} -> ${status}: ${text.slice(0, 500)}`);
       await this.pause(Math.min(MAX_WAIT_MS, reply.retryAfter !== undefined ? reply.retryAfter * 1000 : 1000 * attempt));
@@ -580,6 +618,51 @@ export class Jira {
       activeSprint: list(fields[this.config.sprintField]).some(sprint => str(obj(sprint).state) === 'active'),
       children: taskRefs(fields.subtasks),
     };
+  }
+
+  /**
+   * The text of the newest attachment named `<prefix>-<key>.md`, or null when there is none.
+   * Only this name is read: the Vault writes it at approval (CONC-146 AK1, AK2).
+   */
+  async attachmentText(key: string, prefix: 'plan' | 'konzept'): Promise<string | null> {
+    if (!ANY_KEY.test(key)) throw new Error(`not a ticket key: ${JSON.stringify(key)}`);
+    const fields = obj(obj(await this.call('GET', `/rest/api/3/issue/${key}?fields=attachment`)).fields);
+    const name = `${prefix}-${key}.md`;
+    const newest = list(fields.attachment)
+      .map(obj)
+      .filter(file => str(file.filename) === name && /^[1-9]\d*$/.test(str(file.id)))
+      .sort((a, b) => (Date.parse(str(b.created)) || 0) - (Date.parse(str(a.created)) || 0))[0];
+    if (newest === undefined) return null;
+    return this.raw('GET', `/rest/api/3/attachment/content/${str(newest.id)}?redirect=false`);
+  }
+
+  /** The approved plan of `key`, the feature above it with its concept, and the feature's other children. */
+  async context(key: string): Promise<ItemContext> {
+    const plan = await this.attachmentText(key, 'plan');
+    const parent = (await this.family(key)).parent;
+    if (parent === null || !ANY_KEY.test(parent)) return { plan, feature: null, siblings: [] };
+    const relative = (raw: Json): Relative => {
+      const fields = obj(raw.fields);
+      const assignee = obj(fields.assignee);
+      return {
+        key: str(raw.key),
+        title: str(fields.summary),
+        status: str(obj(fields.status).id),
+        statusLabel: str(obj(fields.status).name),
+        assignee: str(assignee.accountId) === '' ? null : str(assignee.accountId),
+        assigneeName: str(assignee.displayName),
+      };
+    };
+    const raw = obj(await this.call('GET', `/rest/api/3/issue/${parent}?fields=summary,status,assignee,description`));
+    const feature = {
+      ...relative(raw),
+      body: plain(obj(raw.fields).description),
+      concept: await this.attachmentText(parent, 'konzept'),
+    };
+    const siblings = (await this.search(`parent = ${parent} ORDER BY key`, ['summary', 'status', 'assignee']))
+      .map(relative)
+      .filter(other => other.key !== key);
+    return { plan, feature, siblings };
   }
 
   /** A Jira "relates to" link between two tickets of this project; one that is there already is not added again. */

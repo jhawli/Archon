@@ -14,7 +14,7 @@ import { authorName, readCreated, readFinished, recordCreated, recordFinished, r
 import { note } from './io.ts';
 import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, todoFor, todoStatuses, type TrackerConfig } from './jira.ts';
 import { lastQuestion, reservedQuestion, reservedText } from './questions.ts';
-import { restFeature } from './subtickets.ts';
+import { restFeature, subtaskType, taskNumber } from './subtickets.ts';
 import { LOOP_FINDING, namesTicket, prKeys } from './tickets.ts';
 
 export type Op =
@@ -23,7 +23,12 @@ export type Op =
   | { readonly op: 'cancel'; readonly key: string; readonly text: string }
   /** Lift a flag that was only bookkeeping; the text says why. Pick only. */
   | { readonly op: 'unflag'; readonly key: string; readonly text: string }
-  | { readonly op: 'create'; readonly marker: string; readonly title: string; readonly text: string };
+  | { readonly op: 'create'; readonly marker: string; readonly title: string; readonly text: string }
+  /**
+   * A task under the lap's slice (CONC-146 AK8): work the slice's approved acceptance items need
+   * and its plan does not name. `ak` names those items, `text` says why. Build and review only.
+   */
+  | { readonly op: 'task'; readonly title: string; readonly ak: string; readonly text: string };
 
 /** The loop's agents, whose lists `checkOutbox` reads; the manager's list has its own reader (`manager-ops.ts`). */
 export type LoopWriter = 'pick' | 'build' | 'review';
@@ -110,6 +115,20 @@ export function checkOutbox(
         throw new Error(`${where}: title is empty or longer than 200`);
       }
       return { op: 'create', marker: e.marker, title: e.title.trim(), text };
+    }
+    if (e.op === 'task') {
+      if (writer === 'pick') throw new Error(`${where}: pick does not file tasks`);
+      if (target === null) throw new Error(`${where}: a task needs the lap's slice`);
+      const title = typeof e.title === 'string' ? e.title.trim() : '';
+      if (title === '' || title.length > 120 || /^Task \d+:/.test(title)) {
+        throw new Error(`${where}: title is empty, longer than 120 or carries its own "Task n:"`);
+      }
+      const ak = typeof e.ak === 'string' ? e.ak.trim() : '';
+      if (!/^AK\d+[a-z]?(\s*,\s*AK\d+[a-z]?)*$/.test(ak)) throw new Error(`${where}: ak must name acceptance items (AK3, AK4)`);
+      if (reserved(text, writer, false) || reserved(title, writer, false)) {
+        throw new Error(`${where}: the text opens like a loop record, which is reserved`);
+      }
+      return { op: 'task', title, ak, text };
     }
     if (e.op !== 'comment' && e.op !== 'ask' && e.op !== 'cancel' && e.op !== 'unflag') {
       throw new Error(`${where}: unknown op ${JSON.stringify(e.op)}`);
@@ -295,9 +314,16 @@ export async function applyOutbox(
   line: string,
   state: string,
   resume?: { readonly writer: LoopWriter; readonly raw: unknown },
-  target: string | null = null
+  target: string | null = null,
+  filed: string[] = []
 ): Promise<Record<string, string>> {
   const c = jira.config;
+  // Before the first write (the list is checked whole): tasks hang only under a slice (CONC-146 AK8).
+  if (ops.some(op => op.op === 'task')) {
+    if (target === null || (await jira.family(target)).type !== c.types.slice) {
+      throw new Error(`outbox: tasks go only under the lap's slice; ${target ?? 'this lap'} is not a slice`);
+    }
+  }
   const created: Record<string, string> = {};
   const digest = resume === undefined ? '' : listDigest(resume.raw);
   const progress = resume === undefined ? null : progressFile(state, resume.writer);
@@ -306,7 +332,10 @@ export async function applyOutbox(
     if (progress !== null) writeFileSync(progress, `${JSON.stringify({ digest, done: count, half: changed })}\n`);
   };
   for (const [index, op] of ops.entries()) {
-    if (op.op === 'create') {
+    if (op.op === 'task') {
+      // Always asked, also behind the progress mark: a task of the same title is not filed again.
+      filed.push(await fileTask(jira, target ?? '', op, line)); // checked above: tasks only with a slice
+    } else if (op.op === 'create') {
       // Always asked, also behind the progress mark: it finds its own ticket and returns its key.
       const link = readFinished(state)[op.marker] === undefined ? await lapLink(jira, target, op.marker) : {};
       created[op.marker] = (await createTicket(jira, op, runUrl, state, link)).key;
@@ -333,6 +362,37 @@ export async function applyOutbox(
   }
   if (progress !== null) rmSync(progress, { force: true });
   return created;
+}
+
+/**
+ * File one task under `slice` as `Task <n>: <title>`, n after the highest number there (CONC-146
+ * AK8), or find the one of the same title an earlier try filed. Returns its line for item.md.
+ */
+export async function fileTask(
+  jira: Jira,
+  slice: string,
+  op: Extract<Op, { op: 'task' }>,
+  line: string
+): Promise<string> {
+  const children = (await jira.family(slice)).children;
+  const bare = (title: string): string => title.replace(/^Task \d+:\s*/, '');
+  const there = children.find(child => bare(child.title) === op.title);
+  if (there !== undefined) return `${there.title} (${there.key})`;
+  const n = Math.max(0, ...children.map(child => taskNumber(child.title)).filter(Number.isFinite)) + 1;
+  const title = `Task ${n}: ${op.title}`;
+  jira.issue(slice); // the lap's own ticket, checked before it goes into the write
+  const issue = await jira.call('POST', '/rest/api/3/issue', {
+    fields: {
+      project: { key: jira.config.project },
+      issuetype: { id: await subtaskType(jira) },
+      parent: { key: slice },
+      summary: title,
+      description: adf(`Angelegt von Archon.\nGrund: ${op.text}\nAK: ${op.ak}\n\n${line}`),
+    },
+  });
+  const key = String(issue?.key);
+  jira.issue(key); // a key of this project, or the write is reported as failed
+  return `${title} (${key})`;
 }
 
 /**

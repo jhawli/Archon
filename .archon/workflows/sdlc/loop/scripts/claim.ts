@@ -151,7 +151,9 @@ async function claimTicket(item: WorkItem): Promise<void> {
     const status = start ?? ticket.status;
     const dir = join(artifactsDir(), 'tracker');
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'item.md'), itemMarkdown({ ...ticket, status }, await jira.comments(item.key), config));
+    // The approved plan and the feature around the ticket (CONC-146): without them a lap planned anew.
+    const context = await jira.context(item.key);
+    writeFileSync(join(dir, 'item.md'), itemMarkdown({ ...ticket, status }, await jira.comments(item.key), config, context));
     // Last, so a failure above leaves the ticket in its queue, where pick finds it again.
     if (start !== null) await jira.move(item.key, start);
   } catch (error) {

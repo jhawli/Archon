@@ -22,7 +22,7 @@ export async function restFeature(jira: Jira, key: string): Promise<string | nul
 
 const TASK_NUMBER = /^Task (\d+):/;
 
-const taskNumber = (title: string): number => Number(TASK_NUMBER.exec(title)?.[1] ?? Number.NaN);
+export const taskNumber = (title: string): number => Number(TASK_NUMBER.exec(title)?.[1] ?? Number.NaN);
 
 /** Which open tasks a lap finished and which are left for the rest. Pure: no call to Jira. */
 export function splitTasks(
@@ -55,7 +55,7 @@ export function tasksDone(text: string): number[] {
 }
 
 /** The project's sub-task type, read from Jira by its flag, never by its name. */
-async function subtaskType(jira: Jira): Promise<string> {
+export async function subtaskType(jira: Jira): Promise<string> {
   const project = await jira.call('GET', `/rest/api/3/project/${jira.config.project}`);
   const types = Array.isArray(project?.issueTypes) ? (project.issueTypes as { id?: unknown; subtask?: unknown }[]) : [];
   const sub = types.find(type => type.subtask === true && typeof type.id === 'string');

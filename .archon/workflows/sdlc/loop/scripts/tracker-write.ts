@@ -18,7 +18,7 @@
  * gives the ticket back to its queue.
  */
 
-import { rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { addToLap, runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
@@ -45,6 +45,12 @@ if (writer === 'pick' && Array.isArray(raw) && raw.length > 0) {
 }
 const targetKey = ticketKeyOf(target, config);
 const ops = checkOutbox(raw, writer, targetKey, config.project, onBoard, outboxProgress(state, writer, raw));
+// A task the reviewer files is work this change leaves open; on `delivers: all` release would close it
+// as done (CONC-146 AK9). So the reviewer files tasks only with a partial delivery, where they go to the rest.
+if (writer === 'review' && ops.some(op => op.op === 'task') && trimmed(process.env.INPUTS_DELIVERS) !== 'part') {
+  throw new Error('tracker-write: the review files tasks only with delivers: part');
+}
+const filed: string[] = [];
 // Where a filed ticket's remote link points: the lap's target as pick named it (claim checks it
 // after this writer), else the board.
 const runUrl = target.startsWith('https://')
@@ -54,7 +60,12 @@ const runUrl = target.startsWith('https://')
 const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, runLine('archon-loop', process.env.WORKFLOW_ID ?? ''), state, {
     writer,
     raw,
-  }, writer === 'pick' ? null : targetKey);
+  }, writer === 'pick' ? null : targetKey, filed);
+// The reviewer reads item.md after the builder: it names the new tasks' numbers in `Tasks done`.
+const item = join(artifactsDir(), 'tracker', 'item.md');
+if (filed.length > 0 && existsSync(item)) {
+  appendFileSync(item, ['', '## Tasks, die dieser Lauf angelegt hat', '', ...filed.map(task => `- ${task} (offen)`), ''].join('\n'));
+}
 if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
 rmSync(file, { force: true });
 if (writer === 'review') {

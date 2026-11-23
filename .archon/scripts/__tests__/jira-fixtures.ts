@@ -50,6 +50,10 @@ export interface FakeTicket {
   readonly children?: readonly string[];
   /** Keys it already has a "relates to" link with. */
   readonly relates?: readonly string[];
+  /** Its attachments, file name → text; ids follow their order (CONC-146). */
+  readonly attachments?: Readonly<Record<string, string>>;
+  /** The account it is assigned to. */
+  readonly assignee?: string;
 }
 export interface Call { method: string; path: string; body: unknown }
 /** One bulk move as Jira received it: `target` is `project,type,parent`, `statuses` target → sources. */
@@ -66,6 +70,8 @@ interface Booked {
   sprint?: 'active' | 'closed';
   children: string[];
   relates: readonly string[];
+  attachments: { readonly id: string; readonly filename: string; readonly created: string }[];
+  assignee?: string;
 }
 
 /** Where a ticket filed as this type starts (VAULT-28): a bug on Gemeldet, anything else on Offen. */
@@ -97,6 +103,14 @@ export function fakeJira(
   let next = 50;
   let failed = false;
   const book = new Map<string, Booked>();
+  // Attachment id → text; ids and times count up over all tickets, so a later file is newer.
+  const files = new Map<string, string>();
+  const attach = (named: Readonly<Record<string, string>>): Booked['attachments'] =>
+    Object.entries(named).map(([filename, text]) => {
+      const id = String(9001 + files.size);
+      files.set(id, text);
+      return { id, filename, created: `2026-11-23T10:${String(files.size).padStart(2, '0')}:00.000+0100` };
+    });
   for (const [key, t] of Object.entries(opts.tickets ?? {})) {
     book.set(key, {
       status: t.status,
@@ -109,6 +123,8 @@ export function fakeJira(
       ...(t.sprint !== undefined ? { sprint: t.sprint } : {}),
       children: [...(t.children ?? [])],
       relates: t.relates ?? [],
+      attachments: attach(t.attachments ?? {}),
+      ...(t.assignee !== undefined ? { assignee: t.assignee } : {}),
     });
   }
   const ok = (value: unknown, status = 200): { status: number; text: string } => ({
@@ -132,6 +148,8 @@ export function fakeJira(
       })),
       [CFG.sprintField]: t.sprint === undefined ? null : [{ id: 7, state: t.sprint }],
       issuelinks: t.relates.map(other => ({ type: { name: 'Relates' }, outwardIssue: { key: other } })),
+      attachment: t.attachments,
+      assignee: t.assignee === undefined ? null : { accountId: t.assignee, displayName: `Name ${t.assignee}` },
     };
   };
   const send: Transport = async (method, path, body) => {
@@ -151,11 +169,21 @@ export function fakeJira(
         const hit = opts.linked?.[global[1] ?? ''];
         return ok({ issues: hit === undefined ? [] : [{ key: hit, fields: fields(hit) }], isLast: true });
       }
+      const under = /^parent = ([A-Z]+-\d+) ORDER BY key$/.exec(jql);
+      if (under !== null) {
+        const kids = [...book.entries()].filter(([, t]) => t.parent === under[1]).map(([key]) => key).sort();
+        return ok({ issues: kids.map(key => ({ key, fields: fields(key) })), isLast: true });
+      }
       const listed = opts.tickets === undefined ? null : /^key in \(([^)]*)\)$/.exec(jql);
       const keys = listed !== null
         ? (listed[1] ?? '').split(', ').filter(key => book.has(key))
         : opts.ranked !== undefined && jql.endsWith('ORDER BY Rank ASC') ? opts.ranked : (opts.found ?? []);
       return ok({ issues: keys.map(key => ({ key, fields: fields(key) })), isLast: true });
+    }
+    const content = /^\/rest\/api\/3\/attachment\/content\/(\d+)$/.exec(bare);
+    if (method === 'GET' && content !== null) {
+      const stored = files.get(content[1] ?? '');
+      return stored === undefined ? ok({ errorMessages: ['nicht da'] }, 404) : { status: 200, text: stored };
     }
     const comments = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/comment$/.exec(bare);
     if (method === 'GET' && comments !== null) {
@@ -201,7 +229,7 @@ export function fakeJira(
       const parent = f.parent?.key;
       book.set(key, {
         status: START[type] ?? OPEN, type, title: f.summary ?? key, body: '', flagged: false, comments: [],
-        ...(parent !== undefined ? { parent } : {}), children: [], relates: [],
+        ...(parent !== undefined ? { parent } : {}), children: [], relates: [], attachments: [],
       });
       if (parent !== undefined) book.get(parent)?.children.push(key);
       return ok({ key }, 201);

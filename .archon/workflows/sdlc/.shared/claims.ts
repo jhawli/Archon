@@ -17,7 +17,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type Jira, requireTracker, type Ticket, type TicketComment, todoStatuses, type TrackerConfig } from './jira.ts';
+import { type Jira, requireTracker, type Ticket, type TicketComment, todoStatuses, type TrackerConfig, type ItemContext, MAX_ATTACHMENT, type Relative } from './jira.ts';
 import { tasksDone } from './subtickets.ts';
 import { namesTicket, ticketKeyOf } from './tickets.ts';
 
@@ -403,8 +403,68 @@ export function authorName(account: string, config: TrackerConfig): string {
   return account === '' ? 'unbekannt' : account;
 }
 
-/** `$ARTIFACTS_DIR/tracker/item.md`: the ticket and its comments, for agents that hold no token. */
-export function itemMarkdown(ticket: Ticket, rows: readonly TicketComment[], config: TrackerConfig): string {
+/**
+ * An attachment's text for item.md between marker lines: its own headings would otherwise read as
+ * sections of item.md. Cut past MAX_ATTACHMENT with a note saying so.
+ */
+function attachmentBlock(name: string, text: string): string {
+  const body =
+    text.length <= MAX_ATTACHMENT
+      ? text.trimEnd()
+      : `${text.slice(0, MAX_ATTACHMENT).trimEnd()}\n\n[gekürzt: der Anhang hat ${text.length} Zeichen]`;
+  return `----- Anfang Anhang ${name} -----\n${body}\n----- Ende Anhang ${name} -----`;
+}
+
+/** A nearby ticket as one line: its status in the loop's words where it is one of the loop's. */
+function relativeLine(r: Relative, config: TrackerConfig): string {
+  const known = statusName(r.status, config.status);
+  const status = known.startsWith('status ') && r.statusLabel !== '' ? r.statusLabel : known;
+  const who = r.assignee === null ? 'niemand' : r.assignee === config.assignee || r.assignee === config.owner
+    ? authorName(r.assignee, config)
+    : r.assigneeName || r.assignee;
+  return `${r.key} ${r.title} (${status}, ${who})`;
+}
+
+/**
+ * The plan, the feature and its other tickets (CONC-146): the approved plan is the work order,
+ * the rest is orientation, and item.md says so where the agents read it.
+ */
+function contextLines(key: string, context: ItemContext, config: TrackerConfig): string[] {
+  const lines = ['## Freigegebener Plan', ''];
+  if (context.plan === null) {
+    lines.push('Kein freigegebener Plan am Ticket.', '');
+  } else {
+    lines.push(
+      `Anhang \`plan-${key}.md\`, der Stand, den Julian freigegeben hat. Er ist der Auftrag dieses Tickets: Baue nach ihm, Task für Task. Jede Abweichung nennt der Pull Request mit Grund.`,
+      '',
+      attachmentBlock(`plan-${key}.md`, context.plan),
+      ''
+    );
+  }
+  const f = context.feature;
+  if (f === null) return lines;
+  lines.push(`## Feature ${relativeLine(f, config)}`, '', 'Nur zur Orientierung: Das Feature sagt, wohin das Ganze geht. Gebaut wird, was dieses Ticket verlangt.', '');
+  if (f.body !== '') lines.push(f.body, '');
+  if (f.concept !== null) {
+    lines.push(`### Konzept (Anhang \`konzept-${f.key}.md\`, Stand der Konzept-Freigabe)`, '', attachmentBlock(`konzept-${f.key}.md`, f.concept), '');
+  }
+  lines.push('## Weitere Tickets unter dem Feature (nur Orientierung, kein Auftrag)', '');
+  if (context.siblings.length === 0) lines.push('- keine');
+  else lines.push(...context.siblings.map(r => `- ${relativeLine(r, config)}`));
+  lines.push('');
+  return lines;
+}
+
+/**
+ * `$ARTIFACTS_DIR/tracker/item.md`: the ticket and its comments, for agents that hold no token, and
+ * with `context` the approved plan, the feature and its other tickets (CONC-146).
+ */
+export function itemMarkdown(
+  ticket: Ticket,
+  rows: readonly TicketComment[],
+  config: TrackerConfig,
+  context?: ItemContext
+): string {
   const s = config.status;
   const lines = [
     `# ${ticket.key} ${ticket.title}`,
@@ -419,6 +479,7 @@ export function itemMarkdown(ticket: Ticket, rows: readonly TicketComment[], con
   if (ticket.tasks.length > 0) {
     lines.push('Tasks:', ...ticket.tasks.map(task => `- ${task.title} (${taskState(task.status, s)})`), '');
   }
+  if (context !== undefined) lines.push(...contextLines(ticket.key, context, config));
   for (const row of rows) {
     lines.push(`## Kommentar ${row.id} (${row.created}, ${authorName(row.author, config)})`, '', row.body, '');
   }
