@@ -29,6 +29,7 @@ You do not look up whether this branch already has a pull request. The publishin
 
 - Read the run's artifacts for content: `$ARTIFACTS_DIR/implementation.md` and anything else relevant under `$ARTIFACTS_DIR/`.
 - Find the repository's PR template (`.github/pull_request_template.md` and its supported variants). Use it; fill every applicable section with concrete information and delete instructional comments. No template → problem first, then solution focused on behavior, then validation that actually ran.
+- When `$ARTIFACTS_DIR/tracker/item.md` carries a `Freigegebener Plan` and the plan this work delivers deviates from it, list each deviation with its reason in the body under `Abweichungen vom Plan`: the reviewer checks the change against the approved plan.
 - When the plan this work delivers lists contract additions, flag each one in the body as a contract addition: what it adds to the shipped surface, and why every existing value keeps its meaning, so the reviewer can check that claim.
 - Title: concise, human, the meaningful outcome — never an implementation inventory.
 - The work item is a Jira ticket (`CONC-n`, its text in `$ARTIFACTS_DIR/tracker/item.md`): the title starts with its key (`CONC-5 Barcode erkennen`). `#5` is always a pull request.

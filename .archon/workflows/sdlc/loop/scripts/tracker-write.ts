@@ -18,10 +18,10 @@
  * gives the ticket back to its queue.
  */
 
-import { appendFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { addToLap, runState } from '../../.shared/claims.ts';
-import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, trimmed } from '../../.shared/io.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { applyOutbox, checkOutbox, outboxFile, outboxProgress, readOutbox, writableNow } from '../../.shared/outbox.ts';
 import { runLine } from '../../.shared/questions.ts';
@@ -44,12 +44,13 @@ if (writer === 'pick' && Array.isArray(raw) && raw.length > 0) {
   onBoard = await writableNow(jira, state);
 }
 const targetKey = ticketKeyOf(target, config);
-const ops = checkOutbox(raw, writer, targetKey, config.project, onBoard, outboxProgress(state, writer, raw));
+const checked = checkOutbox(raw, writer, targetKey, config.project, onBoard, outboxProgress(state, writer, raw));
 // A task the reviewer files is work this change leaves open; on `delivers: all` release would close it
-// as done (CONC-146 AK9). So the reviewer files tasks only with a partial delivery, where they go to the rest.
-if (writer === 'review' && ops.some(op => op.op === 'task') && trimmed(process.env.INPUTS_DELIVERS) !== 'part') {
-  throw new Error('tracker-write: the review files tasks only with delivers: part');
-}
+// as done (CONC-146 AK9). So the reviewer files tasks only with a partial delivery, where they go to the
+// rest; otherwise the task is dropped with a note, and the rest of its list (its verdict) still applies.
+const partial = trimmed(process.env.INPUTS_DELIVERS) === 'part';
+const ops = checked.filter(op => writer !== 'review' || op.op !== 'task' || partial);
+if (ops.length < checked.length) note('tracker-write: the review filed a task without delivers: part; dropped');
 const filed: string[] = [];
 // Where a filed ticket's remote link points: the lap's target as pick named it (claim checks it
 // after this writer), else the board.
@@ -64,7 +65,11 @@ const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(confi
 // The reviewer reads item.md after the builder: it names the new tasks' numbers in `Tasks done`.
 const item = join(artifactsDir(), 'tracker', 'item.md');
 if (filed.length > 0 && existsSync(item)) {
-  appendFileSync(item, ['', '## Tasks, die dieser Lauf angelegt hat', '', ...filed.map(task => `- ${task} (offen)`), ''].join('\n'));
+  // A rerun of this node finds the same tasks again: each line and the heading go in once.
+  const heading = '## Tasks, die dieser Lauf angelegt hat';
+  const before = readFileSync(item, 'utf8');
+  const fresh = filed.map(task => `- ${task} (offen)`).filter(line => !before.includes(line));
+  if (fresh.length > 0) appendFileSync(item, ['', ...(before.includes(heading) ? [] : [heading, '']), ...fresh, ''].join('\n'));
 }
 if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
 rmSync(file, { force: true });

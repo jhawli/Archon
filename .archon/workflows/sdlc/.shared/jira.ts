@@ -9,6 +9,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { note } from './io.ts';
 
 export interface TrackerConfig {
   readonly kind: 'jira';
@@ -40,6 +41,11 @@ export interface TrackerConfig {
   readonly flagField: string;
   readonly flagOn: string;
   readonly sprintField: string;
+  /**
+   * Accounts besides the owner and the loop's own whose plan and concept attachments count as
+   * approved: the Vault's session account, which attaches them at approval (CONC-146).
+   */
+  readonly approvers?: readonly string[];
 }
 
 /**
@@ -201,6 +207,9 @@ function parseTracker(raw: Json): TrackerConfig {
     flagField: text('flagField'),
     flagOn: text('flagOn'),
     sprintField: text('sprintField'),
+    ...(Array.isArray(raw.approvers)
+      ? { approvers: list(raw.approvers).map(str).filter(id => /^[A-Za-z0-9:-]{1,128}$/.test(id)) }
+      : {}),
   };
 }
 
@@ -443,6 +452,8 @@ export const ANY_KEY = /^[A-Z][A-Z0-9]*-[1-9]\d*$/;
 
 /** The longest attachment text taken into item.md; a longer one is cut there, with a note. */
 export const MAX_ATTACHMENT = 200_000;
+/** An attachment larger than this is not downloaded at all. */
+const MAX_DOWNLOAD = 2_000_000;
 
 /** A ticket near the lap's: the feature above it or another child of that feature (CONC-146). */
 export interface Relative {
@@ -628,19 +639,44 @@ export class Jira {
     if (!ANY_KEY.test(key)) throw new Error(`not a ticket key: ${JSON.stringify(key)}`);
     const fields = obj(obj(await this.call('GET', `/rest/api/3/issue/${key}?fields=attachment`)).fields);
     const name = `${prefix}-${key}.md`;
+    // Anyone who may write to Jira can attach a file of this name; only the owner, the loop's
+    // own scripts and the Vault's approvers attach the approved one (CONC-146).
+    const trusted = new Set([this.config.owner, this.config.assignee, ...(this.config.approvers ?? [])]);
     const newest = list(fields.attachment)
       .map(obj)
       .filter(file => str(file.filename) === name && /^[1-9]\d*$/.test(str(file.id)))
-      .sort((a, b) => (Date.parse(str(b.created)) || 0) - (Date.parse(str(a.created)) || 0))[0];
+      .filter(file => trusted.has(str(obj(file.author).accountId)))
+      .sort(
+        (a, b) =>
+          (Date.parse(str(b.created)) || 0) - (Date.parse(str(a.created)) || 0) || Number(str(b.id)) - Number(str(a.id))
+      )[0];
     if (newest === undefined) return null;
-    return this.raw('GET', `/rest/api/3/attachment/content/${str(newest.id)}?redirect=false`);
+    const size = Number(newest.size ?? 0);
+    if (size > MAX_DOWNLOAD) return `[Anhang ${name} nicht geladen: ${size} Bytes, mehr als ${MAX_DOWNLOAD}]`;
+    const text = await this.raw('GET', `/rest/api/3/attachment/content/${str(newest.id)}?redirect=false`);
+    // An empty file approves nothing: the agents read "no approved plan", not an empty one.
+    return text.trim() === '' ? null : text;
   }
 
   /** The approved plan of `key`, the feature above it with its concept, and the feature's other children. */
   async context(key: string): Promise<ItemContext> {
     const plan = await this.attachmentText(key, 'plan');
     const parent = (await this.family(key)).parent;
-    if (parent === null || !ANY_KEY.test(parent)) return { plan, feature: null, siblings: [] };
+    // The feature is read only in this project: a parent set to another project's ticket would
+    // hand its text to the agents. And it is orientation: a feature Jira will not give does not
+    // hold the lap up, the plan does (CONC-146).
+    if (parent === null || !new RegExp(`^${this.config.project}-[1-9]\\d*$`).test(parent)) {
+      return { plan, feature: null, siblings: [] };
+    }
+    try {
+      return { plan, ...(await this.around(key, parent)) };
+    } catch (error) {
+      note(`${key}: the feature ${parent} could not be read, item.md goes without it: ${error instanceof Error ? error.message : String(error)}`);
+      return { plan, feature: null, siblings: [] };
+    }
+  }
+
+  private async around(key: string, parent: string): Promise<Pick<ItemContext, 'feature' | 'siblings'>> {
     const relative = (raw: Json): Relative => {
       const fields = obj(raw.fields);
       const assignee = obj(fields.assignee);
@@ -662,7 +698,7 @@ export class Jira {
     const siblings = (await this.search(`parent = ${parent} ORDER BY key`, ['summary', 'status', 'assignee']))
       .map(relative)
       .filter(other => other.key !== key);
-    return { plan, feature, siblings };
+    return { feature, siblings };
   }
 
   /** A Jira "relates to" link between two tickets of this project; one that is there already is not added again. */

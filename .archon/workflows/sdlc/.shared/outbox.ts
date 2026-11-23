@@ -376,7 +376,9 @@ export async function fileTask(
 ): Promise<string> {
   const children = (await jira.family(slice)).children;
   const bare = (title: string): string => title.replace(/^Task \d+:\s*/, '');
-  const there = children.find(child => bare(child.title) === op.title);
+  // An earlier try of this list filed it and it is still open; a closed task of the same title is another one.
+  const ended = [jira.config.status.taskDone, jira.config.status.taskDropped];
+  const there = children.find(child => bare(child.title) === op.title && !ended.includes(child.status));
   if (there !== undefined) return `${there.title} (${there.key})`;
   const n = Math.max(0, ...children.map(child => taskNumber(child.title)).filter(Number.isFinite)) + 1;
   const title = `Task ${n}: ${op.title}`;

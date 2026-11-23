@@ -412,7 +412,9 @@ function attachmentBlock(name: string, text: string): string {
     text.length <= MAX_ATTACHMENT
       ? text.trimEnd()
       : `${text.slice(0, MAX_ATTACHMENT).trimEnd()}\n\n[gekürzt: der Anhang hat ${text.length} Zeichen]`;
-  return `----- Anfang Anhang ${name} -----\n${body}\n----- Ende Anhang ${name} -----`;
+  // A line of the attachment that looks like a marker line is indented, so it cannot end the block early.
+  const safe = body.replace(/^-----/gm, ' -----');
+  return `----- Anfang ${name} -----\n${safe}\n----- Ende ${name} -----`;
 }
 
 /** A nearby ticket as one line: its status in the loop's words where it is one of the loop's. */
@@ -437,16 +439,16 @@ function contextLines(key: string, context: ItemContext, config: TrackerConfig):
     lines.push(
       `Anhang \`plan-${key}.md\`, der Stand, den Julian freigegeben hat. Er ist der Auftrag dieses Tickets: Baue nach ihm, Task für Task. Jede Abweichung nennt der Pull Request mit Grund.`,
       '',
-      attachmentBlock(`plan-${key}.md`, context.plan),
+      attachmentBlock(`Anhang plan-${key}.md`, context.plan),
       ''
     );
   }
   const f = context.feature;
   if (f === null) return lines;
   lines.push(`## Feature ${relativeLine(f, config)}`, '', 'Nur zur Orientierung: Das Feature sagt, wohin das Ganze geht. Gebaut wird, was dieses Ticket verlangt.', '');
-  if (f.body !== '') lines.push(f.body, '');
+  if (f.body !== '') lines.push(attachmentBlock(`Beschreibung ${f.key}`, f.body), '');
   if (f.concept !== null) {
-    lines.push(`### Konzept (Anhang \`konzept-${f.key}.md\`, Stand der Konzept-Freigabe)`, '', attachmentBlock(`konzept-${f.key}.md`, f.concept), '');
+    lines.push(`### Konzept (Anhang \`konzept-${f.key}.md\`, Stand der Konzept-Freigabe)`, '', attachmentBlock(`Anhang konzept-${f.key}.md`, f.concept), '');
   }
   lines.push('## Weitere Tickets unter dem Feature (nur Orientierung, kein Auftrag)', '');
   if (context.siblings.length === 0) lines.push('- keine');

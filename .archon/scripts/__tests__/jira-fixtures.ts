@@ -52,6 +52,8 @@ export interface FakeTicket {
   readonly relates?: readonly string[];
   /** Its attachments, file name → text; ids follow their order (CONC-146). */
   readonly attachments?: Readonly<Record<string, string>>;
+  /** Who uploaded its attachments; the owner without it. */
+  readonly attachedBy?: string;
   /** The account it is assigned to. */
   readonly assignee?: string;
 }
@@ -70,7 +72,12 @@ interface Booked {
   sprint?: 'active' | 'closed';
   children: string[];
   relates: readonly string[];
-  attachments: { readonly id: string; readonly filename: string; readonly created: string }[];
+  attachments: {
+    readonly id: string;
+    readonly filename: string;
+    readonly created: string;
+    readonly author: { readonly accountId: string };
+  }[];
   assignee?: string;
 }
 
@@ -105,11 +112,16 @@ export function fakeJira(
   const book = new Map<string, Booked>();
   // Attachment id → text; ids and times count up over all tickets, so a later file is newer.
   const files = new Map<string, string>();
-  const attach = (named: Readonly<Record<string, string>>): Booked['attachments'] =>
+  const attach = (named: Readonly<Record<string, string>>, by: string): Booked['attachments'] =>
     Object.entries(named).map(([filename, text]) => {
       const id = String(9001 + files.size);
       files.set(id, text);
-      return { id, filename, created: `2026-11-23T10:${String(files.size).padStart(2, '0')}:00.000+0100` };
+      return {
+        id,
+        filename,
+        created: `2026-11-23T10:${String(files.size).padStart(2, '0')}:00.000+0100`,
+        author: { accountId: by },
+      };
     });
   for (const [key, t] of Object.entries(opts.tickets ?? {})) {
     book.set(key, {
@@ -123,7 +135,7 @@ export function fakeJira(
       ...(t.sprint !== undefined ? { sprint: t.sprint } : {}),
       children: [...(t.children ?? [])],
       relates: t.relates ?? [],
-      attachments: attach(t.attachments ?? {}),
+      attachments: attach(t.attachments ?? {}, t.attachedBy ?? CFG.owner),
       ...(t.assignee !== undefined ? { assignee: t.assignee } : {}),
     });
   }

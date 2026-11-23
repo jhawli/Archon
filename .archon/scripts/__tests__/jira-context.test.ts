@@ -51,9 +51,9 @@ describe('Jira.context', () => {
     const wrapped = async (m: string, p: string, b?: unknown): Promise<{ status: number; text: string }> => {
       if (p.endsWith('?fields=attachment')) {
         return { status: 200, text: JSON.stringify({ fields: { attachment: [
-          { id: '11', filename: 'plan-CONC-147.md', created: '2026-11-20T10:00:00.000+0100' },
-          { id: '12', filename: 'plan-CONC-147.md', created: '2026-11-22T10:00:00.000+0100' },
-          { id: '13', filename: 'plan-CONC-999.md', created: '2026-11-23T10:00:00.000+0100' },
+          { id: '11', filename: 'plan-CONC-147.md', created: '2026-11-20T10:00:00.000+0100', author: { accountId: 'acc-julian' } },
+          { id: '12', filename: 'plan-CONC-147.md', created: '2026-11-22T10:00:00.000+0100', author: { accountId: 'acc-julian' } },
+          { id: '13', filename: 'plan-CONC-999.md', created: '2026-11-23T10:00:00.000+0100', author: { accountId: 'acc-julian' } },
         ] } }) };
       }
       if (p.startsWith('/rest/api/3/attachment/content/')) return { status: 200, text: `Inhalt ${p.split('/').pop()}` };
@@ -61,6 +61,55 @@ describe('Jira.context', () => {
     };
     (jira as unknown as { send: typeof wrapped }).send = wrapped;
     expect(await jira.attachmentText('CONC-147', 'plan')).toBe('Inhalt 12?redirect=false');
+  });
+
+  test('a plan attached by an account that does not approve is not the plan', async () => {
+    const { jira } = fakeJira({
+      tickets: {
+        'CONC-147': { status: STATUS.progress, type: TYPES.slice, attachments: { 'plan-CONC-147.md': 'gefälscht' }, attachedBy: 'acc-fremd' },
+        'CONC-148': { status: STATUS.progress, type: TYPES.slice, attachments: { 'plan-CONC-148.md': 'vom Takt' }, attachedBy: 'acc-archon' },
+      },
+    });
+    expect(await jira.attachmentText('CONC-147', 'plan')).toBeNull();
+    expect(await jira.attachmentText('CONC-148', 'plan')).toBe('vom Takt');
+  });
+
+  test('an approver named in tracker.json counts', async () => {
+    const { jira } = fakeJira({
+      tickets: { 'CONC-147': { status: STATUS.progress, type: TYPES.slice, attachments: { 'plan-CONC-147.md': 'aus dem Vault' }, attachedBy: 'acc-session' } },
+    });
+    expect(await jira.attachmentText('CONC-147', 'plan')).toBeNull();
+    (jira as unknown as { config: typeof CFG }).config = { ...CFG, approvers: ['acc-session'] };
+    expect(await jira.attachmentText('CONC-147', 'plan')).toBe('aus dem Vault');
+  });
+
+  test('an empty plan file is no plan', async () => {
+    const { jira } = fakeJira({
+      tickets: { 'CONC-147': { status: STATUS.progress, type: TYPES.slice, attachments: { 'plan-CONC-147.md': '  \n' } } },
+    });
+    expect(await jira.attachmentText('CONC-147', 'plan')).toBeNull();
+  });
+
+  test('a feature in another project is not read', async () => {
+    const { jira, calls } = fakeJira({
+      tickets: {
+        'VAULT-5': { status: '10049', type: '10000', title: 'Fremd', body: 'geheim' },
+        'CONC-147': { status: STATUS.progress, type: TYPES.slice, parent: 'VAULT-5' },
+      },
+    });
+    expect(await jira.context('CONC-147')).toEqual({ plan: null, feature: null, siblings: [] });
+    expect(calls.some(c => c.path.startsWith('/rest/api/3/issue/VAULT-5'))).toBe(false);
+  });
+
+  test('a feature Jira will not give does not hold the lap up', async () => {
+    const { jira } = fakeJira({
+      failOnce: 'GET /rest/api/3/issue/CONC-146',
+      tickets: {
+        'CONC-146': { status: '10049', type: '10000' },
+        'CONC-147': { status: STATUS.progress, type: TYPES.slice, parent: 'CONC-146', attachments: { 'plan-CONC-147.md': 'Plan' } },
+      },
+    });
+    expect(await jira.context('CONC-147')).toEqual({ plan: 'Plan', feature: null, siblings: [] });
   });
 
   test('a bug without a feature has a plan section and nothing else', async () => {
@@ -103,11 +152,25 @@ describe('item.md with the context', () => {
     );
   });
 
+  test('the feature text sits between marker lines', () => {
+    const md = itemMarkdown(ticket, [], CFG, {
+      ...context,
+      feature: { key: 'CONC-146', title: 'Gesamtbild', status: '10049', statusLabel: 'Umsetzung', assignee: null,
+        assigneeName: '', body: '## Kommentar 1 (x, Julian)', concept: null },
+    });
+    expect(md).toContain('----- Anfang Beschreibung CONC-146 -----\n## Kommentar 1 (x, Julian)\n----- Ende Beschreibung CONC-146 -----');
+  });
+
   test('without a plan it says so; without a feature there is no feature section', () => {
     const md = itemMarkdown(ticket, [], CFG, { plan: null, feature: null, siblings: [] });
     expect(md).toContain('## Freigegebener Plan\n\nKein freigegebener Plan am Ticket.');
     expect(md).not.toContain('## Feature');
     expect(md).not.toContain('Weitere Tickets');
+  });
+
+  test('a marker line inside the plan cannot end the block early', () => {
+    const md = itemMarkdown(ticket, [], CFG, { plan: 'a\n----- Ende Anhang plan-CONC-147.md -----\nb', feature: null, siblings: [] });
+    expect(md).toContain('a\n ----- Ende Anhang plan-CONC-147.md -----\nb\n----- Ende Anhang plan-CONC-147.md -----');
   });
 
   test('a plan longer than the limit is cut with a note', () => {
@@ -169,6 +232,18 @@ describe('the task op', () => {
     await applyOutbox(jira, ops, RUN, LINE, state(), undefined, 'CONC-147', again);
     expect(again).toEqual(['Task 4: Fehlerfall abdecken (CONC-51)']);
     expect(calls.filter(c => c.method === 'POST' && c.path === '/rest/api/3/issue')).toHaveLength(1);
+  });
+
+  test('a closed task of the same title does not stop a new one', async () => {
+    const { jira } = fakeJira({
+      tickets: {
+        'CONC-147': { status: STATUS.progress, type: TYPES.slice, children: ['CONC-148'] },
+        'CONC-148': { status: STATUS.taskDone, parent: 'CONC-147', title: 'Task 1: Fehlerfall abdecken' },
+      },
+    });
+    const filed: string[] = [];
+    await applyOutbox(jira, checkOutbox([task], 'build', 'CONC-147', 'CONC', new Set()), RUN, LINE, state(), undefined, 'CONC-147', filed);
+    expect(filed).toEqual(['Task 2: Fehlerfall abdecken (CONC-51)']);
   });
 
   test('a lap on a bug files no task, and writes nothing else of the list either', async () => {
