@@ -645,7 +645,12 @@ export class Jira {
     const newest = list(fields.attachment)
       .map(obj)
       .filter(file => str(file.filename) === name && /^[1-9]\d*$/.test(str(file.id)))
-      .filter(file => trusted.has(str(obj(file.author).accountId)))
+      .filter(file => {
+        const by = str(obj(file.author).accountId);
+        // Said aloud: a wrong `approvers` in tracker.json would otherwise hide every plan without a word.
+        if (!trusted.has(by)) note(`${key}: ${name} (${str(file.id)}) is ignored: attached by ${by || 'nobody'}, not an approver`);
+        return trusted.has(by);
+      })
       .sort(
         (a, b) =>
           (Date.parse(str(b.created)) || 0) - (Date.parse(str(a.created)) || 0) || Number(str(b.id)) - Number(str(a.id))
