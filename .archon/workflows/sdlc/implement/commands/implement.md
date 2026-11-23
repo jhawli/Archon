@@ -70,6 +70,7 @@ End this session early only at a seam. A seam means one coherent part of the wor
 To end at a seam:
 - Commit everything, so the tree is clean.
 - Write a `Next session` section in `implementation.md`. Name what is done, what remains of the work, the decisions made and why, any deviations from the work item, the files the remaining work should read first, and the checks run.
+- When `$ARTIFACTS_DIR/tracker/item.md` carries a `Freigegebener Plan`, that plan is the owner's approved work order: build it task by task, and record each deviation from it with its reason under `Abweichungen vom Plan` in `implementation.md`, where the pull request takes it from. Work the ticket's acceptance items need and the plan does not name can become a task under the ticket: one entry `{"op": "task", "title": "...", "ak": "AK3", "text": "<why>"}` in the JSON list `$ARTIFACTS_DIR/tracker/outbox/build.json` (the loop checks and files it; you never write to Jira yourself). Do it in this run.
 - Declare `done: false`, `green: false` and `red_cause: incomplete`, with a summary that names the part completed and the part remaining.
 
 The session that finishes the work removes the `Next session` section. Its `green` covers the whole change: re-run an earlier session's focused checks only where later work changed code they read.

@@ -34,7 +34,8 @@ through the source this run selected, `$INPUTS.source`:
 3. When `$ARTIFACTS_DIR/implementation.md` records a failing check the implementer
    judged `inherited` or `environment`, the description must say so near the top:
    the check and why it is not this change's. Keep an existing disclosure that is
-   still true.
+   still true. Deviations it records under `Abweichungen vom Plan` (from the plan
+   the owner approved) go into the description under a heading of that name.
 4. Link the ticket the description references (`CONC-n`, its text in
    `$ARTIFACTS_DIR/tracker/item.md`) by the latest review's contract
    coverage. What it left open, as a JSON list (empty text when no review judged
