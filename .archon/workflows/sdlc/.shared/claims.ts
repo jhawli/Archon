@@ -25,6 +25,8 @@ import { namesTicket, ticketKeyOf } from './tickets.ts';
 type JsonObject = Record<string, unknown>;
 
 export const CLAIM_PREFIX = 'Loop claim: run ';
+/** The part of item.md that carries what this lap's builder wrote to the ticket (tracker-write). */
+export const LAP_WRITES_HEADING = '## Was dieser Lauf ans Ticket geschrieben hat';
 
 export interface WorkItem {
   readonly kind: 'ticket';
@@ -416,6 +418,15 @@ function attachmentBlock(name: string, text: string): string {
   // A line of the attachment that looks like a marker line is indented, so it cannot end the block early.
   const safe = body.replace(/^-----/gm, ' -----');
   return `----- Anfang ${name} -----\n${safe}\n----- Ende ${name} -----`;
+}
+
+/**
+ * What this lap's builder wrote to its ticket, for item.md: the outbox file is gone when the review
+ * reads, and with Befund-Pflicht (befund.ts) the finding is one of these comments.
+ */
+export function lapWritesLines(writes: readonly { readonly op: string; readonly text: string }[]): string[] {
+  if (writes.length === 0) return [];
+  return ['', LAP_WRITES_HEADING, '', ...writes.flatMap((write, i) => [attachmentBlock(`Eintrag ${i + 1} (${write.op})`, write.text), ''])];
 }
 
 /** A nearby ticket as one line: its status in the loop's words where it is one of the loop's. */

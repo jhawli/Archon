@@ -7,6 +7,8 @@ import { bare, hasSection } from './bug-ready.ts';
 export const BEFUND_LINES = ['Rote Zeile', 'Letzter grüner Lauf', 'Ursache', 'Gelockerte Tests'] as const;
 const LOOSENED = BEFUND_LINES[3];
 export const BEFUND_SECTION = '## Eigentümer-Regel für dieses Ticket (Befund-Pflicht)';
+/** The line the manager's board carries for such a ticket (board-all.ts); manage.md keys on it. */
+export const BEFUND_BOARD_LINE = 'Befund-Pflicht: ja';
 
 export function needsBefund(labels: readonly string[], config: { readonly befundLabels?: readonly string[] }): boolean {
   return labels.some(label => config.befundLabels?.includes(label) === true);
@@ -19,6 +21,30 @@ export interface Befund {
   readonly loosened: string;
 }
 
+const LIST_ITEM = /^[ \t]*(?:- |\d+\. )(.*)$/;
+const labelLine = (name: string): RegExp => new RegExp(`^[ \\t]*(?:- |\\d+\\. )?${name}[ \\t]*:(.*)$`, 'i');
+
+/**
+ * What stands under `Gelockerte Tests:`: the rest of its line and the list right after it, as one
+ * line; '' for a label with nothing under it. Jira makes such a list a block of its own, so blank
+ * lines may stand between an empty label and its list.
+ */
+function loosenedText(body: string): string {
+  const lines = body.split('\n');
+  const label = labelLine(LOOSENED);
+  const at = lines.findIndex(line => label.test(line));
+  if (at < 0) return '';
+  const parts = [(label.exec(lines[at] ?? '')?.[1] ?? '').trim()];
+  for (const line of lines.slice(at + 1)) {
+    if (line.trim() === '' && parts.every(part => part === '')) continue;
+    const item = LIST_ITEM.exec(line)?.[1];
+    // An item that is the next label ends the list: a finding may be written as one list.
+    if (item === undefined || BEFUND_LINES.some(name => labelLine(name).test(item))) break;
+    parts.push(item.trim());
+  }
+  return parts.filter(part => part !== '').join('; ');
+}
+
 /** The newest comment of a trusted author with all lines counts. `rows`: lowest id first. */
 export function readBefund(
   rows: readonly { readonly author: string; readonly body: string }[],
@@ -27,12 +53,10 @@ export function readBefund(
   let closest: string[] = [...BEFUND_LINES];
   for (const row of [...rows].reverse()) {
     if (!trusted.has(row.author)) continue;
-    const missing = BEFUND_LINES.filter(name => !hasSection(bare(row.body), name));
-    if (missing.length === 0) {
-      const line = new RegExp(`^[ \\t]*(?:- |\\d+\\. )?${LOOSENED}[ \\t]*:[ \\t]*(.+)$`, 'im').exec(bare(row.body));
-      const value = (line?.[1] ?? '').trim();
-      return { missing: [], loosened: /^keine\.?$/i.test(value) ? '' : value };
-    }
+    const body = bare(row.body);
+    const loosened = loosenedText(body);
+    const missing = BEFUND_LINES.filter(name => (name === LOOSENED ? loosened === '' : !hasSection(body, name)));
+    if (missing.length === 0) return { missing: [], loosened: /^keine\.?$/i.test(loosened) ? '' : loosened };
     if (missing.length < closest.length) closest = missing;
   }
   return { missing: closest, loosened: '' };

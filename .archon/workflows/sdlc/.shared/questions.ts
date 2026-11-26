@@ -74,8 +74,13 @@ export function ownerWord(comment: TicketComment, config: TrackerConfig): boolea
   return comment.author === config.assignee && body.startsWith('Julian:');
 }
 
+/** What land writes after a merge that loosened a check (CONC-109): it mentions the owner but asks nothing. */
+export const LOOSENED_NOTE = 'Gelockerte Tests (mit Befund gemergt):';
+export const loosenedNote = (loosened: string): string => `${LOOSENED_NOTE} ${loosened}`;
+
 function isQuestion(comment: TicketComment, config: TrackerConfig): boolean {
-  return comment.author === config.assignee && comment.body.trimStart().startsWith('@');
+  const body = comment.body.trimStart();
+  return comment.author === config.assignee && body.startsWith('@') && !(body.split('\n')[0] ?? '').includes(LOOSENED_NOTE);
 }
 
 /** The ticket's latest question and the owner's first answer after it; null when none was asked. */

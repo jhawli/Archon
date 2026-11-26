@@ -233,6 +233,13 @@ describe('outbox apply', () => {
     expect(comments).toHaveLength(4);
     for (const call of comments) expect(JSON.stringify(call.body)).toContain('Lauf: archon archon-loop run-1');
   });
+  it('ak22 the owner becomes the assignee only after the whole list, or a rerun would find the ticket off pick\u2019s board', async () => {
+    const { jira, calls } = fakeJira({ befundLabels: ['nightly-rot'], tickets: { 'CONC-5': { status: STATUS.todoBug, type: TYPES.bug, labels: ['nightly-rot'] } } });
+    await applyOutbox(jira, [{ op: 'ask', key: 'CONC-5', text: 'Frage' }, { op: 'comment', key: 'CONC-5', text: 'Nachsatz' }], RUN, LINE, state());
+    const assigned = calls.findIndex(c => c.method === 'PUT' && JSON.stringify(c.body).includes('assignee'));
+    const lastComment = calls.map(c => c.method === 'POST' && c.path.endsWith('/comment')).lastIndexOf(true);
+    expect(assigned).toBeGreaterThan(lastComment);
+  });
   it('ak22 a question on a ticket with Befund-Pflicht makes the owner its assignee, others keep theirs', async () => {
     const cases: [string[], unknown[]][] = [[['nightly-rot'], [{ fields: { assignee: { accountId: CFG.owner } } }]], [[], []]];
     for (const [labels, want] of cases) {

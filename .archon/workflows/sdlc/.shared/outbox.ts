@@ -342,10 +342,7 @@ export async function applyOutbox(
       created[op.marker] = (await createTicket(jira, op, runUrl, state, link)).key;
     } else if (index >= done) {
       if (op.op === 'comment') await jira.comment(op.key, `${op.text}\n\n${line}`);
-      else if (op.op === 'ask') {
-        await jira.ask(op.key, `${op.text}\n\n${line}`);
-        await handToOwner(jira, op.key);
-      }
+      else if (op.op === 'ask') await jira.ask(op.key, `${op.text}\n\n${line}`);
       else if (op.op === 'unflag' && !(half && index === done) && (await ownersHold(jira, op.key))) {
         // loop-pick.md: never lift a flag whose comment asks the owner a product question. The
         // launch gate's question on an unready bug is one; lifted, it would be asked again each lap.
@@ -364,6 +361,9 @@ export async function applyOutbox(
     }
     keep(Math.max(done, index + 1), false);
   }
+  // CONC-109 AK22, after the whole list: pick may only write to the loop's own tickets, so an
+  // assignee changed mid-list would fail a rerun's check for good.
+  for (const key of new Set(ops.flatMap(op => (op.op === 'ask' ? [op.key] : [])))) await handToOwner(jira, key);
   if (progress !== null) rmSync(progress, { force: true });
   return created;
 }

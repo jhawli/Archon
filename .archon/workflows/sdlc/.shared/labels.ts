@@ -8,6 +8,7 @@
  * is a copy that can drift.
  */
 
+import { needsBefund } from './befund.ts';
 import type { Jira } from './jira.ts';
 
 interface LabelSpec {
@@ -160,6 +161,10 @@ export async function writeTicketLabels(
 ): Promise<string[]> {
   const current = new Set((await jira.ticket(key)).labels);
   const applied = [...new Set(add)].sort();
+  // A befund label opens the merge gate for its ticket (befund.ts), and triage names area labels
+  // freely: only the owner or the repository's own jobs set one.
+  const granting = applied.filter(name => !current.has(name) && needsBefund([name], jira.config));
+  if (granting.length > 0) throw new Error(`the pack never adds a label with Befund-Pflicht: ${granting.join(', ')}`);
   const removing = new Set<string>(remove);
   const stale = [...current].filter(name => removing.has(name) && !applied.includes(name)).sort();
   const changes = [

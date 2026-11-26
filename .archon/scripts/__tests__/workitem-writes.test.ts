@@ -200,7 +200,7 @@ const JIRA: TrackerConfig = {
 type LabelChange = { add: string } | { remove: string };
 
 /** One ticket, CONC-5, whose labels take each PUT's delta; with `lose`, a PUT changes nothing. */
-function labelJira(start: string[], lose = false): { jira: Jira; calls: [string, string, unknown][] } {
+function labelJira(start: string[], lose = false, config: TrackerConfig = JIRA): { jira: Jira; calls: [string, string, unknown][] } {
   let labels = [...start];
   const calls: [string, string, unknown][] = [];
   const send: Transport = async (method, path, body) => {
@@ -217,7 +217,7 @@ function labelJira(start: string[], lose = false): { jira: Jira; calls: [string,
     }
     return { status: 404, text: '{}' };
   };
-  return { jira: new Jira(JIRA, send), calls };
+  return { jira: new Jira(config, send), calls };
 }
 
 test('a Jira ticket takes the label delta in one write, so labels another writer set stay', async () => {
@@ -230,6 +230,21 @@ test('a Jira ticket takes the label delta in one write, so labels another writer
     '/rest/api/3/issue/CONC-5',
     { update: { labels: [{ add: 'archon-ready' }, { add: 'archon-type-bug' }, { remove: 'archon-plan' }] } },
   ]);
+});
+
+test('ak22 no pack write adds a label with Befund-Pflicht; one the ticket already carries stays', async () => {
+  const config = { ...JIRA, befundLabels: ['nightly-rot'] };
+  const { jira, calls } = labelJira([], false, config);
+  let message = '';
+  try {
+    await writeTicketLabels(jira, 'CONC-5', ['area', 'nightly-rot'], OWNED_LABEL_NAMES);
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  expect(message).toContain('nightly-rot');
+  expect(calls.map(([method]) => method)).toEqual(['GET']);
+  const carried = labelJira(['nightly-rot'], false, config);
+  expect(await writeTicketLabels(carried.jira, 'CONC-5', ['nightly-rot'], OWNED_LABEL_NAMES)).toEqual(['nightly-rot']);
 });
 
 test('a Jira label write that does not read back is refused', async () => {

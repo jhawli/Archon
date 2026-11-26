@@ -20,7 +20,7 @@
 
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addToLap, runState } from '../../.shared/claims.ts';
+import { addToLap, lapWritesLines, runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, note, trimmed } from '../../.shared/io.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { applyOutbox, checkOutbox, outboxFile, outboxProgress, readOutbox, writableNow } from '../../.shared/outbox.ts';
@@ -70,6 +70,10 @@ if (filed.length > 0 && existsSync(item)) {
   const before = readFileSync(item, 'utf8');
   const fresh = filed.map(task => `- ${task} (offen)`).filter(line => !before.includes(line));
   if (fresh.length > 0) appendFileSync(item, ['', ...(before.includes(heading) ? [] : [heading, '']), ...fresh, ''].join('\n'));
+}
+if (writer === 'build' && existsSync(item)) {
+  const block = lapWritesLines(ops.flatMap(op => (op.op === 'comment' || op.op === 'ask' ? [op] : []))).join('\n');
+  if (block !== '' && !readFileSync(item, 'utf8').includes(block)) appendFileSync(item, `${block}\n`);
 }
 if (ops.length > 0) writeFileSync(join(state, `applied-${writer}.json`), `${JSON.stringify(ops, null, 2)}\n`);
 rmSync(file, { force: true });

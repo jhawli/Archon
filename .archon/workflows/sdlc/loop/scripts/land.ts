@@ -30,6 +30,7 @@ import {
   untestedMerge,
 } from '../../.shared/merge-gate.ts';
 import { protectedFiles } from '../../.shared/protected-paths.ts';
+import { loosenedNote } from '../../.shared/questions.ts';
 import { ticketKeyOf } from '../../.shared/tickets.ts';
 
 const prUrl = trimmed(process.env.INPUTS_PR);
@@ -225,7 +226,7 @@ if (alreadyMerged) {
     // The owner hears what the finding loosened; a failed comment must not undo the record.
     if (befund !== undefined && befund.loosened !== '' && lapKey !== null) {
       try {
-        await (client ??= new Jira(config)).comment(lapKey, `Gelockerte Tests (mit Befund gemergt): ${befund.loosened}`, config.owner);
+        await (client ??= new Jira(config)).comment(lapKey, loosenedNote(befund.loosened), config.owner);
       } catch (error) {
         console.error(`the owner was not told about loosened tests on ${lapKey}: ${error instanceof Error ? error.message : String(error)}`);
       }

@@ -7,6 +7,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { BEFUND_BOARD_LINE, needsBefund } from './befund.ts';
 import { authorName, statusName } from './claims.ts';
 import { note } from './io.ts';
 import { type Jira, type Ticket, type TicketComment, todoStatuses, type TrackerConfig } from './jira.ts';
@@ -99,6 +100,7 @@ export function boardAllMarkdown(all: BoardAll, now: number, config: TrackerConf
       `Rang: ${t.inOpenSprint ? `${(place += 1)} im Sprint` : 'nicht im Sprint'}`,
       `Herkunft: ${marker === undefined ? 'Julian' : `eigen (${marker})`}`,
       `Labels: ${t.labels.length > 0 ? t.labels.join(', ') : 'keine'}`,
+      ...(needsBefund(t.labels, config) ? [BEFUND_BOARD_LINE] : []),
       `Flagged: ${t.flagged ? 'ja' : 'nein'}`,
       `Frage: ${questionLine(lastQuestion(rows, config), now, t.flagged)}`,
       `Manager darf: ${RIGHTS_TEXT[rights(t.status, config.status)]}`,
