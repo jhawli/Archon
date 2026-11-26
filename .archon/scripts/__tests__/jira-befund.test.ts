@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { BEFUND_BOARD_LINE, befundSection, BEFUND_SECTION, mergeNote, needsBefund, readBefund } from '../../workflows/sdlc/.shared/befund';
+import { BEFUND_BOARD_LINE, BEFUND_LINES, befundSection, BEFUND_SECTION, mergeNote, needsBefund, readBefund } from '../../workflows/sdlc/.shared/befund';
 import { boardAllMarkdown } from '../../workflows/sdlc/.shared/board-all';
 import { LAP_WRITES_HEADING } from '../../workflows/sdlc/.shared/claims';
 import { adf, plain, type Ticket, type TicketComment, type TrackerConfig } from '../../workflows/sdlc/.shared/jira';
@@ -106,6 +106,9 @@ describe('what the others read of a finding (CONC-109)', () => {
     }
     expect(prompt('manager/commands/manage.md')).toContain(`\`${BEFUND_BOARD_LINE}\``);
     expect(prompt('loop/commands/loop-review.md')).toContain(LAP_WRITES_HEADING.slice(3));
+    // the line names the gate reads: the owner rule asks for each, the review prompt names the last
+    for (const name of BEFUND_LINES) expect(befundSection().join('\n')).toContain(`\`${name}:\``);
+    expect(prompt('loop/commands/loop-review.md')).toContain(`\`${BEFUND_LINES[3]}:\``);
   });
 
   /** Fakes the keychain and a Jira that takes every comment. */

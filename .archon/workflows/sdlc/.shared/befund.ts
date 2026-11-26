@@ -80,13 +80,14 @@ export function mergeNote(
 
 /** The lines itemMarkdown adds for such a ticket; the loop's prompts key on the heading. */
 export function befundSection(): string[] {
+  const named = BEFUND_LINES.map(name => `\`${name}:\``);
   return [
     BEFUND_SECTION,
     '',
     'Julian hat für dieses Ticket dauerhaft entschieden (26.11.2026):',
     '',
-    '- Erst der Befund, dann der Fix. Wer baut, legt in `$ARTIFACTS_DIR/tracker/outbox/build.json` einen `comment` an dieses Ticket mit je einer Zeile `Rote Zeile:`, `Letzter grüner Lauf:`, `Ursache:` und `Gelockerte Tests:` (oder `Gelockerte Tests: keine`). Ohne diesen Kommentar mergt das Merge-Gate nicht.',
-    '- Freigegeben ist, Prüfungen im Repository zu ändern, zu lockern, abzuschalten, in Quarantäne zu nehmen oder zu löschen, wenn der Befund es begründet. Das ersetzt für dieses Ticket die Rückfrage zu allem, was ändert, was eine Prüfung beurteilt. Jede solche Änderung steht unter `Gelockerte Tests:` und in `judge_changes`.',
+    `- Erst der Befund, dann der Fix. Wer baut, legt in \`$ARTIFACTS_DIR/tracker/outbox/build.json\` einen \`comment\` an dieses Ticket mit je einer Zeile ${named.slice(0, -1).join(', ')} und ${named.slice(-1).join('')} (oder \`${LOOSENED}: keine\`). Ohne diesen Kommentar mergt das Merge-Gate nicht.`,
+    `- Freigegeben ist, Prüfungen im Repository zu ändern, zu lockern, abzuschalten, in Quarantäne zu nehmen oder zu löschen, wenn der Befund es begründet. Das ersetzt für dieses Ticket die Rückfrage zu allem, was ändert, was eine Prüfung beurteilt. Jede solche Änderung steht unter \`${LOOSENED}:\` und in \`judge_changes\`.`,
     '- Titel und Branch des Pull Requests nennen keinen anderen Ticket-Schlüssel als diesen, sonst bleiben die CI-Sperren zu.',
     '- Nicht freigegeben sind geschützte Dateien. Liegt die Ursache dort oder lässt sie sich nicht belegen: `ask` mit dem Befund, kein PR. Das Ticket geht dann an Julian; Flagge und Bearbeiter setzt das Skript.',
     '',
