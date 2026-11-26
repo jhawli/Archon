@@ -30,6 +30,7 @@ import {
   targetRefusal,
   workItem,
 } from '../../workflows/sdlc/.shared/claims';
+import { BEFUND_SECTION } from '../../workflows/sdlc/.shared/befund';
 import type { Ticket, TicketComment, TrackerConfig } from '../../workflows/sdlc/.shared/jira';
 import { STATUS, TYPES } from './jira-fixtures';
 
@@ -452,6 +453,16 @@ describe('the ticket file for the agents', () => {
         '',
       ].join('\n')
     );
+  });
+  it('ak22 only a ticket with a befund label carries the owner rule', () => {
+    const ticket: Ticket = {
+      key: 'CONC-50', url: 'https://example.atlassian.net/browse/CONC-50', title: 'nightly rot', body: 'Text',
+      status: S.progress, type: TYPES.bug, labels: ['nightly-rot'], flagged: false, assignee: 'acc-archon', inOpenSprint: true, updated: 0, tasks: [],
+    };
+    const config = { ...CFG, befundLabels: ['nightly-rot'] };
+    expect(itemMarkdown(ticket, [], config)).toContain(BEFUND_SECTION);
+    expect(itemMarkdown(ticket, [], CFG)).not.toContain(BEFUND_SECTION);
+    expect(itemMarkdown({ ...ticket, labels: [] }, [], config)).not.toContain(BEFUND_SECTION);
   });
 });
 

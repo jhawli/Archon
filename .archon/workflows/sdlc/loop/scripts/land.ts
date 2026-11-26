@@ -14,6 +14,7 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { needsBefund, readBefund, type Befund } from '../../.shared/befund.ts';
 import { readCreated, recordLanding, runState } from '../../.shared/claims.ts';
 import { Jira, requireTracker, type Ticket, type TicketComment } from '../../.shared/jira.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
@@ -77,6 +78,21 @@ const approvals = await ownerApprovals(judgeChanges.map(j => j.approval), {
   config,
   comments: async (key): Promise<TicketComment[]> => (client ??= new Jira(config)).comments(key),
 });
+// A ticket with Befund-Pflicht (befund.ts) merges only with the finding on it, and then what a
+// check judges needs no word of the owner. Jira silent: refused, the next lap asks again.
+const lapKey = ticketKeyOf(target, config);
+let befund: Befund | undefined;
+const befundProblems: string[] = [];
+if ((config.befundLabels?.length ?? 0) > 0 && lapKey !== null) {
+  try {
+    client ??= new Jira(config);
+    if (needsBefund((await client.ticket(lapKey)).labels, config)) {
+      befund = readBefund(await client.comments(lapKey), new Set([config.assignee, config.owner]));
+    }
+  } catch (error) {
+    befundProblems.push(`Jira did not answer for ${lapKey}, so its finding cannot be ruled in: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
 const refusals = recordRefusals({
   report,
   evidenceProblems,
@@ -92,7 +108,9 @@ const refusals = recordRefusals({
   },
   issueExists: ref => tracking.open.has(ref.trim()),
   ownerApprovals: approvals.approved,
+  ...(befund !== undefined ? { befund } : {}),
 });
+refusals.push(...befundProblems);
 if (route === 'complex' && !existsSync(logPath)) refusals.push('the run log is missing, so a failed shipping step cannot be ruled out');
 const prNumber = (url: string): string => /\/pull\/(\d+)/.exec(url)?.[1] ?? url;
 if (report.pr !== '' && prNumber(report.pr) !== prNumber(prUrl)) refusals.push(`the app check tested ${report.pr}, not ${prUrl}`);
@@ -204,5 +222,13 @@ if (alreadyMerged) {
     if (branch !== '') run(['git', 'push', '--quiet', 'origin', '--delete', branch]);
     comment(`Loop review: merged (route: ${route}) at ${landSha} by the merge gate, after the review above${note}.`);
     landed('merged', `merged ${landSha}${note}`);
+    // The owner hears what the finding loosened; a failed comment must not undo the record.
+    if (befund !== undefined && befund.loosened !== '' && lapKey !== null) {
+      try {
+        await (client ??= new Jira(config)).comment(lapKey, `Gelockerte Tests (mit Befund gemergt): ${befund.loosened}`, config.owner);
+      } catch (error) {
+        console.error(`the owner was not told about loosened tests on ${lapKey}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 }

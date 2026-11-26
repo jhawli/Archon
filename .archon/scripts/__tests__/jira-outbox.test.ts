@@ -233,6 +233,16 @@ describe('outbox apply', () => {
     expect(comments).toHaveLength(4);
     for (const call of comments) expect(JSON.stringify(call.body)).toContain('Lauf: archon archon-loop run-1');
   });
+  it('ak22 a question on a ticket with Befund-Pflicht makes the owner its assignee, others keep theirs', async () => {
+    const cases: [string[], unknown[]][] = [[['nightly-rot'], [{ fields: { assignee: { accountId: CFG.owner } } }]], [[], []]];
+    for (const [labels, want] of cases) {
+      const { jira, calls } = fakeJira({ befundLabels: ['nightly-rot'], tickets: { 'CONC-5': { status: STATUS.progress, type: TYPES.bug, labels } } });
+      await applyOutbox(jira, [{ op: 'ask', key: 'CONC-5', text: 'Ursache liegt in gate/ci.sh' }], RUN, LINE, state());
+      expect(calls.filter(c => c.method === 'PUT' && JSON.stringify(c.body).includes('assignee')).map(c => c.body)).toEqual(want);
+      // the question itself stands either way
+      expect(calls.filter(c => c.method === 'POST' && c.path.endsWith('/comment'))).toHaveLength(1);
+    }
+  });
   it('unflag: the flag off first, then the reason', async () => {
     const { jira, calls } = fakeJira();
     await applyOutbox(jira, [{ op: 'unflag', key: 'CONC-6', text: 'Nur Buchhaltung' }], RUN, LINE, state());

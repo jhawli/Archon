@@ -147,6 +147,17 @@ describe('merge gate', () => {
     expect(gate(CLEAN)).toEqual([]);
   });
 
+  const judged = [{ file: 'ios/x.swift', change: 'test deleted', approval: '' }];
+  it('ak21 without the finding the gate refuses and names the missing lines', () => {
+    expect(gate(CLEAN, { befund: { missing: ['Ursache'] } }).join()).toContain('`Ursache:`');
+    // and a judge change still needs the owner
+    expect(gate(CLEAN, { judgeChanges: judged, befund: { missing: ['Ursache'] } })).toHaveLength(2);
+  });
+  it('ak22 with the finding a change to a check merges without the owner', () => {
+    expect(gate(CLEAN, { judgeChanges: judged, befund: { missing: [] } })).toEqual([]);
+    expect(gate(CLEAN, { judgeChanges: judged })).toHaveLength(1);
+  });
+
   it('an evidence check that failed refuses the merge', () => {
     expect(gate(CLEAN, { evidenceProblems: ['C1 cites no evidence'] })).toEqual([
       "the app check's report did not hold up: C1 cites no evidence",

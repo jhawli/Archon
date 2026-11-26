@@ -10,6 +10,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { needsBefund } from './befund.ts';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, restMarker, statusName } from './claims.ts';
 import { note } from './io.ts';
 import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, todoFor, todoStatuses, type TrackerConfig } from './jira.ts';
@@ -341,7 +342,10 @@ export async function applyOutbox(
       created[op.marker] = (await createTicket(jira, op, runUrl, state, link)).key;
     } else if (index >= done) {
       if (op.op === 'comment') await jira.comment(op.key, `${op.text}\n\n${line}`);
-      else if (op.op === 'ask') await jira.ask(op.key, `${op.text}\n\n${line}`);
+      else if (op.op === 'ask') {
+        await jira.ask(op.key, `${op.text}\n\n${line}`);
+        await handToOwner(jira, op.key);
+      }
       else if (op.op === 'unflag' && !(half && index === done) && (await ownersHold(jira, op.key))) {
         // loop-pick.md: never lift a flag whose comment asks the owner a product question. The
         // launch gate's question on an unready bug is one; lifted, it would be asked again each lap.
@@ -362,6 +366,22 @@ export async function applyOutbox(
   }
   if (progress !== null) rmSync(progress, { force: true });
   return created;
+}
+
+/**
+ * CONC-109 AK22: a ticket with Befund-Pflicht the loop gives back gets the owner as its assignee
+ * too, so it leaves the queue until they assign the loop again. Best effort: flag and mention
+ * stand either way, and an error thrown here would repeat the mention on a rerun.
+ */
+async function handToOwner(jira: Jira, key: string): Promise<void> {
+  const c = jira.config;
+  if ((c.befundLabels?.length ?? 0) === 0) return;
+  try {
+    if (!needsBefund((await jira.ticket(key)).labels, c)) return;
+    await jira.call('PUT', jira.issue(key), { fields: { assignee: { accountId: c.owner } } });
+  } catch (error) {
+    note(`outbox: ${key} keeps its assignee, the owner could not be set: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 /**

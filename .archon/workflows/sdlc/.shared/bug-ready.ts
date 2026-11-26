@@ -14,11 +14,11 @@ const SECTIONS = ['Fehler', 'Regressionstest'] as const;
  * The text as the rule reads it: plain() keeps Jira's bold (`**`) and code (backticks) marks and
  * its no-break spaces, which the editor puts around a label as often as not.
  */
-function bare(body: string): string {
+export function bare(body: string): string {
   return body.replace(/\*\*|`/g, '').replace(/\u00a0/g, ' ');
 }
 
-function hasSection(body: string, name: string): boolean {
+export function hasSection(body: string, name: string): boolean {
   // [ \t] instead of \s: the text must stand on the label's own line, not on the next one.
   // A list item (`- `, `1. `) is how plain() renders Jira's lists.
   return new RegExp(`^[ \\t]*(?:- |\\d+\\. )?${name}[ \\t]*:[ \\t]*\\S`, 'im').test(body);

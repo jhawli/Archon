@@ -46,6 +46,8 @@ export interface TrackerConfig {
    * approved: the Vault's session account, which attaches them at approval (CONC-146).
    */
   readonly approvers?: readonly string[];
+  /** Ticket labels with Befund-Pflicht (befund.ts, CONC-109). */
+  readonly befundLabels?: readonly string[];
 }
 
 /**
@@ -194,6 +196,10 @@ function parseTracker(raw: Json): TrackerConfig {
   if (typeof raw.board !== 'number' || !Number.isInteger(raw.board)) {
     throw new Error('.archon/tracker.json: board must be a board id');
   }
+  const labels = raw.befundLabels;
+  if (labels !== undefined && !(Array.isArray(labels) && labels.every(l => typeof l === 'string' && /^[a-z0-9-]{1,64}$/.test(l)))) {
+    throw new Error('.archon/tracker.json: befundLabels must be a list of labels (a-z, 0-9, -)');
+  }
   return {
     kind: 'jira',
     site,
@@ -210,6 +216,7 @@ function parseTracker(raw: Json): TrackerConfig {
     ...(Array.isArray(raw.approvers)
       ? { approvers: list(raw.approvers).map(str).filter(id => /^[A-Za-z0-9:-]{1,128}$/.test(id)) }
       : {}),
+    ...(labels !== undefined ? { befundLabels: labels as string[] } : {}),
   };
 }
 

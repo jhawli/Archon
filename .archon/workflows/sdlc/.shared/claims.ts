@@ -17,6 +17,7 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { befundSection, needsBefund } from './befund.ts';
 import { type Jira, requireTracker, type Ticket, type TicketComment, todoStatuses, type TrackerConfig, type ItemContext, MAX_ATTACHMENT, type Relative } from './jira.ts';
 import { tasksDone } from './subtickets.ts';
 import { namesTicket, ticketKeyOf } from './tickets.ts';
@@ -481,6 +482,7 @@ export function itemMarkdown(
   if (ticket.tasks.length > 0) {
     lines.push('Tasks:', ...ticket.tasks.map(task => `- ${task.title} (${taskState(task.status, s)})`), '');
   }
+  if (needsBefund(ticket.labels, config)) lines.push(...befundSection());
   if (context !== undefined) lines.push(...contextLines(ticket.key, context, config));
   for (const row of rows) {
     lines.push(`## Kommentar ${row.id} (${row.created}, ${authorName(row.author, config)})`, '', row.body, '');

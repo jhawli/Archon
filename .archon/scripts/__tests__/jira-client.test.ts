@@ -105,6 +105,13 @@ describe('tracker config', () => {
     const extra = { ...CFG, status: { ...CFG.status, old: '10015' }, types: { ...CFG.types, epic: '10000' } };
     expect(trackerConfig(repoWith(extra))).toEqual(CFG);
   });
+  it('befundLabels: read, absent without the key, refused when malformed', () => {
+    expect(trackerConfig(repoWith({ ...CFG, befundLabels: ['nightly-rot'] }))?.befundLabels).toEqual(['nightly-rot']);
+    expect(trackerConfig(repoWith(CFG))?.befundLabels).toBeUndefined();
+    for (const bad of ['nightly-rot', ['Nightly Rot'], [7]]) {
+      expect(() => trackerConfig(repoWith({ ...CFG, befundLabels: bad }))).toThrow('befundLabels');
+    }
+  });
 });
 
 describe('the loop queue of a ticket (VAULT-28)', () => {

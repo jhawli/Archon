@@ -125,7 +125,9 @@ nodes:
               if the requested outcome requires that expansion. When
               $ARTIFACTS_DIR/ci.md records CI red that this change caused on the
               pull request's current head, fix that too, at its cause, never by
-              weakening a test. Removing or replacing a test this pull request
+              weakening a test. (Only a work item whose `item.md` has the section
+              `Eigentümer-Regel für dieses Ticket (Befund-Pflicht)` may change a
+              check, as that section says.) Removing or replacing a test this pull request
               added, when ci.md says it fails on its own cost, fixes the cause.
               When it records a conflict with the base, merge the
               base branch into this branch with a normal merge commit, never a

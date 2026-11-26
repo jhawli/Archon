@@ -56,6 +56,7 @@ export interface FakeTicket {
   readonly attachedBy?: string;
   /** The account it is assigned to. */
   readonly assignee?: string;
+  readonly labels?: readonly string[];
 }
 export interface Call { method: string; path: string; body: unknown }
 /** One bulk move as Jira received it: `target` is `project,type,parent`, `statuses` target → sources. */
@@ -79,6 +80,7 @@ interface Booked {
     readonly author: { readonly accountId: string };
   }[];
   assignee?: string;
+  labels: readonly string[];
 }
 
 /** Where a ticket filed as this type starts (VAULT-28): a bug on Gemeldet, anything else on Offen. */
@@ -103,6 +105,8 @@ export function fakeJira(
     linked?: Record<string, string>;
     /** The status a bulk move really leaves its tickets on, whatever it asked for. */
     bulkStatus?: string;
+    /** The ticket labels with Befund-Pflicht; without it the tracker names none. */
+    befundLabels?: string[];
   } = {}
 ): { jira: Jira; calls: Call[]; bulkMoves: FakeBulkMove[]; book: ReadonlyMap<string, Readonly<Booked>> } {
   const calls: Call[] = [];
@@ -137,6 +141,7 @@ export function fakeJira(
       relates: t.relates ?? [],
       attachments: attach(t.attachments ?? {}, t.attachedBy ?? CFG.owner),
       ...(t.assignee !== undefined ? { assignee: t.assignee } : {}),
+      labels: t.labels ?? [],
     });
   }
   const ok = (value: unknown, status = 200): { status: number; text: string } => ({
@@ -150,7 +155,7 @@ export function fakeJira(
       summary: t.title,
       description: adf(t.body),
       status: { id: t.status },
-      labels: [],
+      labels: t.labels,
       [CFG.flagField]: t.flagged ? [{ id: CFG.flagOn }] : [],
       issuetype: { id: t.type, subtask: t.type === SUBTASK_TYPE },
       ...(t.parent !== undefined ? { parent: { key: t.parent } } : {}),
@@ -241,7 +246,7 @@ export function fakeJira(
       const parent = f.parent?.key;
       book.set(key, {
         status: START[type] ?? OPEN, type, title: f.summary ?? key, body: '', flagged: false, comments: [],
-        ...(parent !== undefined ? { parent } : {}), children: [], relates: [], attachments: [],
+        ...(parent !== undefined ? { parent } : {}), children: [], relates: [], attachments: [], labels: [],
       });
       if (parent !== undefined) book.get(parent)?.children.push(key);
       return ok({ key }, 201);
@@ -270,7 +275,8 @@ export function fakeJira(
     }
     return ok(undefined, 204);
   };
-  return { jira: new Jira(CFG, send, () => Promise.resolve()), calls, bulkMoves, book };
+  const config: TrackerConfig = opts.befundLabels === undefined ? CFG : { ...CFG, befundLabels: opts.befundLabels };
+  return { jira: new Jira(config, send, () => Promise.resolve()), calls, bulkMoves, book };
 }
 
 /** A fresh state directory for one run, like `jira-outbox.test.ts` uses. */

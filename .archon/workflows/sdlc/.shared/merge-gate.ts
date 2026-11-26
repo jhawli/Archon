@@ -314,6 +314,8 @@ export interface GateFacts {
   readonly issueExists: (ref: string) => boolean;
   /** With Jira, approval links land found to be the owner's own comments (`ownerApprovals`). */
   readonly ownerApprovals?: ReadonlySet<string>;
+  /** Set for a ticket with Befund-Pflicht (befund.ts): the lines no trusted comment carries. */
+  readonly befund?: { readonly missing: readonly string[] };
 }
 
 /** Why the record does not support merging; empty when it does. The forge checks are the caller's. */
@@ -356,7 +358,13 @@ export function recordRefusals(facts: GateFacts): string[] {
       refusals.push(`${line.id} is a failure the default branch has too, but no issue that exists tracks it`);
     }
   }
-  for (const judge of facts.judgeChanges) {
+  const missing = facts.befund?.missing ?? [];
+  if (missing.length > 0) {
+    refusals.push(`the finding is missing: no comment of the loop or the owner on this ticket carries ${missing.map(line => `\`${line}:\``).join(', ')}; the builder posts all four in one comment, and the next lap checks again`);
+  }
+  // With the finding, the owner's standing approval covers what a check judges (befund.ts).
+  const covered = facts.befund !== undefined && missing.length === 0;
+  for (const judge of covered ? [] : facts.judgeChanges) {
     if (judge.approval === '') {
       refusals.push(`${judge.file || 'a check'} changes what a check judges (${judge.change}) with no approval named`);
     } else if (!isApprovalLink(judge.approval) && facts.ownerApprovals?.has(judge.approval) !== true) {
