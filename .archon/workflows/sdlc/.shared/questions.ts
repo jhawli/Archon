@@ -25,6 +25,10 @@ export function questionText(kind: QuestionKind, text: string, fallback: string,
   return `Frage (technisch, Vorgabe ab ${due} UTC): ${text}\nVorgabe: ${fallback.replace(/\s+/g, ' ').trim()}`;
 }
 
+/** What land writes after a merge that loosened a check (CONC-109): it mentions the owner but asks nothing. */
+export const LOOSENED_NOTE = 'Gelockerte Tests (mit Befund gemergt):';
+export const loosenedNote = (loosened: string): string => `${LOOSENED_NOTE} ${loosened}`;
+
 /**
  * What only the pack's scripts or the owner may write; an agent's text with it is refused: a loop
  * record, the owner's word, an applied default, a run line in any line (decision 3), a mention
@@ -38,6 +42,8 @@ export function reservedText(text: string): boolean {
     t.startsWith('@') ||
     t.startsWith('Julian:') ||
     t.startsWith('Vorgabe angewendet:') ||
+    // Anywhere: a question of an agent's carrying the note would count as no question (`isQuestion`).
+    text.includes(LOOSENED_NOTE) ||
     /^:flag_(on|off):/.test(t) ||
     RUN_LINE.test(text)
   );
@@ -73,10 +79,6 @@ export function ownerWord(comment: TicketComment, config: TrackerConfig): boolea
   if (comment.author === config.owner) return true;
   return comment.author === config.assignee && body.startsWith('Julian:');
 }
-
-/** What land writes after a merge that loosened a check (CONC-109): it mentions the owner but asks nothing. */
-export const LOOSENED_NOTE = 'Gelockerte Tests (mit Befund gemergt):';
-export const loosenedNote = (loosened: string): string => `${LOOSENED_NOTE} ${loosened}`;
 
 function isQuestion(comment: TicketComment, config: TrackerConfig): boolean {
   const body = comment.body.trimStart();

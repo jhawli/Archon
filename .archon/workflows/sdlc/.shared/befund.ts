@@ -3,6 +3,7 @@
  * the fix, and the owner's standing approval opens changes to what a check judges for them.
  */
 import { bare, hasSection } from './bug-ready.ts';
+import { loosenedNote } from './questions.ts';
 
 export const BEFUND_LINES = ['Rote Zeile', 'Letzter grüner Lauf', 'Ursache', 'Gelockerte Tests'] as const;
 const LOOSENED = BEFUND_LINES[3];
@@ -60,6 +61,21 @@ export function readBefund(
     if (missing.length < closest.length) closest = missing;
   }
   return { missing: closest, loosened: '' };
+}
+
+/**
+ * What the owner hears after a merge under the Befund-Pflicht, or null: what the finding names as
+ * loosened, and every change to a check the review reported, so a „keine“ over a changed check is
+ * not silent.
+ */
+export function mergeNote(
+  befund: Befund | undefined,
+  changes: readonly { readonly file: string; readonly change: string }[]
+): string | null {
+  if (befund === undefined || (befund.loosened === '' && changes.length === 0)) return null;
+  const note = loosenedNote(befund.loosened === '' ? 'laut Befund keine' : befund.loosened);
+  if (changes.length === 0) return note;
+  return `${note}\nPrüf-Änderungen laut Review: ${changes.map(c => [c.file, c.change].filter(Boolean).join(': ')).join('; ')}`;
 }
 
 /** The lines itemMarkdown adds for such a ticket; the loop's prompts key on the heading. */

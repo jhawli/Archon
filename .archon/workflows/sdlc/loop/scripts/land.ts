@@ -14,7 +14,7 @@
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
-import { needsBefund, readBefund, type Befund } from '../../.shared/befund.ts';
+import { mergeNote, needsBefund, readBefund, type Befund } from '../../.shared/befund.ts';
 import { readCreated, recordLanding, runState } from '../../.shared/claims.ts';
 import { Jira, requireTracker, type Ticket, type TicketComment } from '../../.shared/jira.ts';
 import { artifactsDir, emit, text, trimmed } from '../../.shared/io.ts';
@@ -30,7 +30,6 @@ import {
   untestedMerge,
 } from '../../.shared/merge-gate.ts';
 import { protectedFiles } from '../../.shared/protected-paths.ts';
-import { loosenedNote } from '../../.shared/questions.ts';
 import { ticketKeyOf } from '../../.shared/tickets.ts';
 
 const prUrl = trimmed(process.env.INPUTS_PR);
@@ -223,10 +222,12 @@ if (alreadyMerged) {
     if (branch !== '') run(['git', 'push', '--quiet', 'origin', '--delete', branch]);
     comment(`Loop review: merged (route: ${route}) at ${landSha} by the merge gate, after the review above${note}.`);
     landed('merged', `merged ${landSha}${note}`);
-    // The owner hears what the finding loosened; a failed comment must not undo the record.
-    if (befund !== undefined && befund.loosened !== '' && lapKey !== null) {
+    // The owner hears what changed what a check judges without their word; a failed comment must
+    // not undo the record.
+    const heard = mergeNote(befund, judgeChanges);
+    if (heard !== null && lapKey !== null) {
       try {
-        await (client ??= new Jira(config)).comment(lapKey, loosenedNote(befund.loosened), config.owner);
+        await (client ??= new Jira(config)).comment(lapKey, heard, config.owner);
       } catch (error) {
         console.error(`the owner was not told about loosened tests on ${lapKey}: ${error instanceof Error ? error.message : String(error)}`);
       }

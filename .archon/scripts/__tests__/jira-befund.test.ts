@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { BEFUND_BOARD_LINE, befundSection, BEFUND_SECTION, needsBefund, readBefund } from '../../workflows/sdlc/.shared/befund';
+import { BEFUND_BOARD_LINE, befundSection, BEFUND_SECTION, mergeNote, needsBefund, readBefund } from '../../workflows/sdlc/.shared/befund';
 import { boardAllMarkdown } from '../../workflows/sdlc/.shared/board-all';
 import { LAP_WRITES_HEADING } from '../../workflows/sdlc/.shared/claims';
 import { adf, plain, type Ticket, type TicketComment, type TrackerConfig } from '../../workflows/sdlc/.shared/jira';
@@ -73,6 +73,17 @@ describe('what the others read of a finding (CONC-109)', () => {
     expect(note.body.startsWith('@')).toBe(true);
     expect(lastQuestion([asked, note], CFG)?.comment.id).toBe(1);
     expect(lastQuestion([note], CFG)).toBeNull();
+  });
+
+  it('ak22 the owner hears of every changed check, also when the finding says „keine“', () => {
+    const nothing = { missing: [], loosened: '' };
+    const changed = [{ file: 'ios/x.swift', change: 'test deleted' }, { file: '', change: 'threshold raised' }];
+    expect(mergeNote(undefined, changed)).toBeNull();
+    expect(mergeNote(nothing, [])).toBeNull();
+    expect(mergeNote({ missing: [], loosened: 'testWoche gelöscht' }, [])).toBe(loosenedNote('testWoche gelöscht'));
+    const note = mergeNote(nothing, changed) ?? '';
+    expect(note).toContain('ios/x.swift: test deleted; threshold raised');
+    expect(lastQuestion([comment(1, plain(adf(note, CFG.owner)))], CFG)).toBeNull();
   });
 
   it('ak22 the manager’s board marks the tickets with Befund-Pflicht', () => {

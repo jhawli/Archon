@@ -56,6 +56,15 @@ describe('outbox check', () => {
     const ops = ['comment', 'ask', 'cancel', 'unflag'].map(op => ({ op, key: 'CONC-6', text: 'warum' }));
     expect(checkOutbox(ops, 'pick', null, 'CONC', BOARD)).toHaveLength(4);
   });
+  it('no outbox text carries the note on loosened tests: a question opening with it would count as none', () => {
+    for (const op of ['ask', 'comment']) {
+      for (const text of ['Gelockerte Tests (mit Befund gemergt): welche Farbe?', 'Frage zu „Gelockerte Tests (mit Befund gemergt):“']) {
+        expect(failure(() => checkOutbox([{ op, key: 'CONC-5', text }], 'build', 'CONC-5', 'CONC', BOARD))).toContain('reserved');
+      }
+    }
+    // the finding's own line is no such note
+    expect(checkOutbox([{ op: 'comment', key: 'CONC-5', text: 'Gelockerte Tests: keine' }], 'build', 'CONC-5', 'CONC', BOARD)).toHaveLength(1);
+  });
   it('pick never writes to a ticket outside the snapshot (Julian’s, or one a session holds)', () => {
     expect(failure(() => checkOutbox([{ op: 'comment', key: 'CONC-77', text: 'x' }], 'pick', null, 'CONC', BOARD))).toContain(
       "not on this lap's board"
