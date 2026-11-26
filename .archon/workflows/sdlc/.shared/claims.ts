@@ -493,7 +493,7 @@ export function itemMarkdown(
   if (ticket.tasks.length > 0) {
     lines.push('Tasks:', ...ticket.tasks.map(task => `- ${task.title} (${taskState(task.status, s)})`), '');
   }
-  if (needsBefund(ticket.labels, config)) lines.push(...befundSection());
+  if (needsBefund(ticket.labels, config)) lines.push(...befundSection(ticket.key));
   if (context !== undefined) lines.push(...contextLines(ticket.key, context, config));
   for (const row of rows) {
     lines.push(`## Kommentar ${row.id} (${row.created}, ${authorName(row.author, config)})`, '', row.body, '');

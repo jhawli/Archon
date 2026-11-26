@@ -461,6 +461,8 @@ describe('the ticket file for the agents', () => {
     };
     const config = { ...CFG, befundLabels: ['nightly-rot'] };
     expect(itemMarkdown(ticket, [], config)).toContain(BEFUND_SECTION);
+    // the entry to copy names this ticket, not a placeholder
+    expect(itemMarkdown(ticket, [], config)).toContain('{"op": "comment", "key": "CONC-50", "text": "..."}');
     expect(itemMarkdown(ticket, [], CFG)).not.toContain(BEFUND_SECTION);
     expect(itemMarkdown({ ...ticket, labels: [] }, [], config)).not.toContain(BEFUND_SECTION);
   });

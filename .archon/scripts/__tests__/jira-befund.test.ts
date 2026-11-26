@@ -7,6 +7,7 @@ import { BEFUND_BOARD_LINE, BEFUND_LINES, befundSection, BEFUND_SECTION, mergeNo
 import { boardAllMarkdown } from '../../workflows/sdlc/.shared/board-all';
 import { LAP_WRITES_HEADING } from '../../workflows/sdlc/.shared/claims';
 import { adf, plain, type Ticket, type TicketComment, type TrackerConfig } from '../../workflows/sdlc/.shared/jira';
+import { checkOutbox } from '../../workflows/sdlc/.shared/outbox';
 import { lastQuestion, loosenedNote } from '../../workflows/sdlc/.shared/questions';
 import { packScriptRunner } from './deliver-checks-harness';
 import { CFG, STATUS, TYPES } from './jira-fixtures';
@@ -60,7 +61,16 @@ describe('the finding (CONC-109)', () => {
     expect(needsBefund(['andere'], { befundLabels: ['nightly-rot'] })).toBe(false);
   });
   it('the section starts with the heading the prompts key on', () => {
-    expect(befundSection()[0]).toBe(BEFUND_SECTION);
+    expect(befundSection('CONC-50')[0]).toBe(BEFUND_SECTION);
+  });
+  // The complex route builds with the ship block, which never loads loop-work.md: the shape the
+  // outbox asks of an entry must stand in the section itself, or the finding never reaches Jira.
+  it('ak21 the entries the section shows pass the outbox of this lap', () => {
+    const shown = [...befundSection('CONC-50').join('\n').matchAll(/`(\{"op": [^`]*\})`/g)].map(m => JSON.parse(m[1] ?? '') as unknown);
+    expect(checkOutbox(shown, 'build', 'CONC-50', 'CONC', new Set())).toEqual([
+      { op: 'comment', key: 'CONC-50', text: '...' },
+      { op: 'ask', key: 'CONC-50', text: '...' },
+    ]);
   });
 });
 
@@ -107,7 +117,7 @@ describe('what the others read of a finding (CONC-109)', () => {
     expect(prompt('manager/commands/manage.md')).toContain(`\`${BEFUND_BOARD_LINE}\``);
     expect(prompt('loop/commands/loop-review.md')).toContain(LAP_WRITES_HEADING.slice(3));
     // the line names the gate reads: the owner rule asks for each, the review prompt names the last
-    for (const name of BEFUND_LINES) expect(befundSection().join('\n')).toContain(`\`${name}:\``);
+    for (const name of BEFUND_LINES) expect(befundSection('CONC-50').join('\n')).toContain(`\`${name}:\``);
     expect(prompt('loop/commands/loop-review.md')).toContain(`\`${BEFUND_LINES[3]}:\``);
   });
 
