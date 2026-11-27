@@ -290,12 +290,16 @@ describe('release names the built tasks and the passed reports (CONC-176)', () =
     expect((await releaseTicket(jira, 'CONC-41', { recorded: lap, lap, view: MERGED }, 'run-1', LINE, [])).name).toBe('Staging');
     expect([statusOf(book, 'CONC-42'), statusOf(book, 'CONC-43')]).toEqual([S.taskDone, S.taskDone]);
   });
-  it('a merge GitHub does not confirm sends no built task back', async () => {
-    const { jira, book } = fakeJira({ tickets: slice(STEPS.taskBuilt, STEPS.taskBuilt), steps: true });
-    const recorded = lapOf({ reviewed: 'merge', landed: 'merged', deployed: 'true', delivers: 'all', tasks: [1] });
-    const lap = { ...recorded, landed: '' };
-    await releaseTicket(jira, 'CONC-41', { recorded, lap, view: OPEN }, 'run-1', LINE, []);
-    expect(statusOf(book, 'CONC-43')).not.toBe(STEPS.taskProgress);
+  it('a merge GitHub does not confirm sends no built task back, also from the queue', async () => {
+    for (const status of [S.progress, S.todo]) {
+      const tickets = slice(STEPS.taskBuilt, STEPS.taskBuilt);
+      tickets['CONC-41'] = { ...tickets['CONC-41'], status } as FakeTicket;
+      const { jira, book } = fakeJira({ tickets, steps: true });
+      const recorded = lapOf({ reviewed: 'merge', landed: 'merged', deployed: 'true', delivers: 'all', tasks: [1] });
+      const lap = { ...recorded, landed: '' };
+      await releaseTicket(jira, 'CONC-41', { recorded, lap, view: OPEN }, 'run-1', LINE, []);
+      expect(statusOf(book, 'CONC-43')).not.toBe(STEPS.taskProgress);
+    }
   });
   it('merged in part without a rest: the slice stays, but its built tasks are not sent back', async () => {
     const { jira, book } = fakeJira({ tickets: slice(STEPS.taskBuilt, STEPS.taskBuilt), steps: true });
