@@ -60,11 +60,16 @@ const runUrl = target.startsWith('https://')
   ? target
   : `${config.site}/jira/software/projects/${config.project}/boards/${config.board}`;
 // Tickets build and review file hang under the lap's ticket or relate to it (`lapLink`); pick files none.
-const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, runLine('archon-loop', process.env.WORKFLOW_ID ?? ''), state, {
-    writer,
-    raw,
-  }, writer === 'pick' ? null : targetKey, filed, passed);
-recordPassed(state, writer, passed);
+let created: Record<string, string> = {};
+try {
+  created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, runLine('archon-loop', process.env.WORKFLOW_ID ?? ''), state, {
+      writer,
+      raw,
+    }, writer === 'pick' ? null : targetKey, filed, passed);
+} finally {
+  // Also when a later write fails: release may still run, and its `Loop result:` is written once.
+  recordPassed(state, writer, passed);
+}
 // The reviewer reads item.md after the builder: it names the new tasks' numbers in `Tasks done`.
 const item = join(artifactsDir(), 'tracker', 'item.md');
 if (filed.length > 0 && existsSync(item)) {

@@ -138,7 +138,7 @@ export async function reopenBuilt(jira: Jira, key: string, named: readonly numbe
       await jira.move(task.key, s.taskProgress);
       moved.push(task.key);
     } catch (error) {
-      refused.push(`${task.key} (${error instanceof Error ? error.message : String(error)})`);
+      refused.push(`${task.key} (${(error instanceof Error ? error.message : String(error)).slice(0, 200)})`);
     }
   }
   const notes: string[] = [];

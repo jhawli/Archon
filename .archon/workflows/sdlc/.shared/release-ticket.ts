@@ -9,6 +9,9 @@ import { type Jira, todoFor } from './jira.ts';
 import { askedBefore } from './questions.ts';
 import { reopenBuilt, settleAndMove } from './subtickets.ts';
 
+/** How many passed-over progress reports the `Loop result:` comment names (CONC-176 AK3). */
+const MAX_PASSED = 10;
+
 export interface Released {
   /** The status the ticket is on now, by its lifecycle name. */
   readonly name: string;
@@ -59,9 +62,11 @@ export async function releaseTicket(
       ? await settleAndMove(jira, key, ticket.status, goal, lap, lap.created[restMarker(key)] ?? null)
       : { status: goal, notes: [], left: [] };
   // CONC-176: a lap that settled no task and merged nothing (sent back, given back) sends its built
-  // tasks the review did not name back to In Arbeit; the named ones stay built until a delivery.
+  // tasks the review did not name back to In Arbeit; the named ones stay built until a delivery. A
+  // lap on its way to Review (approved for a manual merge) waits for that merge and sends none back.
   const settledTasks = goal !== ticket.status && (goal === c.status.review || goal === c.status.staging);
-  const reopened = !settledTasks && lap.landed !== 'merged' ? await reopenBuilt(jira, key, lap.tasks) : [];
+  // `recorded`, not `lap`: a merge GitHub does not confirm may still be a delivery, so nothing goes back.
+  const reopened = !settledTasks && recorded.landed !== 'merged' ? await reopenBuilt(jira, key, lap.tasks) : [];
   // Tasks the review did not settle keep the slice in progress: the owner says what is missing.
   const leftAsk =
     settled.left.length > 0
@@ -71,7 +76,9 @@ export async function releaseTicket(
   const name = statusName(settled.status, c.status);
   // Once per run: pick counts these lines as attempts, and this node may run again.
   if (!all.some(comment => comment.body.startsWith(`Loop result: run ${run}.`))) {
-    const lines = [...settled.notes, ...reopened, ...passed];
+    // At most MAX_PASSED reasons: a list of 80 bad reports would bury the result.
+    const shown = passed.length > MAX_PASSED ? [...passed.slice(0, MAX_PASSED), `… und ${passed.length - MAX_PASSED} weitere übergangene Meldungen.`] : passed;
+    const lines = [...settled.notes, ...reopened, ...shown];
     const tasks = lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
     await jira.comment(key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.${tasks}\n\n${line}`);
   }

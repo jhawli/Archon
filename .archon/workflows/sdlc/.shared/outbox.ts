@@ -85,7 +85,8 @@ function checkProgress(e: Record<string, unknown>, writer: LoopWriter): Op {
   if (writer !== 'build') return { op: 'passed', why: `${shown}: den Stand eines Tasks meldet nur der Bau, nicht ${writer}; übergangen.` };
   if (shown === 'Eine Stand-Meldung') return { op: 'passed', why: 'Eine Stand-Meldung ohne gültige Task-Nummer, übergangen.' };
   if (e.state !== 'arbeit' && e.state !== 'gebaut') {
-    return { op: 'passed', why: `${shown}: unbekannter Stand ${JSON.stringify(e.state)}, übergangen.` };
+    // The agent's own word is not echoed: the reason goes into a comment the loop's account writes.
+    return { op: 'passed', why: `${shown}: unbekannter Stand (nur arbeit oder gebaut), übergangen.` };
   }
   return { op: 'progress', task: n as number, state: e.state };
 }
@@ -374,14 +375,20 @@ export async function applyOutbox(
     if (progress !== null) writeFileSync(progress, `${JSON.stringify({ digest, done: count, half: changed })}\n`);
   };
   // The slice's tasks as they stand, read once for the progress reports and kept current as they move.
-  let tasks: TaskRef[] | null = null;
-  const slicesTasks = async (): Promise<TaskRef[]> => (tasks ??= await progressTasks(jira, target));
+  let tasks: TaskRef[] | null | undefined;
+  const slicesTasks = async (): Promise<TaskRef[] | null> => (tasks === undefined ? (tasks = await progressTasks(jira, target)) : tasks);
+  // Only the last report per task counts (`arbeit 2, gebaut 2` is `gebaut 2`): a rerun of the list
+  // then finds the task on its step and moves nothing, where the first report would move it back.
+  const last = new Map<number, number>();
+  for (const [index, op] of ops.entries()) if (op.op === 'progress') last.set(op.task, index);
   for (const [index, op] of ops.entries()) {
     if (op.op === 'passed') {
       passed.push(op.why);
     } else if (op.op === 'progress') {
       // Always applied, also behind the progress mark: a task already on its step stays (AK4).
-      const why = await applyProgress(jira, await slicesTasks(), op);
+      const own = last.get(op.task) === index ? await slicesTasks() : undefined;
+      const why =
+        own === undefined ? null : own === null ? `Task ${op.task}: dieser Lauf hat keine Scheibe mit Tasks, übergangen.` : await applyProgress(jira, own, op);
       if (why !== null) passed.push(why);
     } else if (op.op === 'task') {
       // Always asked, also behind the progress mark: a task of the same title is not filed again.
@@ -419,13 +426,13 @@ export async function applyOutbox(
 }
 
 /**
- * The tasks a progress report may move: the children of the lap's slice. A lap without a slice
- * has none, so every report on it is passed over.
+ * The tasks a progress report may move: the children of the lap's slice. Null for a lap without
+ * a slice (a bug, pick's list), where every report is passed over.
  */
-async function progressTasks(jira: Jira, target: string | null): Promise<TaskRef[]> {
-  if (target === null) return [];
+async function progressTasks(jira: Jira, target: string | null): Promise<TaskRef[] | null> {
+  if (target === null) return null;
   const own = await jira.family(target);
-  return own.type === jira.config.types.slice ? own.children.map(child => ({ ...child })) : [];
+  return own.type === jira.config.types.slice ? own.children.map(child => ({ ...child })) : null;
 }
 
 /**
@@ -457,7 +464,7 @@ export async function applyProgress(jira: Jira, tasks: TaskRef[], op: Extract<Op
       tasks[index] = { ...task, status: step };
     }
   } catch (error) {
-    const why = error instanceof Error ? error.message : String(error);
+    const why = (error instanceof Error ? error.message : String(error)).slice(0, 200);
     return `${label} (${task.key}): Jira lässt den Wechsel auf ${op.state === 'arbeit' ? 'In Arbeit' : 'Gebaut'} nicht zu (${why}), übergangen.`;
   }
   return null;

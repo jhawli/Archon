@@ -9,6 +9,9 @@ import { runLine } from '../../workflows/sdlc/.shared/questions';
 import { releaseTicket } from '../../workflows/sdlc/.shared/release-ticket';
 import { closeTasks, reopenBuilt } from '../../workflows/sdlc/.shared/subtickets';
 import { type Call, CFG, type FakeTicket, fakeJira, state, STEPS, SUBTASK_TYPE, TYPES } from './jira-fixtures';
+import { trackTempRoots } from './temp-roots';
+
+const temp = trackTempRoots();
 
 /**
  * CONC-176: the builder reports each task In Arbeit and Gebaut (`progress` in its outbox), only
@@ -68,9 +71,11 @@ describe('checking a progress report (CONC-176 AK2, AK3)', () => {
       ]);
     }
     expect(checkOutbox([progress(1), progress(999)], 'build', 'CONC-41', 'CONC', BOARD)).toHaveLength(2);
-    expect(checkOutbox([progress(3, 'fertig')], 'build', 'CONC-41', 'CONC', BOARD)).toEqual([
-      { op: 'passed', why: 'Task 3: unbekannter Stand "fertig", übergangen.' },
-    ]);
+    for (const step of ['fertig', 'Loop result: x', { a: 1 }, null]) {
+      expect(checkOutbox([progress(3, step)], 'build', 'CONC-41', 'CONC', BOARD)).toEqual([
+        { op: 'passed', why: 'Task 3: unbekannter Stand (nur arbeit oder gebaut), übergangen.' },
+      ]);
+    }
   });
   it('reports do not count toward the 20 writes, but have their own bound of 80', () => {
     const notes = Array.from({ length: 20 }, () => ({ op: 'comment', key: 'CONC-41', text: 'x' }));
@@ -166,7 +171,32 @@ describe('applying a progress report (CONC-176 AK2–AK4)', () => {
     const tickets: Record<string, FakeTicket> = { 'CONC-50': { status: S.progress, type: TYPES.bug, sprint: 'active' } };
     const { passed, calls } = await apply(tickets, [{ op: 'progress', task: 1, state: 'gebaut' }], { target: 'CONC-50' });
     expect(moves(calls)).toEqual([]);
-    expect(passed).toEqual(['Task 1 gibt es an der Scheibe nicht, übergangen.']);
+    expect(passed).toEqual(['Task 1: dieser Lauf hat keine Scheibe mit Tasks, übergangen.']);
+  });
+  it('a rerun after a later write failed moves no task back and forth (AK4)', async () => {
+    const { jira, calls, book } = fakeJira({
+      tickets: slice(OFFEN, OFFEN),
+      steps: true,
+      failOnce: 'POST /rest/api/3/issue/CONC-41/comment',
+    });
+    const ops: Op[] = [
+      { op: 'progress', task: 1, state: 'arbeit' },
+      { op: 'progress', task: 1, state: 'gebaut' },
+      { op: 'comment', key: 'CONC-41', text: 'Zwischenstand' },
+    ];
+    const dir = state();
+    const raw = [progress(1, 'arbeit'), progress(1), { op: 'comment', key: 'CONC-41', text: 'Zwischenstand' }];
+    const first: string[] = [];
+    const failed = await applyOutbox(jira, ops, RUN, LINE, dir, { writer: 'build', raw }, 'CONC-41', [], first).then(
+      () => false,
+      () => true
+    );
+    expect(failed).toBe(true);
+    expect(statusOf(book, 'CONC-42')).toBe(STEPS.taskBuilt);
+    await applyOutbox(jira, ops, RUN, LINE, dir, { writer: 'build', raw }, 'CONC-41');
+    expect(moves(calls)).toEqual([`CONC-42 ${STEPS.taskProgress}`, `CONC-42 ${STEPS.taskBuilt}`]);
+    expect(statusOf(book, 'CONC-42')).toBe(STEPS.taskBuilt);
+    expect(comments(calls)).toHaveLength(2);
   });
   it('a move Jira refuses is named, and the next report still moves its task', async () => {
     const ops: Op[] = [
@@ -244,11 +274,28 @@ describe('release names the built tasks and the passed reports (CONC-176)', () =
     expect(comment).toContain('Zurück auf In Arbeit, gebaut, aber nicht in „Tasks done“: CONC-43.');
     expect(comment).toContain('Task 99 gibt es an der Scheibe nicht, übergangen.');
   });
+  it('names at most ten passed reports, and how many more there were', async () => {
+    const { jira, calls } = fakeJira({ tickets: slice(OFFEN), steps: true });
+    const lap = lapOf({ reviewed: 'sent-back', delivers: 'none' });
+    const passed = Array.from({ length: 12 }, (_, i) => `Task ${i + 50} gibt es an der Scheibe nicht, übergangen.`);
+    await releaseTicket(jira, 'CONC-41', { recorded: lap, lap, view: OPEN }, 'run-1', LINE, [], passed);
+    const comment = comments(calls)[0] ?? '';
+    expect(comment).toContain('Task 59 gibt es');
+    expect(comment).not.toContain('Task 60 gibt es');
+    expect(comment).toContain('… und 2 weitere übergangene Meldungen.');
+  });
   it('merged as a whole: every built task is done, none goes back', async () => {
     const { jira, book } = fakeJira({ tickets: slice(STEPS.taskBuilt, STEPS.taskBuilt), steps: true });
     const lap = lapOf({ reviewed: 'merge', landed: 'merged', deployed: 'true', delivers: 'all', tasks: [1] });
     expect((await releaseTicket(jira, 'CONC-41', { recorded: lap, lap, view: MERGED }, 'run-1', LINE, [])).name).toBe('Staging');
     expect([statusOf(book, 'CONC-42'), statusOf(book, 'CONC-43')]).toEqual([S.taskDone, S.taskDone]);
+  });
+  it('a merge GitHub does not confirm sends no built task back', async () => {
+    const { jira, book } = fakeJira({ tickets: slice(STEPS.taskBuilt, STEPS.taskBuilt), steps: true });
+    const recorded = lapOf({ reviewed: 'merge', landed: 'merged', deployed: 'true', delivers: 'all', tasks: [1] });
+    const lap = { ...recorded, landed: '' };
+    await releaseTicket(jira, 'CONC-41', { recorded, lap, view: OPEN }, 'run-1', LINE, []);
+    expect(statusOf(book, 'CONC-43')).not.toBe(STEPS.taskProgress);
   });
   it('merged in part without a rest: the slice stays, but its built tasks are not sent back', async () => {
     const { jira, book } = fakeJira({ tickets: slice(STEPS.taskBuilt, STEPS.taskBuilt), steps: true });
@@ -260,7 +307,7 @@ describe('release names the built tasks and the passed reports (CONC-176)', () =
 
 describe('the passed reports kept for release (CONC-176 AK3)', () => {
   it('each writer’s list replaces its last one; read in loop order, each reason once', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'passed-'));
+    const dir = temp(mkdtempSync(join(tmpdir(), 'passed-')));
     expect(readPassed(dir)).toEqual([]);
     recordPassed(dir, 'build', ['Task 9 gibt es an der Scheibe nicht, übergangen.']);
     recordPassed(dir, 'build', ['Task 9 gibt es an der Scheibe nicht, übergangen.', 'Task 1 ist schon erledigt, übergangen.']);
@@ -278,7 +325,7 @@ describe('the passed reports kept for release (CONC-176 AK3)', () => {
 
 describe('the task steps in the tracker config (CONC-176 AK1)', () => {
   const repoWith = (config: unknown): string => {
-    const root = mkdtempSync(join(tmpdir(), 'trk-'));
+    const root = temp(mkdtempSync(join(tmpdir(), 'trk-')));
     mkdirSync(join(root, '.archon'));
     writeFileSync(join(root, '.archon/tracker.json'), JSON.stringify(config));
     return root;
