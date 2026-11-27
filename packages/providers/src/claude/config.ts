@@ -21,8 +21,10 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /**
  * Parse raw assistantConfig into typed Claude defaults.
- * Defensive: invalid fields are dropped rather than thrown. `settingSources` is
- * a capability control, so dropped entries are logged instead of going silent.
+ * Defensive: invalid fields are dropped rather than thrown, except `settingsFile`:
+ * it names the agents' cage, so an invalid value throws instead of dropping it.
+ * `settingSources` is a capability control, so dropped entries are logged instead
+ * of going silent.
  */
 export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderDefaults {
   const result: ClaudeProviderDefaults = {};

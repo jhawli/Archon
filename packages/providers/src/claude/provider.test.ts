@@ -3165,6 +3165,34 @@ describe('sendQuery decomposition behaviors', () => {
       expect(options.permissionMode).toBe('bypassPermissions');
     });
 
+    test('a call without nodeConfig (chat, titles) gets the agent settings too', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agent-cage-chat-')));
+      mkdirSync(join(cwd, '.archon'));
+      writeFileSync(
+        join(cwd, '.archon/agent-settings.json'),
+        JSON.stringify({ sandbox: { enabled: true }, permissions: { deny: ['Edit(/gate/**)'] } })
+      );
+      try {
+        for await (const _ of client.sendQuery('chat', cwd, undefined, {
+          assistantConfig: { settingsFile: '.archon/agent-settings.json' },
+        })) {
+          // consume
+        }
+      } finally {
+        await removeTempTree(cwd);
+      }
+
+      expect(pluginIdsSpy).not.toHaveBeenCalled();
+      const options = (mockQuery.mock.calls[0][0] as { options: Options }).options;
+      expect(options.settings).toMatchObject({ sandbox: { enabled: true } });
+      expect((options.settings as { permissions: { deny: string[] } }).permissions.deny).toContain(
+        `Edit(/${cwd}/gate/**)`
+      );
+    });
+
     test('a configured agent settings file that is missing stops the node before the session', async () => {
       pluginIdsSpy.mockResolvedValue([]);
       const chunks: MessageChunk[] = [];
