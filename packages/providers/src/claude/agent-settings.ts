@@ -18,7 +18,7 @@
  * so the anchored rules keep sandboxed Bash out of those paths as well.
  */
 import { readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import type { Options } from '@anthropic-ai/claude-agent-sdk';
 import { ClassifiedProviderError } from '../shared/failure';
 
@@ -105,7 +105,21 @@ export function loadAgentSettings(cwd: string, settingsFile: string): SdkSetting
     fail('is not a JSON object');
   }
   const given = resolve(cwd);
-  return anchorPermissions(parsed as SdkSettings, given === root ? [root] : [given, root]);
+  const roots = given === root ? [root] : [given, root];
+  // The file guards itself: an agent cannot rewrite its cage for the next node, by a file tool or,
+  // through the sandbox's write denies, by Bash.
+  const own = relative(root, path);
+  const self = ['Edit', 'Write', 'MultiEdit'].flatMap(tool =>
+    roots.map(name => `${tool}(/${join(name, own)})`)
+  );
+  const settings = anchorPermissions(parsed as SdkSettings, roots) as {
+    permissions?: { deny?: string[] };
+  };
+  const deny = settings.permissions?.deny ?? [];
+  return {
+    ...settings,
+    permissions: { ...settings.permissions, deny: [...new Set([...deny, ...self])] },
+  } as SdkSettings;
 }
 
 /**
@@ -125,6 +139,14 @@ export function withAgentSettings(
     );
   }
   const file = loadAgentSettings(cwd, settingsFile);
+  // The SDK lays the top-level sandbox option over the settings; a node's sandbox must not
+  // replace the cage's.
+  if ('sandbox' in file && options.sandbox !== undefined) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `Claude agent settings ${settingsFile} set the sandbox; the node may not set its own`
+    );
+  }
   const node = options.settings ?? {};
   const clash = Object.keys(node).filter(key => key in file);
   if (clash.length > 0) {

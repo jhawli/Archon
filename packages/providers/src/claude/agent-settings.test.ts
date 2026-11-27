@@ -20,6 +20,10 @@ function write(content: unknown): void {
   writeFileSync(join(dir, FILE), typeof content === 'string' ? content : JSON.stringify(content));
 }
 
+/** The deny rules the file adds for itself under each name of the folder. */
+const own = (...roots: string[]): string[] =>
+  ['Edit', 'Write', 'MultiEdit'].flatMap(tool => roots.map(root => `${tool}(/${root}/${FILE})`));
+
 function misconfigured(run: () => unknown): string {
   try {
     run();
@@ -74,7 +78,7 @@ describe('loadAgentSettings', () => {
     expect(loadAgentSettings(dir, FILE)).toEqual({
       sandbox: { enabled: true },
       permissions: {
-        deny: [`Edit(/${dir}/gate/**)`, 'Read(~/.ssh/**)'],
+        deny: [`Edit(/${dir}/gate/**)`, 'Read(~/.ssh/**)', ...own(dir)],
         ask: [`Write(/${dir}/x)`],
         allow: [`Read(/${dir}/docs/**)`],
       },
@@ -90,11 +94,20 @@ describe('loadAgentSettings', () => {
       expect(settings.permissions.deny).toEqual([
         `Edit(/${link}/gate/**)`,
         `Edit(/${dir}/gate/**)`,
+        ...own(link, dir),
       ]);
       expect(settings.permissions.allow).toEqual([`Read(/${link}/docs/**)`]);
     } finally {
       rmSync(link);
     }
+  });
+
+  test('a file without rules still guards itself', () => {
+    write({ sandbox: { enabled: true } });
+    expect(loadAgentSettings(dir, FILE)).toEqual({
+      sandbox: { enabled: true },
+      permissions: { deny: own(dir) },
+    });
   });
 
   test('fails closed: missing, unreadable, not an object, outside the folder, absolute', () => {
@@ -133,9 +146,16 @@ describe('withAgentSettings', () => {
     withAgentSettings(options, dir, FILE);
     expect(options.settings).toEqual({
       sandbox: { enabled: true },
+      permissions: { deny: own(dir) },
       enabledPlugins: { a: false },
       syncClaudeAiPlugins: false,
     });
+  });
+
+  test('a node sandbox next to the cage sandbox stops the node', () => {
+    write({ sandbox: { enabled: true } });
+    const options = { sandbox: { enabled: false } } as Options;
+    expect(misconfigured(() => withAgentSettings(options, dir, FILE))).toContain('sandbox');
   });
 
   test('a node cannot replace a key of the cage', () => {

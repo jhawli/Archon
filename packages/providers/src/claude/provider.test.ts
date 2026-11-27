@@ -3152,7 +3152,12 @@ describe('sendQuery decomposition behaviors', () => {
       const options = (mockQuery.mock.calls[0][0] as { options: Options }).options;
       expect(options.settings).toEqual({
         sandbox: { enabled: true },
-        permissions: { deny: [`Edit(/${cwd}/gate/**)`] },
+        permissions: {
+          deny: [
+            `Edit(/${cwd}/gate/**)`,
+            ...['Edit', 'Write', 'MultiEdit'].map(t => `${t}(/${cwd}/.archon/agent-settings.json)`),
+          ],
+        },
         enabledPlugins: { 'posthog@official': false },
         syncClaudeAiPlugins: false,
       });
