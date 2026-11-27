@@ -271,6 +271,27 @@ export function addToLap(state: string, facts: LapFacts): void {
   writeJson(join(state, 'lap.json'), { ...strings(readObject(join(state, 'lap.json'))), ...facts });
 }
 
+/**
+ * Progress reports the loop passed over (CONC-176 AK3), by writer, for release's `Loop result:`.
+ * Kept apart from `lap.json`, which the subject node starts afresh after the builder wrote. Each
+ * writer's list replaces its last one: a rerun of tracker-write finds the same reasons again.
+ */
+export function recordPassed(state: string, writer: string, why: readonly string[]): void {
+  const path = join(state, 'passed.json');
+  const kept = readObject(path);
+  writeJson(path, { ...kept, [writer]: [...why] });
+}
+
+/** Every passed-over report of this run, the writers in loop order, each reason once. */
+export function readPassed(state: string): string[] {
+  const kept = readObject(join(state, 'passed.json'));
+  const all = ['pick', 'build', 'review'].flatMap(writer => {
+    const list = kept[writer];
+    return Array.isArray(list) ? list.filter((why): why is string => typeof why === 'string') : [];
+  });
+  return [...new Set(all)];
+}
+
 /** Removes a `deployment.md` an agent may have left: only the deploy block after the caller writes one. */
 export function clearDeployment(artifacts: string): void {
   rmSync(deploymentFile(artifacts), { force: true });
@@ -380,6 +401,8 @@ const STATUS_NAMES: Record<keyof TrackerConfig['status'], string> = {
   canceled: 'Verworfen',
   taskDone: 'Erledigt',
   taskDropped: 'Entfällt',
+  taskProgress: 'In Arbeit',
+  taskBuilt: 'Gebaut',
 };
 
 /** Where a claim moves the ticket: from either queue to progress. A ticket further along stays (null). */
@@ -392,10 +415,12 @@ export function statusName(id: string, s: TrackerConfig['status']): string {
   return name === undefined ? `status ${id}` : STATUS_NAMES[name];
 }
 
-/** A task's state as the agents read it: done, dropped, or still open. */
+/** A task's state as the agents read it: done, dropped, in progress, built, or still open. */
 function taskState(id: string, s: TrackerConfig['status']): string {
   if (id === s.taskDone) return STATUS_NAMES.taskDone;
   if (id === s.taskDropped) return STATUS_NAMES.taskDropped;
+  if (id === s.taskProgress) return 'offen, in Arbeit';
+  if (id === s.taskBuilt) return 'offen, gebaut';
   return 'offen';
 }
 

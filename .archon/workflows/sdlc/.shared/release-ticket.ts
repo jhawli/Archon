@@ -7,7 +7,7 @@
 import { finalStatus, type ItemComment, type LapResult, type PrView, restMarker, statusName, unnamedPrAsk } from './claims.ts';
 import { type Jira, todoFor } from './jira.ts';
 import { askedBefore } from './questions.ts';
-import { settleAndMove } from './subtickets.ts';
+import { reopenBuilt, settleAndMove } from './subtickets.ts';
 
 export interface Released {
   /** The status the ticket is on now, by its lifecycle name. */
@@ -22,7 +22,8 @@ export interface Released {
  * `recorded` is the lap as its nodes recorded it, `lap` the same after `confirmMerge`, `view` the
  * pull request as GitHub shows it, `all` the ticket's comments as read before the claim was
  * freed: a `Loop result:` of this run among them means this node ran before, and it is not
- * written again. `line` signs every comment and question with the run.
+ * written again. `line` signs every comment and question with the run. `passed` are the progress
+ * reports the loop passed over this run (CONC-176 AK3), named in the `Loop result:` comment.
  */
 export async function releaseTicket(
   jira: Jira,
@@ -30,7 +31,8 @@ export async function releaseTicket(
   laps: { readonly recorded: LapResult; readonly lap: LapResult; readonly view: PrView | null },
   run: string,
   line: string,
-  all: readonly ItemComment[]
+  all: readonly ItemComment[],
+  passed: readonly string[] = []
 ): Promise<Released> {
   const c = jira.config;
   const { recorded, lap, view } = laps;
@@ -56,6 +58,10 @@ export async function releaseTicket(
     goal !== ticket.status
       ? await settleAndMove(jira, key, ticket.status, goal, lap, lap.created[restMarker(key)] ?? null)
       : { status: goal, notes: [], left: [] };
+  // CONC-176: a lap that settled no task and merged nothing (sent back, given back) sends its built
+  // tasks the review did not name back to In Arbeit; the named ones stay built until a delivery.
+  const settledTasks = goal !== ticket.status && (goal === c.status.review || goal === c.status.staging);
+  const reopened = !settledTasks && lap.landed !== 'merged' ? await reopenBuilt(jira, key, lap.tasks) : [];
   // Tasks the review did not settle keep the slice in progress: the owner says what is missing.
   const leftAsk =
     settled.left.length > 0
@@ -65,12 +71,13 @@ export async function releaseTicket(
   const name = statusName(settled.status, c.status);
   // Once per run: pick counts these lines as attempts, and this node may run again.
   if (!all.some(comment => comment.body.startsWith(`Loop result: run ${run}.`))) {
-    const tasks = settled.notes.length > 0 ? `\n\n${settled.notes.join('\n')}` : '';
+    const lines = [...settled.notes, ...reopened, ...passed];
+    const tasks = lines.length > 0 ? `\n\n${lines.join('\n')}` : '';
     await jira.comment(key, `Loop result: run ${run}. PR: ${lap.pr !== '' ? lap.pr : 'kein PR'}. Status: ${name}.${tasks}\n\n${line}`);
   }
   // Once per run as well: a second `@` mention would mail the owner twice.
   if (ask !== null && !askedBefore(await jira.comments(key), ask, line, c)) {
     await jira.ask(key, `${ask}\n\n${line}`);
   }
-  return { name, asked: ask !== null, unconfirmed, notes: settled.notes };
+  return { name, asked: ask !== null, unconfirmed, notes: [...settled.notes, ...reopened] };
 }

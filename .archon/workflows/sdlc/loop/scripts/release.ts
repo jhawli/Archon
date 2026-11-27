@@ -25,6 +25,7 @@ import {
   type PrView,
   readClaimedAt,
   readLap,
+  readPassed,
   runState,
   workItem,
 } from '../../.shared/claims.ts';
@@ -88,7 +89,7 @@ try {
   const claimedAt = Number.isNaN(kept) && own.length > 0 ? Math.min(...own.map(comment => comment.createdAt)) : kept;
   const view = prView(recorded.pr);
   const lap = confirmMerge(recorded, view, item.key, claimedAt, config.project);
-  const done = await releaseTicket(jira, item.key, { recorded, lap, view }, run, line, all);
+  const done = await releaseTicket(jira, item.key, { recorded, lap, view }, run, line, all, readPassed(state));
   const unconfirmed = done.unconfirmed ? ', merge not confirmed by GitHub' : '';
   lines.push(`${item.key}: ${done.name}${done.asked ? ', asked the owner' : ''}${unconfirmed}`, ...done.notes);
   if (freeError !== undefined) throw freeError;

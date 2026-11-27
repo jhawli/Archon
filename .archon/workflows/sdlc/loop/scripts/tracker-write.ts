@@ -20,7 +20,7 @@
 
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { addToLap, lapWritesLines, runState } from '../../.shared/claims.ts';
+import { addToLap, lapWritesLines, recordPassed, runState } from '../../.shared/claims.ts';
 import { artifactsDir, emit, note, trimmed } from '../../.shared/io.ts';
 import { Jira, requireTracker } from '../../.shared/jira.ts';
 import { applyOutbox, checkOutbox, outboxFile, outboxProgress, readOutbox, writableNow } from '../../.shared/outbox.ts';
@@ -52,6 +52,8 @@ const partial = trimmed(process.env.INPUTS_DELIVERS) === 'part';
 const ops = checked.filter(op => writer !== 'review' || op.op !== 'task' || partial);
 if (ops.length < checked.length) note('tracker-write: the review filed a task without delivers: part; dropped');
 const filed: string[] = [];
+// Progress reports passed over (CONC-176 AK3): their reasons go into release's `Loop result:`.
+const passed: string[] = [];
 // Where a filed ticket's remote link points: the lap's target as pick named it (claim checks it
 // after this writer), else the board.
 const runUrl = target.startsWith('https://')
@@ -61,7 +63,8 @@ const runUrl = target.startsWith('https://')
 const created = ops.length === 0 ? {} : await applyOutbox(jira ?? new Jira(config), ops, runUrl, runLine('archon-loop', process.env.WORKFLOW_ID ?? ''), state, {
     writer,
     raw,
-  }, writer === 'pick' ? null : targetKey, filed);
+  }, writer === 'pick' ? null : targetKey, filed, passed);
+recordPassed(state, writer, passed);
 // The reviewer reads item.md after the builder: it names the new tasks' numbers in `Tasks done`.
 const item = join(artifactsDir(), 'tracker', 'item.md');
 if (filed.length > 0 && existsSync(item)) {

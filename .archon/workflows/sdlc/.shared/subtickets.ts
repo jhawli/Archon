@@ -119,6 +119,35 @@ export async function closeTasks(
 }
 
 /**
+ * CONC-176: the tasks of `key` the builder reported built and the review did not name done
+ * (`named`), sent back to In Arbeit after a lap that delivered nothing. Returns a line for the
+ * lap's `Loop result:` comment, none when no task moved. A move Jira refuses is named there and
+ * the others still move: the tasks are bookkeeping, and the release goes on. A config without
+ * the steps has no built task.
+ */
+export async function reopenBuilt(jira: Jira, key: string, named: readonly number[]): Promise<string[]> {
+  const s = jira.config.status;
+  if (s.taskProgress === undefined || s.taskBuilt === undefined) return [];
+  const built = (await jira.family(key)).children.filter(
+    child => child.status === s.taskBuilt && !named.includes(taskNumber(child.title))
+  );
+  const moved: string[] = [];
+  const refused: string[] = [];
+  for (const task of built) {
+    try {
+      await jira.move(task.key, s.taskProgress);
+      moved.push(task.key);
+    } catch (error) {
+      refused.push(`${task.key} (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+  const notes: string[] = [];
+  if (moved.length > 0) notes.push(`Zurück auf In Arbeit, gebaut, aber nicht in „Tasks done“: ${moved.join(', ')}.`);
+  if (refused.length > 0) notes.push(`Bleibt auf Gebaut, Jira lässt In Arbeit nicht zu: ${refused.join(', ')}.`);
+  return notes;
+}
+
+/**
  * After a lap (release) or a merge (merge queue): settle the tasks the review's word names when
  * the ticket goes on to Review or Staging (the merge queue passes none), then move it along the
  * lifecycle (`moveTo`). A slice whose tasks stay open

@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { needsBefund } from './befund.ts';
 import { authorName, readCreated, readFinished, recordCreated, recordFinished, restMarker, statusName } from './claims.ts';
 import { note } from './io.ts';
-import { adf, doneStatuses, type Jira, plain, type Ticket, type TicketComment, todoFor, todoStatuses, type TrackerConfig } from './jira.ts';
+import { adf, doneStatuses, type Jira, plain, type TaskRef, type Ticket, type TicketComment, todoFor, todoStatuses, type TrackerConfig } from './jira.ts';
 import { lastQuestion, reservedQuestion, reservedText } from './questions.ts';
 import { restFeature, subtaskType, taskNumber } from './subtickets.ts';
 import { LOOP_FINDING, namesTicket, prKeys } from './tickets.ts';
@@ -29,7 +29,20 @@ export type Op =
    * A task under the lap's slice (CONC-146 AK8): work the slice's approved acceptance items need
    * and its plan does not name. `ak` names those items, `text` says why. Build and review only.
    */
-  | { readonly op: 'task'; readonly title: string; readonly ak: string; readonly text: string };
+  | { readonly op: 'task'; readonly title: string; readonly ak: string; readonly text: string }
+  /**
+   * Where the builder stands on one task of the lap's slice (CONC-176): `arbeit` when it starts
+   * the task, `gebaut` when it is built. Build only; finishing a task stays the review's word.
+   */
+  | { readonly op: 'progress'; readonly task: number; readonly state: TaskStep }
+  /**
+   * An entry the loop passes over without refusing the list (CONC-176 AK3): a progress report
+   * that cannot apply. `why` goes into the lap's `Loop result:` comment.
+   */
+  | { readonly op: 'passed'; readonly why: string };
+
+/** The steps the builder reports on a task: in progress, then built. */
+export type TaskStep = 'arbeit' | 'gebaut';
 
 /** The loop's agents, whose lists `checkOutbox` reads; the manager's list has its own reader (`manager-ops.ts`). */
 export type LoopWriter = 'pick' | 'build' | 'review';
@@ -52,6 +65,30 @@ export function clearOutbox(artifacts: string, writers: readonly Writer[]): void
 
 const MAX_TEXT = 30_000;
 const MAX_OPS = 20;
+/**
+ * Progress reports do not count toward MAX_OPS: a builder reports two per task, and a slice may
+ * have more than ten. They have their own bound, so a list stays small enough to check and apply.
+ */
+const MAX_PROGRESS = 80;
+
+const isProgress = (entry: unknown): boolean =>
+  typeof entry === 'object' && entry !== null && !Array.isArray(entry) && (entry as Record<string, unknown>).op === 'progress';
+
+/**
+ * One progress entry, checked (CONC-176 AK2, AK3). Nothing here refuses the list: an entry from
+ * another writer, or without a task number or step, is passed over with the reason, and the
+ * rest of the list still applies. Whether the task exists is Jira's to say (`applyProgress`).
+ */
+function checkProgress(e: Record<string, unknown>, writer: LoopWriter): Op {
+  const n = e.task;
+  const shown = typeof n === 'number' && Number.isInteger(n) && n > 0 && n < 1000 ? `Task ${n}` : 'Eine Stand-Meldung';
+  if (writer !== 'build') return { op: 'passed', why: `${shown}: den Stand eines Tasks meldet nur der Bau, nicht ${writer}; übergangen.` };
+  if (shown === 'Eine Stand-Meldung') return { op: 'passed', why: 'Eine Stand-Meldung ohne gültige Task-Nummer, übergangen.' };
+  if (e.state !== 'arbeit' && e.state !== 'gebaut') {
+    return { op: 'passed', why: `${shown}: unbekannter Stand ${JSON.stringify(e.state)}, übergangen.` };
+  }
+  return { op: 'progress', task: n as number, state: e.state };
+}
 
 /**
  * Comment openings the loop's own scripts write and read back as facts: a claim decides who
@@ -93,12 +130,15 @@ export function checkOutbox(
 ): Op[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) throw new Error(`${writer} outbox must be a JSON list`);
-  if (raw.length > MAX_OPS) throw new Error(`${writer} outbox has more than ${MAX_OPS} writes`);
+  const progress = (raw as unknown[]).filter(isProgress).length;
+  if (raw.length - progress > MAX_OPS) throw new Error(`${writer} outbox has more than ${MAX_OPS} writes`);
+  if (progress > MAX_PROGRESS) throw new Error(`${writer} outbox has more than ${MAX_PROGRESS} progress reports`);
   const keyOk = new RegExp(`^${project}-[1-9]\\d*$`);
   return (raw as unknown[]).map((entry, i): Op => {
     const where = `${writer} outbox entry ${i}`;
     if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error(`${where}: not an object`);
     const e = entry as Record<string, unknown>;
+    if (e.op === 'progress') return checkProgress(e, writer);
     const text = typeof e.text === 'string' ? e.text.trim() : '';
     if (text === '' || text.length > MAX_TEXT) throw new Error(`${where}: text is empty or longer than ${MAX_TEXT}`);
     if (e.op === 'create') {
@@ -316,7 +356,8 @@ export async function applyOutbox(
   state: string,
   resume?: { readonly writer: LoopWriter; readonly raw: unknown },
   target: string | null = null,
-  filed: string[] = []
+  filed: string[] = [],
+  passed: string[] = []
 ): Promise<Record<string, string>> {
   const c = jira.config;
   // Before the first write (the list is checked whole): tasks hang only under a slice (CONC-146 AK8).
@@ -332,8 +373,17 @@ export async function applyOutbox(
   const keep = (count: number, changed: boolean): void => {
     if (progress !== null) writeFileSync(progress, `${JSON.stringify({ digest, done: count, half: changed })}\n`);
   };
+  // The slice's tasks as they stand, read once for the progress reports and kept current as they move.
+  let tasks: TaskRef[] | null = null;
+  const slicesTasks = async (): Promise<TaskRef[]> => (tasks ??= await progressTasks(jira, target));
   for (const [index, op] of ops.entries()) {
-    if (op.op === 'task') {
+    if (op.op === 'passed') {
+      passed.push(op.why);
+    } else if (op.op === 'progress') {
+      // Always applied, also behind the progress mark: a task already on its step stays (AK4).
+      const why = await applyProgress(jira, await slicesTasks(), op);
+      if (why !== null) passed.push(why);
+    } else if (op.op === 'task') {
       // Always asked, also behind the progress mark: a task of the same title is not filed again.
       filed.push(await fileTask(jira, target ?? '', op, line)); // checked above: tasks only with a slice
     } else if (op.op === 'create') {
@@ -366,6 +416,51 @@ export async function applyOutbox(
   for (const key of new Set(ops.flatMap(op => (op.op === 'ask' ? [op.key] : [])))) await handToOwner(jira, key);
   if (progress !== null) rmSync(progress, { force: true });
   return created;
+}
+
+/**
+ * The tasks a progress report may move: the children of the lap's slice. A lap without a slice
+ * has none, so every report on it is passed over.
+ */
+async function progressTasks(jira: Jira, target: string | null): Promise<TaskRef[]> {
+  if (target === null) return [];
+  const own = await jira.family(target);
+  return own.type === jira.config.types.slice ? own.children.map(child => ({ ...child })) : [];
+}
+
+/**
+ * Move one task to the step the builder reported (CONC-176), or say why not. Offen → In Arbeit →
+ * Gebaut, one transition each, and Gebaut → In Arbeit when the builder takes a built task up
+ * again. A task already on the step is left alone (AK4). An unknown number, a finished task, a
+ * config without the steps or a move Jira refuses is passed over with the reason (AK3): the
+ * report is bookkeeping, and it never holds up the rest of the list. `tasks` is updated in place.
+ */
+export async function applyProgress(jira: Jira, tasks: TaskRef[], op: Extract<Op, { op: 'progress' }>): Promise<string | null> {
+  const s = jira.config.status;
+  const label = `Task ${op.task}`;
+  if (s.taskProgress === undefined || s.taskBuilt === undefined) {
+    return `${label}: der Tracker kennt die Stände In Arbeit und Gebaut nicht (taskProgress, taskBuilt), übergangen.`;
+  }
+  const index = tasks.findIndex(task => taskNumber(task.title) === op.task);
+  const task = tasks[index];
+  if (task === undefined) return `${label} gibt es an der Scheibe nicht, übergangen.`;
+  if (task.status === s.taskDone) return `${label} ist schon erledigt, übergangen.`;
+  if (task.status === s.taskDropped) return `${label} entfällt schon, übergangen.`;
+  const goal = op.state === 'arbeit' ? s.taskProgress : s.taskBuilt;
+  if (task.status === goal) return null;
+  // Built is reached only through In Arbeit; In Arbeit from Offen or from Gebaut in one step.
+  const steps = goal === s.taskBuilt && task.status !== s.taskProgress ? [s.taskProgress, goal] : [goal];
+  try {
+    for (const step of steps) {
+      if (tasks[index]?.status === step) continue;
+      await jira.move(task.key, step);
+      tasks[index] = { ...task, status: step };
+    }
+  } catch (error) {
+    const why = error instanceof Error ? error.message : String(error);
+    return `${label} (${task.key}): Jira lässt den Wechsel auf ${op.state === 'arbeit' ? 'In Arbeit' : 'Gebaut'} nicht zu (${why}), übergangen.`;
+  }
+  return null;
 }
 
 /**

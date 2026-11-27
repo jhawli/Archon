@@ -12,6 +12,8 @@ export const STATUS = {
   todo: '10057', todoBug: '10059', progress: '10058', review: '10016', staging: '10017',
   live: '10018', canceled: '10063', taskDone: '10061', taskDropped: '10062',
 } as const;
+/** The task steps between Offen and Erledigt (CONC-176): In Arbeit and Gebaut, for `fakeJira({ steps: true })`. */
+export const STEPS = { taskProgress: '3', taskBuilt: '10064' } as const;
 /** Bug, Scheibe (under a feature) and the plain type a new ticket is filed as (Aufgabe). */
 export const TYPES = { bug: '10011', slice: '10005', filing: '10009' } as const;
 /** The project's sub-task type (Task): the only type with `subtask: true`. */
@@ -107,6 +109,8 @@ export function fakeJira(
     bulkStatus?: string;
     /** The ticket labels with Befund-Pflicht; without it the tracker names none. */
     befundLabels?: string[];
+    /** The tracker has the task steps In Arbeit and Gebaut (`STEPS`, CONC-176). */
+    steps?: boolean;
   } = {}
 ): { jira: Jira; calls: Call[]; bulkMoves: FakeBulkMove[]; book: ReadonlyMap<string, Readonly<Booked>> } {
   const calls: Call[] = [];
@@ -217,7 +221,7 @@ export function fakeJira(
         t?.type === TYPES.slice &&
         t.status === STATUS.progress &&
         t.children.some(child => !done.includes(book.get(child)?.status ?? ''));
-      const to = Object.values(CFG.status).filter(id => !(barred && id === STATUS.review));
+      const to = Object.values(opts.steps === true ? { ...CFG.status, ...STEPS } : CFG.status).filter(id => !(barred && id === STATUS.review));
       return ok({ transitions: to.map(id => ({ id: `t${id}`, to: { id } })) });
     }
     const moving = /^\/rest\/api\/3\/issue\/([A-Z]+-\d+)\/transitions$/.exec(bare);
@@ -275,7 +279,8 @@ export function fakeJira(
     }
     return ok(undefined, 204);
   };
-  const config: TrackerConfig = opts.befundLabels === undefined ? CFG : { ...CFG, befundLabels: opts.befundLabels };
+  const labelled: TrackerConfig = opts.befundLabels === undefined ? CFG : { ...CFG, befundLabels: opts.befundLabels };
+  const config: TrackerConfig = opts.steps === true ? { ...labelled, status: { ...labelled.status, ...STEPS } } : labelled;
   return { jira: new Jira(config, send, () => Promise.resolve()), calls, bulkMoves, book };
 }
 

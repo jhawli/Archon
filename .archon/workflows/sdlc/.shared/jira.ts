@@ -23,7 +23,10 @@ export interface TrackerConfig {
   readonly owner: string;
   /**
    * Status ids. Two queues: a bug waits on `todoBug`, anything else on `todo`; a lap works on
-   * `progress`. `taskDone` and `taskDropped` end the tasks of a slice (VAULT-28).
+   * `progress`. `taskDone` and `taskDropped` end the tasks of a slice (VAULT-28). `taskProgress`
+   * and `taskBuilt` are the steps between (CONC-176): the builder reports a task in progress and
+   * built (`progress` in its outbox), only the review finishes it. A config without them has no
+   * such steps, and the loop passes over the builder's reports with a note.
    */
   readonly status: {
     readonly todo: string;
@@ -35,6 +38,8 @@ export interface TrackerConfig {
     readonly canceled: string;
     readonly taskDone: string;
     readonly taskDropped: string;
+    readonly taskProgress?: string;
+    readonly taskBuilt?: string;
   };
   /** Issue type ids: a bug, a slice (child of a feature), and the plain type a new ticket is filed as. */
   readonly types: { readonly bug: string; readonly slice: string; readonly filing: string };
@@ -108,6 +113,8 @@ export function repoRoot(cwd = process.cwd()): string {
 }
 
 const STATUS_KEYS = ['todo', 'todoBug', 'progress', 'review', 'staging', 'live', 'canceled', 'taskDone', 'taskDropped'] as const;
+/** Task steps a config may leave out (CONC-176); when given, numeric ids like the rest. */
+const OPTIONAL_STATUS_KEYS = ['taskProgress', 'taskBuilt'] as const;
 const TYPE_KEYS = ['bug', 'slice', 'filing'] as const;
 
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
@@ -189,6 +196,10 @@ function parseTracker(raw: Json): TrackerConfig {
   if (!STATUS_KEYS.every(id => /^\d+$/.test(str(status[id])))) {
     throw new Error(`.archon/tracker.json: status needs numeric ids for ${STATUS_KEYS.join(', ')}`);
   }
+  const optional = OPTIONAL_STATUS_KEYS.filter(id => status[id] !== undefined);
+  if (!optional.every(id => /^\d+$/.test(str(status[id])))) {
+    throw new Error(`.archon/tracker.json: status ${optional.join(', ')} must be numeric ids when given`);
+  }
   const types = obj(raw.types);
   if (!TYPE_KEYS.every(id => /^\d+$/.test(str(types[id])))) {
     throw new Error(`.archon/tracker.json: types needs numeric ids for ${TYPE_KEYS.join(', ')}`);
@@ -208,7 +219,7 @@ function parseTracker(raw: Json): TrackerConfig {
     keychain: text('keychain'),
     assignee: text('assignee'),
     owner: text('owner'),
-    status: Object.fromEntries(STATUS_KEYS.map(id => [id, str(status[id])])) as TrackerConfig['status'],
+    status: Object.fromEntries([...STATUS_KEYS, ...optional].map(id => [id, str(status[id])])) as TrackerConfig['status'],
     types: Object.fromEntries(TYPE_KEYS.map(id => [id, str(types[id])])) as TrackerConfig['types'],
     flagField: text('flagField'),
     flagOn: text('flagOn'),
