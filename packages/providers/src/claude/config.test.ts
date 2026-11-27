@@ -15,10 +15,25 @@ describe('Claude config contract', () => {
       model: 'sonnet',
       settingSources: ['project', 'user'],
       claudeBinaryPath: '/configured/claude',
+      settingsFile: '.archon/agent-settings.json',
     } satisfies CompleteClaudeConfig;
 
     expect(parseClaudeConfigStrict(config)).toEqual(config);
     expect(parseClaudeConfig(config)).toEqual(config);
+  });
+});
+
+describe('parseClaudeConfig settingsFile', () => {
+  test('a value that is not a path fails instead of dropping the cage', () => {
+    for (const settingsFile of [42, '', '   ', ['x']]) {
+      expect(() => parseClaudeConfig({ settingsFile })).toThrow('settingsFile');
+    }
+  });
+
+  test('the strict parsers accept the key', () => {
+    expect(parseClaudeConfigStrict({ settingsFile: 'a.json' }, 'run')).toEqual({
+      settingsFile: 'a.json',
+    });
   });
 });
 

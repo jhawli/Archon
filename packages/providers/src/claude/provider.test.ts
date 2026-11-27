@@ -2,10 +2,10 @@ import * as containerSpawnModule from './container-spawn';
 import { overStreams } from '../test/plugin';
 import { createProvider, descriptor } from './index';
 import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import type { Options, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createMockLogger } from '../test/mocks/logger';
 import type { MessageChunk } from '../types';
@@ -3121,6 +3121,59 @@ describe('sendQuery decomposition behaviors', () => {
       const result = chunks.find(c => c.type === 'result');
       expect(result?.failure?.class).toBe('misconfigured');
       expect(result?.failure?.evidence).toContain('synced@claude-ai');
+    });
+
+    test('a configured agent settings file reaches the node under the plugin scope', async () => {
+      pluginIdsSpy.mockResolvedValue(['posthog@official']);
+      mockQuery.mockImplementation(async function* () {
+        yield builtinInit;
+        yield { type: 'result', session_id: 'sid' };
+      });
+      const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'agent-cage-')));
+      mkdirSync(join(cwd, '.archon'));
+      writeFileSync(
+        join(cwd, '.archon/agent-settings.json'),
+        JSON.stringify({ sandbox: { enabled: true }, permissions: { deny: ['Edit(/gate/**)'] } })
+      );
+      try {
+        for await (const _ of client.sendQuery('x', cwd, undefined, {
+          nodeConfig: { nodeId: 'caged' },
+          assistantConfig: {
+            settingsFile: '.archon/agent-settings.json',
+            settingSources: ['project'],
+          },
+        })) {
+          // consume
+        }
+      } finally {
+        await removeTempTree(cwd);
+      }
+
+      const options = (mockQuery.mock.calls[0][0] as { options: Options }).options;
+      expect(options.settings).toEqual({
+        sandbox: { enabled: true },
+        permissions: { deny: [`Edit(/${cwd}/gate/**)`] },
+        enabledPlugins: { 'posthog@official': false },
+        syncClaudeAiPlugins: false,
+      });
+      expect(options.settingSources).toEqual(['project']);
+      expect(options.permissionMode).toBe('bypassPermissions');
+    });
+
+    test('a configured agent settings file that is missing stops the node before the session', async () => {
+      pluginIdsSpy.mockResolvedValue([]);
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of client.sendQuery('x', tmpdir(), undefined, {
+        nodeConfig: { nodeId: 'caged' },
+        assistantConfig: { settingsFile: 'no-such-agent-settings.json' },
+      })) {
+        chunks.push(chunk);
+      }
+
+      expect(mockQuery).not.toHaveBeenCalled();
+      const result = chunks.find(c => c.type === 'result');
+      expect(result?.failure?.class).toBe('misconfigured');
+      expect(result?.failure?.evidence).toContain('no-such-agent-settings.json');
     });
 
     test('direct chat reads no inventory and sets no plugin settings', async () => {

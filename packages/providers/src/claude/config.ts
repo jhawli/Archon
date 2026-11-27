@@ -46,6 +46,14 @@ export function parseClaudeConfig(raw: Record<string, unknown>): ClaudeProviderD
     result.claudeBinaryPath = raw.claudeBinaryPath;
   }
 
+  // A capability control too: a value that is not a string must not drop the cage silently.
+  if (raw.settingsFile !== undefined) {
+    if (typeof raw.settingsFile !== 'string' || raw.settingsFile.trim() === '') {
+      throw new Error('assistants.claude.settingsFile must be a non-empty relative path');
+    }
+    result.settingsFile = raw.settingsFile;
+  }
+
   return result;
 }
 
@@ -55,13 +63,18 @@ const fields = {
     .array(z.enum(['project', 'user'], { error: "expected 'project' or 'user'" }))
     .optional(),
   claudeBinaryPath: configStringSchema.optional(),
+  settingsFile: configStringSchema.optional(),
 };
 export const configSchemas = {
   install: z.strictObject(fields),
   run: z.strictObject(fields),
   snapshot: snapshotConfigSchema(
     { model: fields.model },
-    { settingSources: fields.settingSources, claudeBinaryPath: fields.claudeBinaryPath }
+    {
+      settingSources: fields.settingSources,
+      claudeBinaryPath: fields.claudeBinaryPath,
+      settingsFile: fields.settingsFile,
+    }
   ),
 };
 

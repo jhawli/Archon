@@ -56,6 +56,11 @@ export interface ClaudeProviderDefaults {
    *  Archon builds when `CLAUDE_BIN_PATH` is not set; optional in dev mode
    *  (SDK resolves from node_modules). */
   claudeBinaryPath?: string;
+  /** Settings file for the agents, relative to the node's cwd (e.g.
+   *  `.archon/agent-settings.json`). Passed to every Claude node through the
+   *  SDK `settings` option (the `--settings` layer); a missing or unreadable
+   *  file stops the node. */
+  settingsFile?: string;
 }
 
 export interface CodexProviderDefaults {

@@ -68,6 +68,7 @@ import {
   type ProviderStopReason,
 } from '@archon/provider-contract';
 import { parseClaudeConfig } from './config';
+import { withAgentSettings } from './agent-settings';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
 import {
@@ -1705,6 +1706,9 @@ export class ClaudeProvider implements IAgentProvider {
           yield { type: 'warning', ...warning };
         }
       }
+
+      // After applyNodeConfig: it sets options.settings to the node's plugin scope.
+      withAgentSettings(options, cwd, assistantDefaults.settingsFile);
 
       options.systemPrompt = withPerRequestSystemPrompt(options.systemPrompt);
 
