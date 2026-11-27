@@ -393,6 +393,7 @@ export async function applyOutbox(
     } else if (op.op === 'task') {
       // Always asked, also behind the progress mark: a task of the same title is not filed again.
       filed.push(await fileTask(jira, target ?? '', op, line)); // checked above: tasks only with a slice
+      tasks = undefined; // a later progress report may name the task just filed
     } else if (op.op === 'create') {
       // Always asked, also behind the progress mark: it finds its own ticket and returns its key.
       const link = readFinished(state)[op.marker] === undefined ? await lapLink(jira, target, op.marker) : {};

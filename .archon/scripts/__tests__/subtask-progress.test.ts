@@ -198,6 +198,17 @@ describe('applying a progress report (CONC-176 AK2–AK4)', () => {
     expect(statusOf(book, 'CONC-42')).toBe(STEPS.taskBuilt);
     expect(comments(calls)).toHaveLength(2);
   });
+  it('a task filed in the same list can be reported on right after', async () => {
+    const ops: Op[] = [
+      { op: 'progress', task: 1, state: 'gebaut' },
+      { op: 'task', title: 'Fehlender Schritt', ak: 'AK2', text: 'Der Plan nennt ihn nicht' },
+      { op: 'progress', task: 2, state: 'gebaut' },
+    ];
+    const { passed, book } = await apply(slice(OFFEN), ops);
+    expect(passed).toEqual([]);
+    expect(statusOf(book, 'CONC-42')).toBe(STEPS.taskBuilt);
+    expect(statusOf(book, 'CONC-51')).toBe(STEPS.taskBuilt);
+  });
   it('a move Jira refuses is named, and the next report still moves its task', async () => {
     const ops: Op[] = [
       { op: 'progress', task: 1, state: 'arbeit' },
@@ -299,6 +310,14 @@ describe('release names the built tasks and the passed reports (CONC-176)', () =
       const lap = { ...recorded, landed: '' };
       await releaseTicket(jira, 'CONC-41', { recorded, lap, view: OPEN }, 'run-1', LINE, []);
       expect(statusOf(book, 'CONC-43')).not.toBe(STEPS.taskProgress);
+    }
+  });
+  it('approved for a manual merge, not merged: no built task goes back, the lap waits for the merge', async () => {
+    for (const over of [{ delivers: 'part' }, { delivers: 'none' }, { delivers: '' }]) {
+      const { jira, book } = fakeJira({ tickets: slice(STEPS.taskBuilt, STEPS.taskBuilt), steps: true });
+      const lap = lapOf({ reviewed: 'approved', tasks: [1], ...over });
+      await releaseTicket(jira, 'CONC-41', { recorded: lap, lap, view: OPEN }, 'run-1', LINE, []);
+      expect(statusOf(book, 'CONC-43')).toBe(STEPS.taskBuilt);
     }
   });
   it('merged in part without a rest: the slice stays, but its built tasks are not sent back', async () => {
