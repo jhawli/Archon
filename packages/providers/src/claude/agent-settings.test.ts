@@ -123,6 +123,12 @@ describe('loadAgentSettings', () => {
     expect(
       misconfigured(() => loadAgentSettings(dir, `../${outside.split('/').pop()}/s.json`))
     ).toContain('outside the working directory');
+    mkdirSync(join(dir, 'real'));
+    writeFileSync(join(dir, 'real/s.json'), '{}');
+    symlinkSync(join(dir, 'real/s.json'), join(dir, 'inner.json'));
+    expect(misconfigured(() => loadAgentSettings(dir, 'inner.json'))).toContain('symlink');
+    symlinkSync(join(dir, 'real'), join(dir, 'via'));
+    expect(misconfigured(() => loadAgentSettings(dir, 'via/s.json'))).toContain('symlink');
     symlinkSync(join(outside, 's.json'), join(dir, 'linked.json'));
     expect(misconfigured(() => loadAgentSettings(dir, 'linked.json'))).toContain(
       'outside the working directory'

@@ -95,6 +95,8 @@ export function loadAgentSettings(cwd: string, settingsFile: string): SdkSetting
   const rel = relative(root, path);
   if (rel === '' || rel.startsWith('..') || isAbsolute(rel))
     fail('lies outside the working directory');
+  // A symlink would give the file a second name the self-deny below does not cover.
+  if (path !== resolve(root, settingsFile)) fail('must not be or lie behind a symlink');
   let parsed: unknown;
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8'));
