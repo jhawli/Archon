@@ -421,7 +421,9 @@ describe('loop wiring', () => {
       { op: 'progress', task: 3, state: 'gebaut' },
     ]);
     expect(text).toContain('never a step number of this run\'s own plan');
-    expect(text).toContain('keep every entry and append yours');
+    expect(text).toContain('keep every other entry and append yours');
+    // Many sessions share the list and checkOutbox refuses all of it past 80 reports.
+    expect(text).toContain('one progress entry per task: remove the earlier one and append the new one');
     const ship = readFileSync(resolve(pack, 'ship/archon-ship-block.yaml'), 'utf8');
     expect(ship).toContain('include: archon-deliver-block');
     expect(readFileSync(resolve(pack, 'deliver/archon-deliver-block.yaml'), 'utf8')).toContain('include: archon-implement');
