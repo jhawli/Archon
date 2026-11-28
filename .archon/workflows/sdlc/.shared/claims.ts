@@ -160,7 +160,9 @@ export const restMarker = (key: string): string => `rest-${key.toLowerCase()}`;
 /**
  * The ticket's status after a lap (AK18). Null leaves it as it is. `todo` is the ticket's own
  * queue (`todoFor`): Gemeldet for a bug, Startklar for a slice. A delivery goes to Staging; the
- * lap settles the slice's tasks first (VAULT-28, no waiting for parts any more).
+ * lap settles the slice's tasks first (VAULT-28, no waiting for parts any more). A merge the
+ * review says delivers nothing (`none`: a planned first pull request of several on the same
+ * ticket) is unfinished work: the ticket goes back to its queue for the next one (CONC-27).
  *
  * Review means the change is done and waits for a merge: the review approved it for a person to
  * merge, or ordered a merge that land did not confirm. Any other lap with an open pull request
@@ -180,6 +182,14 @@ export function finalStatus(
   const queued = todoStatuses(s).includes(current) && lap.landed === 'merged';
   if (current !== s.progress && current !== s.review && !queued) return { status: null, ask: null };
   if (lap.landed === 'merged') {
+    if (lap.delivers === 'none') {
+      // Never Staging, so the rollout question must not tell the owner to move it there.
+      const ask =
+        lap.deployed === 'true'
+          ? null
+          : 'Gemergt (das Ticket ist noch nicht geliefert), aber der Staging-Rollout ist nicht bestätigt. Bitte Staging prüfen.';
+      return { status: todo, ask };
+    }
     if (lap.deployed !== 'true') {
       return {
         status: s.review,
