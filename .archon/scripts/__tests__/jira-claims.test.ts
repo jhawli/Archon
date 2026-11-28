@@ -238,6 +238,20 @@ describe('status after the lap', () => {
     const created = { [restMarker('CONC-5')]: 'CONC-51' };
     expect(finalStatus('CONC-5', S.progress, lap({ ...merged, delivers: 'part', created }), S, S.todo)).toEqual({ status: '10017', ask: null });
   });
+  it('merged but delivering nothing (a planned first pull request of two): back to its queue, no question (CONC-27)', () => {
+    for (const current of [S.progress, S.review]) {
+      expect(finalStatus('CONC-5', current, lap({ ...merged, delivers: 'none' }), S, S.todo)).toEqual({ status: S.todo, ask: null });
+    }
+    expect(finalStatus('CONC-5', S.progress, lap({ ...merged, delivers: 'none' }), S, S.todoBug)).toEqual({ status: S.todoBug, ask: null });
+  });
+  it('merged but delivering nothing, rollout not confirmed: stays with the queue, asks about the rollout, never to set Staging', () => {
+    for (const deployed of ['', 'false']) {
+      const result = finalStatus('CONC-5', S.progress, lap({ ...merged, deployed, delivers: 'none' }), S, S.todo);
+      expect(result.status).toBe(S.todo);
+      expect(result.ask).toContain('Staging-Rollout ist nicht bestätigt');
+      expect(result.ask).not.toContain('auf Staging setzen');
+    }
+  });
   it('an open pull request the review approved for a person to merge: Review', () => {
     expect(finalStatus('CONC-5', S.progress, lap({ pr: merged.pr, reviewed: 'approved' }), S, S.todo)).toEqual({ status: S.review, ask: null });
   });
