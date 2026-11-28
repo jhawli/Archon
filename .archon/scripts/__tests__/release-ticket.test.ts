@@ -65,6 +65,17 @@ describe('release: the ticket after a lap (VAULT-28, Julian 2026-11-20)', () => 
     expect(question).toContain('Offene Tasks (CONC-43)');
     expect(flagged(calls)).toBe(true);
   });
+  it('merged but delivering nothing, the pull request only referring to the slice: back to Startklar, tasks open, no question, no flag (CONC-27)', async () => {
+    const { jira, calls, book } = fakeJira({ tickets: tickets() });
+    const lap = lapOf({ reviewed: 'merge', landed: 'merged', deployed: 'true', delivers: 'none' });
+    const result = await release(jira, lap, { ...MERGED, title: 'Backend', body: 'Refs CONC-41' });
+    expect(result).toMatchObject({ name: 'Startklar', asked: false });
+    expect(book.get('CONC-41')?.status).toBe(S.todo);
+    expect([book.get('CONC-42')?.status, book.get('CONC-43')?.status]).toEqual(['10060', '10060']);
+    expect(posted(calls)).toHaveLength(1);
+    expect(posted(calls)[0]).toContain('Status: Startklar.');
+    expect(flagged(calls)).toBe(false);
+  });
   it('a ticket on its queue whose pull request land merged: tasks done first, then Entwicklung, Review, Staging', async () => {
     const { jira, calls } = fakeJira({ tickets: tickets(S.todo) });
     const lap = lapOf({ reviewed: 'merge', landed: 'merged', deployed: 'true', delivers: 'all' });
