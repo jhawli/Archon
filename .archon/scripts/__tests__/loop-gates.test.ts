@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { checkOutbox } from '../../workflows/sdlc/.shared/outbox';
 import {
   blocksPass,
   evidenceProblems,
@@ -408,6 +409,24 @@ describe('loop wiring', () => {
     expect(manage).toContain('`Manager decision`');
     const review = readFileSync(resolve(pack, 'loop/commands/loop-review.md'), 'utf8');
     expect(review).toContain('A change that would let the check stop catching something a player would see');
+  });
+
+  // The complex route builds with the ship block, which never loads loop-work.md: without these
+  // lines in implement.md no task of such a lap ever leaves Offen (CONC-27).
+  it('the shipping builder reports its tasks in shapes the outbox of this lap accepts, and appends', () => {
+    const text = readFileSync(resolve(pack, 'implement/commands/implement.md'), 'utf8');
+    const shown = [...text.matchAll(/`(\{"op": "progress"[^`]*\})`/g)].map(m => JSON.parse(m[1] ?? '') as unknown);
+    expect(checkOutbox(shown, 'build', 'CONC-50', 'CONC', new Set())).toEqual([
+      { op: 'progress', task: 3, state: 'arbeit' },
+      { op: 'progress', task: 3, state: 'gebaut' },
+    ]);
+    expect(text).toContain('never a step number of this run\'s own plan');
+    expect(text).toContain('keep every other entry and append yours');
+    // Many sessions share the list and checkOutbox refuses all of it past 80 reports.
+    expect(text).toContain('one progress entry per task: remove the earlier one and append the new one');
+    const ship = readFileSync(resolve(pack, 'ship/archon-ship-block.yaml'), 'utf8');
+    expect(ship).toContain('include: archon-deliver-block');
+    expect(readFileSync(resolve(pack, 'deliver/archon-deliver-block.yaml'), 'utf8')).toContain('include: archon-implement');
   });
 
   it('the manager runs the holdouts once per pass, not again each time the default branch moves', () => {
